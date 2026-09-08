@@ -1,0 +1,141 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { QoderAuthService } from '../src/auth.ts'
+import { QoderLlmError } from '../src/errors.ts'
+
+test('QoderAuthService exchanges once, resolves identity, and caches credentials', async () => {
+  let exchangeCalls = 0
+  let userInfoCalls = 0
+  const fetchMock = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) {
+      exchangeCalls++
+      assert.deepEqual(JSON.parse(String(init?.body)), { personal_token: 'pt-test-token' })
+      return new Response(JSON.stringify({ token: 'jt-token', expires_in: 3_600_000 }), { status: 200 })
+    }
+    if (url.includes('/userinfo')) {
+      userInfoCalls++
+      return new Response(JSON.stringify({ id: 'user-999', email: 'user@qoder.sh', name: 'Subscriber' }))
+    }
+    throw new Error(`unexpected URL: ${url}`)
+  }
+  const service = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+
+  const first = await service.getCredentials('pt-test-token')
+  const second = await service.getCredentials('pt-test-token')
+  assert.equal(first.authToken, 'jt-token')
+  assert.equal(first.userID, 'user-999')
+  assert.equal(second, first)
+  assert.equal(exchangeCalls, 1)
+  assert.equal(userInfoCalls, 1)
+})
+
+test('QoderAuthService shares one exchange between concurrent callers', async () => {
+  let exchangeCalls = 0
+  const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+    if (String(input).includes('/jobToken/exchange')) {
+      exchangeCalls++
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return new Response(JSON.stringify({ token: 'jt-shared', expires_in: 3_600_000 }))
+    }
+    return new Response(JSON.stringify({ id: 'user-shared' }))
+  }
+  const service = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+  const credentials = await Promise.all([
+    service.getCredentials('pt-shared'),
+    service.getCredentials('pt-shared'),
+    service.getCredentials('pt-shared'),
+  ])
+  assert.equal(exchangeCalls, 1)
+  assert.ok(credentials.every(value => value.authToken === 'jt-shared'))
+})
+
+test('QoderAuthService aborts a caller and the unobserved exchange', async () => {
+  let providerAborted = false
+  const fetchMock = (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => new Promise((_, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      providerAborted = true
+      reject(new DOMException('aborted', 'AbortError'))
+    }, { once: true })
+  })
+  const service = new QoderAuthService({ fetch: fetchMock as typeof fetch })
+  const controller = new AbortController()
+  const request = service.getCredentials('pt-abort', controller.signal)
+  controller.abort()
+  await assert.rejects(request, (error: Error) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal((error as QoderLlmError).code, 'ABORTED')
+    return true
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(providerAborted, true)
+})
+
+test('QoderAuthService rejects missing identity without leaking provider bodies', async () => {
+  const diagnostics: string[] = []
+  const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+    if (String(input).includes('/jobToken/exchange')) {
+      return new Response(JSON.stringify({ token: 'jt-secret', expires_in: 3_600_000 }))
+    }
+    return new Response(JSON.stringify({ email: 'secret@example.com', token: 'pt-secret' }))
+  }
+  const service = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    logger: {
+      debug: (message, ...details) => diagnostics.push(JSON.stringify([message, ...details])),
+      error: (message, ...details) => diagnostics.push(JSON.stringify([message, ...details])),
+    },
+  })
+  await assert.rejects(service.getCredentials('pt-secret'), (error: Error) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal((error as QoderLlmError).code, 'AUTH')
+    assert.ok(!error.message.includes('pt-secret'))
+    assert.ok(!error.message.includes('secret@example.com'))
+    return true
+  })
+  assert.doesNotMatch(diagnostics.join('\n'), /pt-secret|secret@example\.com/)
+})
+
+test('QoderAuthService targets region-specific OpenAPI endpoints and caches separately', async () => {
+  const requests: string[] = []
+  const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    requests.push(url)
+    if (url.includes('/jobToken/exchange')) {
+      const isChina = url.includes('openapi.qoder.com.cn')
+      return new Response(JSON.stringify({
+        token: isChina ? 'jt-china' : 'jt-global',
+        expires_in: 3_600_000,
+      }))
+    }
+    if (url.includes('/userinfo')) {
+      const isChina = url.includes('openapi.qoder.com.cn')
+      return new Response(JSON.stringify({
+        id: isChina ? 'user-cn' : 'user-global',
+        name: isChina ? 'CN User' : 'Global User',
+      }))
+    }
+    throw new Error(`unexpected URL: ${url}`)
+  }
+  const service = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+
+  const globalCreds = await service.getCredentials('pt-test', undefined, 'global')
+  assert.equal(globalCreds.authToken, 'jt-global')
+  assert.equal(globalCreds.userID, 'user-global')
+  assert.ok(requests.some(url => url.includes('openapi.qoder.sh/api/v1/jobToken/exchange')))
+
+  const chinaCreds = await service.getCredentials('pt-test', undefined, 'china')
+  assert.equal(chinaCreds.authToken, 'jt-china')
+  assert.equal(chinaCreds.userID, 'user-cn')
+  assert.ok(requests.some(url => url.includes('openapi.qoder.com.cn/api/v1/jobToken/exchange')))
+})
+
