@@ -144,6 +144,46 @@ test('legacy model configuration is scoped to its selected region', async () => 
   assert.equal((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'legacy-china'), false)
 })
 
+test('discovery reconciles runtime and stored budgets and a failed discovery preserves them', async (t) => {
+  let empty = false
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-test', expires_in: 3_600_000 }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-test' }))
+    assert.ok(url.includes('/model/list'))
+    return new Response(JSON.stringify({ assistant: empty ? [] : ['large', 'small'].map(key => ({
+      key, enable: true, is_reasoning: true,
+      context_config: { small: { token_count: 200_000, is_default: true }, large: { token_count: 1_000_000 } },
+      thinking_config: {
+        disabled: { is_default: true },
+        enabled: { efforts: { high: { is_default: true } } },
+      },
+    })) }))
+  })
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  plugin.apply(ctx, { modelsByRegion: { global: [
+    { id: 'large', name: 'Large', contextWindow: 1_000_000 },
+    { id: 'small', name: 'Small', contextWindow: 100_000 },
+  ] } })
+  const ns = 'provider-qoder' as SettingsNamespace
+  const discover = () => ctx.llm.discoverModels(ns, { provider: 'qoder-official', apiKey: 'pt-test' })
+  await discover()
+  for (const [id, expected] of [['large', 200_000], ['small', 100_000]] as const) {
+    const prepared = await ctx.llm.prepareCall({ provider: 'qoder-official', model: id })
+    assert.equal(prepared.context?.contextWindow, expected)
+    assert.equal(prepared.config.reasoningEffort, undefined)
+  }
+  const stored = ctx.settings.get(ns)
+  assert.deepEqual((stored as plugin.Config).modelsByRegion?.global?.map(model => model.contextWindow), [200_000, 100_000])
+  empty = true
+  await assert.rejects(discover, /no enabled models/u)
+  assert.deepEqual(ctx.settings.get(ns), stored)
+  assert.equal((await ctx.llm.prepareCall({ provider: 'qoder-official', model: 'large' })).context?.contextWindow, 200_000)
+})
+
 test('apply succeeds with default Config schema and empty models array', async () => {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
@@ -165,4 +205,3 @@ test('apply succeeds with default Config schema and empty models array', async (
   assert.ok(fallbackModels.length > 0)
   assert.ok(fallbackModels.some(model => model.id === 'cmodel'))
 })
-

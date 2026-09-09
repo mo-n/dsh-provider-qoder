@@ -10,6 +10,7 @@ import {
   type Message,
 } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
+import { normalizeQoderModels } from '../src/qoder/catalog.ts'
 import { buildQoderRequestBody } from '../src/qoder/transport/wire/serialize.ts'
 import {
   validateAndTranslateMessages,
@@ -23,6 +24,35 @@ const imageRef = {
   width: 1,
   height: 1,
 }
+
+test('request preserves the discovered default tier and does not send ambiguous tier defaults', async () => {
+  for (const conflicting of [false, true]) {
+    const [model] = normalizeQoderModels({ assistant: [{
+      key: 'model', enable: true, max_input_tokens: 180_000,
+      context_config: {
+        small: { token_count: 200_000, is_default: true },
+        large: { token_count: 1_000_000, ...conflicting ? { is_default: true } : {} },
+      },
+      is_reasoning: true,
+      thinking_config: { disabled: { is_default: true } },
+    }] })
+    const body = await buildQoderRequestBody({
+      provider: 'qoder-official', model: 'model',
+      messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
+    }, 'user-test', undefined, model)
+    assert.equal(body.model_config.is_reasoning, false)
+    assert.equal(body.chat_context.extra.modelConfig.is_reasoning, false)
+    if (conflicting) {
+      assert.equal(model.contextWindow, 180_000)
+      assert.equal(body.model_config.context_config, undefined)
+    } else {
+      assert.equal(model.contextWindow, 200_000)
+      assert.deepEqual(body.model_config.context_config, {
+        small: { token_count: 200_000, is_default: true }, large: { token_count: 1_000_000 },
+      })
+    }
+  }
+})
 
 function imageAttachments(onRead?: () => void): QoderImageAttachments {
   return {
@@ -266,11 +296,13 @@ test('buildQoderRequestBody accepts only advertised reasoning efforts', async ()
   const model = {
     id: 'reasoner',
     name: 'Reasoner',
-    isReasoning: true,
+    isReasoning: false,
     reasoningEfforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }],
   }
   const body = await buildQoderRequestBody(options, 'user-42', undefined, model)
   assert.equal(body.parameters.reasoning_effort, 'high')
+  assert.equal(body.model_config.is_reasoning, true)
+  assert.equal(body.chat_context.extra.modelConfig.is_reasoning, true)
 
   options.reasoningEffort = ReasoningEffortId('off')
   await assert.rejects(

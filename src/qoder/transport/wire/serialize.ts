@@ -74,9 +74,13 @@ export async function buildQoderRequestBody(
   const messages = translatedMessages ?? await validateQoderRequest(options, model, attachments)
   const modelMaxTokens = model?.maxTokens ?? 32_768
   const maxTokens = Math.min(options.maxTokens ?? modelMaxTokens, modelMaxTokens)
-  const isReasoning = model?.isReasoning ?? false
+  const isReasoning = options.reasoningEffort !== undefined || (model?.isReasoning ?? false)
   const tools = translateTools(options.tools)
-  const contextConfig = model?.contextOptions === undefined
+  // Ambiguous defaults stay in discovery metadata, but must not select a request tier.
+  const defaultContexts = Object.values(model?.contextOptions ?? {}).filter(option =>
+    option.isDefault === true && typeof option.tokenCount === 'number'
+    && Number.isFinite(option.tokenCount) && option.tokenCount > 0)
+  const contextConfig = model?.contextOptions === undefined || defaultContexts.length !== 1
     ? undefined
     : Object.fromEntries(Object.entries(model.contextOptions).map(([key, value]) => [key, {
       ...value.tokenCount === undefined ? {} : { token_count: value.tokenCount },

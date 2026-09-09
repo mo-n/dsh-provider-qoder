@@ -10,7 +10,8 @@ import {
 } from '../src/qoder/catalog.ts'
 
 const payload = {
-  chat: [
+  chat: [{ key: 'chat-only', enable: true }],
+  assistant: [
     { key: 'disabled', enable: false, display_name: 'Disabled' },
     {
       key: 'reasoner',
@@ -40,11 +41,108 @@ const payload = {
   ],
 }
 
+test('assistant is required even when chat advertises enabled models', async () => {
+  for (const assistant of [undefined, null, {}, [], [{ key: 'disabled', enable: false }]]) {
+    const body = { chat: [{ key: 'chat-only', enable: true }], assistant }
+    assert.deepEqual(normalizeQoderModels(body), [])
+    await assert.rejects(() => fetchQoderModels({
+      userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
+    }, { fetch: (async () => new Response(JSON.stringify(body))) as typeof fetch }), /no enabled models/u)
+  }
+})
+
+test('context defaults and fallback capacities stay separate from maximum capacity', () => {
+  const cases = [
+    { context: { small: { token_count: 200_000, is_default: true }, large: { token_count: 1_000_000 } }, expected: 200_000, conflicts: 0 },
+    { context: { large: { token_count: 1_000_000 } }, expected: 180_000, conflicts: 0 },
+    { context: { small: { token_count: 200_000, is_default: true }, large: { token_count: 1_000_000, is_default: true } }, expected: 180_000, conflicts: 1 },
+    { context: { invalid: { token_count: -1, is_default: true }, large: { token_count: 1_000_000 } }, expected: 180_000, conflicts: 0 },
+  ]
+  for (const { context, expected, conflicts: expectedConflicts } of cases) {
+    const conflicts: string[] = []
+    const [model] = normalizeQoderModels({ assistant: [{
+      key: 'model', enable: true, max_input_tokens: 180_000, context_config: context,
+    }] }, conflict => conflicts.push(conflict))
+    assert.equal(model.contextWindow, expected)
+    assert.equal(model.maxContextWindow, 1_000_000)
+    assert.equal(conflicts.length, expectedConflicts)
+  }
+  const [fallback] = normalizeQoderModels({ assistant: [{ key: 'model', enable: true }] })
+  assert.equal(fallback.contextWindow, 180_000)
+  assert.equal(fallback.maxTokens, 32_768)
+})
+
+test('thinking state follows a unique explicit default and otherwise the reasoning flag', () => {
+  for (const flag of [false, true]) {
+    for (const [thinking, expected] of [
+      [undefined, flag],
+      [{}, flag],
+      [{ enabled: {} }, flag],
+      [{ enabled: { is_default: true } }, true],
+      [{ disabled: { is_default: true } }, false],
+      [{ enabled: { is_default: true }, disabled: { is_default: true } }, flag],
+    ] as const) {
+      const conflicts: string[] = []
+      const [model] = normalizeQoderModels({ assistant: [{
+        key: 'model', enable: true, is_reasoning: flag, thinking_config: thinking,
+      }] }, conflict => conflicts.push(conflict))
+      assert.equal(model.isReasoning, expected)
+      assert.equal(model.reasoningEfforts, undefined)
+      assert.equal(model.supportsEffort, false)
+      assert.equal(conflicts.length, thinking && 'disabled' in thinking && 'enabled' in thinking ? 1 : 0)
+    }
+  }
+})
+
+test('price factors preserve zero without inferring prices from free or promotion flags', () => {
+  for (const [price, expected] of [[0, 0], [0.5, 0.5], [-1, undefined], [Infinity, undefined], [NaN, undefined]] as const) {
+    const [model] = normalizeQoderModels({ assistant: [{
+      key: 'model', enable: true, price_factor: price, is_free: true,
+      promotion: { active: true, discount_factor: 0.2 },
+    }] })
+    assert.equal(model.priceFactor, expected)
+  }
+})
+
+test('rediscovery caps old input budgets and preserves smaller budgets', () => {
+  const discovered = normalizeQoderModels({ assistant: [{
+    key: 'model', enable: true, context_config: {
+      small: { token_count: 200_000, is_default: true }, large: { token_count: 1_000_000 },
+    },
+  }] })
+  for (const budget of [undefined, 100_000, 1_000_000]) {
+    const configured = [{ id: 'model', name: 'Model', contextWindow: budget }]
+    const merged = mergeQoderDiscoveryMetadata(configured, discovered)
+    assert.equal(merged[0].contextWindow, budget === 100_000 ? 100_000 : 200_000)
+    assert.equal(merged[0].maxContextWindow, 1_000_000)
+    assert.equal(hasSameQoderDiscoveryMetadata(merged, mergeQoderDiscoveryMetadata(merged, discovered)), true)
+    assert.equal(hasSameQoderDiscoveryMetadata(merged, [{ ...merged[0], contextWindow: 50_000 }]), false)
+  }
+})
+
+test('catalog conflict diagnostics contain only conflict kinds', async () => {
+  const warnings: unknown[] = []
+  await fetchQoderModels({
+    userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
+  }, {
+    logger: { warn: (...args) => { warnings.push(args) } },
+    fetch: (async () => new Response(JSON.stringify({ assistant: [{
+      key: 'model', enable: true,
+      strategies: [{ whitelist: ['private-subscriber'] }],
+      thinking_config: { enabled: { is_default: true }, disabled: { is_default: true } },
+    }] }))) as typeof fetch,
+  })
+  assert.deepEqual(warnings, [[
+    '[Qoder Models] Conflicting catalog defaults; using fallback', { conflict: 'thinking-defaults' },
+  ]])
+})
+
 test('normalizeQoderModels keeps enabled unique models and their transport metadata', () => {
   assert.deepEqual(normalizeQoderModels(payload), [{
     id: 'reasoner',
     name: 'Reasoner',
-    contextWindow: 400_000,
+    contextWindow: 100_000,
+    maxContextWindow: 400_000,
     maxTokens: 16_384,
     source: 'premium',
     isReasoning: true,
@@ -58,8 +156,8 @@ test('normalizeQoderModels keeps enabled unique models and their transport metad
     defaultReasoningEffort: 'high',
     priceFactor: 0.5,
     contextOptions: {
-      small: { tokenCount: 100_000, isDefault: false },
-      large: { tokenCount: 400_000, isDefault: true },
+      small: { tokenCount: 100_000, isDefault: true },
+      large: { tokenCount: 400_000 },
     },
   }])
 })
@@ -81,7 +179,8 @@ test('mergeQoderDiscoveryMetadata restores effort and rate data stripped by gene
   assert.deepEqual(enriched, [{
     id: 'reasoner',
     name: 'Chosen name',
-    contextWindow: 200_000,
+    contextWindow: 100_000,
+    maxContextWindow: 400_000,
     maxTokens: 8_192,
     source: 'premium',
     isReasoning: true,
@@ -95,8 +194,8 @@ test('mergeQoderDiscoveryMetadata restores effort and rate data stripped by gene
     defaultReasoningEffort: 'high',
     priceFactor: 0.5,
     contextOptions: {
-      small: { tokenCount: 100_000, isDefault: false },
-      large: { tokenCount: 400_000, isDefault: true },
+      small: { tokenCount: 100_000, isDefault: true },
+      large: { tokenCount: 400_000 },
     },
   }, {
     id: 'manual',
@@ -162,7 +261,7 @@ test('fetchQoderModels rejects malformed and empty catalogs', async () => {
   }, { fetch: (async () => new Response('{')) as typeof fetch }), /invalid JSON/u)
   await assert.rejects(() => fetchQoderModels({
     userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
-  }, { fetch: (async () => new Response(JSON.stringify({ chat: [] }))) as typeof fetch }), /no enabled models/u)
+  }, { fetch: (async () => new Response(JSON.stringify({ assistant: [] }))) as typeof fetch }), /no enabled models/u)
 })
 
 test('fetchQoderModels classifies HTTP and network failures', async () => {

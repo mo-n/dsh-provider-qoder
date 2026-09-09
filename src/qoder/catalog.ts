@@ -4,7 +4,10 @@ export interface QoderCatalogModel {
   id: string
   name: string
   description?: string
+  /** Effective DSH input budget, which may be smaller than the provider default tier. */
   contextWindow?: number
+  /** Largest known capacity, independent of the effective input budget. */
+  maxContextWindow?: number
   maxTokens?: number
   source?: string
   isReasoning?: boolean
@@ -43,6 +46,7 @@ const discoveredMetadataKeys = [
   'defaultReasoningEffort',
   'priceFactor',
   'contextOptions',
+  'maxContextWindow',
   'supportsImages',
 ] as const satisfies readonly (keyof QoderCatalogModel)[]
 
@@ -66,19 +70,14 @@ function contextOptionsOf(value: unknown): QoderCatalogModel['contextOptions'] {
     const entry = raw as { token_count?: unknown; is_default?: unknown }
     const tokenCount = positiveNumber(entry.token_count)
     const isDefault = typeof entry.is_default === 'boolean' ? entry.is_default : undefined
-    if (tokenCount === undefined && isDefault === undefined) continue
+    if (tokenCount === undefined) continue
     options[key] = {
       ...tokenCount === undefined ? {} : { tokenCount },
       ...isDefault === undefined ? {} : { isDefault },
     }
   }
   if (Object.keys(options).length === 0) return undefined
-  const largest = Math.max(...Object.values(options).map(option => option.tokenCount ?? 0))
-  if (largest <= 0) return options
-  return Object.fromEntries(Object.entries(options).map(([key, option]) => [key, {
-    ...option,
-    isDefault: option.tokenCount === largest,
-  }]))
+  return options
 }
 
 function reasoningEffortsOf(value: unknown): {
@@ -116,34 +115,58 @@ function reasoningEffortsOf(value: unknown): {
   }
 }
 
-export function normalizeQoderModels(payload: unknown): QoderCatalogModel[] {
-  if (typeof payload !== 'object' || payload === null || !Array.isArray((payload as { chat?: unknown }).chat)) return []
+type CatalogConflict = 'context-defaults' | 'thinking-defaults'
+
+function thinkingDefault(value: unknown, fallback: boolean, onConflict?: (conflict: CatalogConflict) => void): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback
+  const config = value as Record<string, unknown>
+  const isDefault = (entry: unknown): boolean => typeof entry === 'object' && entry !== null
+    && !Array.isArray(entry) && (entry as { is_default?: unknown }).is_default === true
+  const enabled = isDefault(config.enabled)
+  const disabled = isDefault(config.disabled)
+  if (enabled && disabled) onConflict?.('thinking-defaults')
+  return enabled === disabled ? fallback : enabled
+}
+
+export function normalizeQoderModels(
+  payload: unknown,
+  onConflict?: (conflict: CatalogConflict) => void,
+): QoderCatalogModel[] {
+  if (typeof payload !== 'object' || payload === null || !Array.isArray((payload as { assistant?: unknown }).assistant)) return []
   const models: QoderCatalogModel[] = []
   const seen = new Set<string>()
-  for (const raw of (payload as { chat: QoderModelEntry[] }).chat) {
+  for (const raw of (payload as { assistant: QoderModelEntry[] }).assistant) {
     if (typeof raw !== 'object' || raw === null || raw.enable !== true) continue
     const id = typeof raw.key === 'string' ? raw.key.trim() : ''
     if (!id || seen.has(id)) continue
     seen.add(id)
     const contextOptions = contextOptionsOf(raw.context_config)
-    const contextWindow = Math.max(
-      positiveNumber(raw.max_input_tokens) ?? 180_000,
+    const defaultOptions = Object.values(contextOptions ?? {}).filter(option => option.isDefault && option.tokenCount !== undefined)
+    if (defaultOptions.length > 1) onConflict?.('context-defaults')
+    const contextWindow = (defaultOptions.length === 1 ? defaultOptions[0].tokenCount : undefined)
+      ?? positiveNumber(raw.max_input_tokens) ?? 180_000
+    const maxContextWindow = Math.max(
+      positiveNumber(raw.max_input_tokens) ?? 0,
+      contextWindow,
       ...Object.values(contextOptions ?? {}).map(option => option.tokenCount ?? 0),
     )
-    const thinking = typeof raw.thinking_config === 'object' && raw.thinking_config !== null
+    const isReasoning = thinkingDefault(raw.thinking_config, raw.is_reasoning === true, onConflict)
+    const priceFactor = typeof raw.price_factor === 'number' && Number.isFinite(raw.price_factor) && raw.price_factor >= 0
+      ? raw.price_factor : undefined
     const reasoning = reasoningEffortsOf(raw.thinking_config)
     models.push({
       id,
       name: typeof raw.display_name === 'string' && raw.display_name.trim() ? raw.display_name.trim() : id,
       contextWindow,
+      maxContextWindow,
       maxTokens: positiveNumber(raw.max_output_tokens) ?? 32_768,
       source: typeof raw.source === 'string' && raw.source.trim() ? raw.source.trim() : 'system',
-      isReasoning: raw.is_reasoning === true || thinking,
+      isReasoning,
       supportsEffort: reasoning.efforts !== undefined,
       supportsImages: raw.is_vl === true,
       ...reasoning.efforts === undefined ? {} : { reasoningEfforts: reasoning.efforts },
       ...reasoning.defaultEffort === undefined ? {} : { defaultReasoningEffort: reasoning.defaultEffort },
-      ...positiveNumber(raw.price_factor) === undefined ? {} : { priceFactor: positiveNumber(raw.price_factor) },
+      ...priceFactor === undefined ? {} : { priceFactor },
       ...contextOptions === undefined ? {} : { contextOptions },
     })
   }
@@ -160,6 +183,9 @@ export function mergeQoderDiscoveryMetadata(
     if (advertised === undefined) return { ...model }
 
     const merged = { ...model }
+    if (advertised.contextWindow !== undefined) {
+      merged.contextWindow = Math.min(model.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
+    }
     for (const key of discoveredMetadataKeys) delete merged[key]
     for (const key of discoveredMetadataKeys) {
       if (advertised[key] !== undefined) Object.assign(merged, { [key]: advertised[key] })
@@ -174,7 +200,7 @@ export function hasSameQoderDiscoveryMetadata(
 ): boolean {
   return left?.length === right.length && left.every((model, index) => {
     const candidate = right[index]
-    return candidate?.id === model.id && discoveredMetadataKeys.every(key => (
+    return candidate?.id === model.id && candidate.contextWindow === model.contextWindow && discoveredMetadataKeys.every(key => (
       JSON.stringify(model[key]) === JSON.stringify(candidate[key])
     ))
   })

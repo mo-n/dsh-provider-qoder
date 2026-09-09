@@ -61,6 +61,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
   }
   let current = (): QoderConfig => baseConfig
   let legacyModelsRegion = initialRegion
+  let persistDiscoveredModels = async (_region: QoderRegion): Promise<void> => {}
   const discoveredCatalogs: Record<QoderRegion, readonly QoderCatalogModel[]> = {
     global: [],
     china: [],
@@ -134,6 +135,14 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     })
     legacyModelsRegion = scope.get().region ?? initialRegion
     current = () => scope.get()
+    persistDiscoveredModels = async (region) => {
+      const value = scope.get()
+      const selected = modelsFor(value, region, legacyModelsRegion)
+      const enriched = mergeQoderDiscoveryMetadata(selected, discoveredCatalogs[region])
+      if (!hasSameQoderDiscoveryMetadata(selected, enriched)) {
+        await scope.update({ modelsByRegion: { ...value.modelsByRegion, [region]: enriched } })
+      }
+    }
     refreshAdapter()
 
     const loaded = scope.get()
@@ -162,6 +171,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     })
     settingsCtx.effect(() => () => {
       if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
+      persistDiscoveredModels = async () => {}
       current = () => baseConfig
       refreshAdapter()
     })
@@ -175,6 +185,8 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
       : activeTransport
     const models = await transport.discoverModels(signal)
     discoveredCatalogs[snapshot.region] = models
+    refreshAdapter()
+    await persistDiscoveredModels(snapshot.region)
     return models
   }
 

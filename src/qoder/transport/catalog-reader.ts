@@ -64,7 +64,9 @@ export async function fetchQoderModels(
       throw new QoderLlmError('Qoder model discovery returned invalid JSON.', 'MALFORMED_RESPONSE')
     }
     logParsedResponse(options.logger, 'catalog.models', payload)
-    const models = normalizeQoderModels(payload)
+    const models = normalizeQoderModels(payload, conflict => {
+      options.logger?.warn?.('[Qoder Models] Conflicting catalog defaults; using fallback', { conflict })
+    })
     if (models.length === 0) throw new QoderLlmError('Qoder model discovery returned no enabled models.', 'EMPTY_RESPONSE')
     return models
   } catch (error) {

@@ -154,6 +154,7 @@ test('QoderAdapter appends the advertised price factor to model display names', 
     resolvePat: () => Promise.resolve('pt-token'),
     models: [
       { id: 'priced', name: 'Priced', priceFactor: 1.6 },
+      { id: 'free', name: 'Free', priceFactor: 0 },
       { id: 'plain', name: 'Plain' },
     ],
     fetch: successfulFetch(),
@@ -161,9 +162,23 @@ test('QoderAdapter appends the advertised price factor to model display names', 
 
   assert.deepEqual((await adapter.listModels('qoder-official')).map(model => model.name), [
     'Priced （1.6x）',
+    'Free （0x）',
     'Plain',
   ])
   assert.equal((await adapter.resolveModel('qoder-official', 'priced')).name, 'Priced （1.6x）')
+})
+
+test('disabled reasoning does not expose an effort default that DSH would automatically select', async () => {
+  const adapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    models: [{
+      id: 'reasoner', name: 'Reasoner', isReasoning: false,
+      reasoningEfforts: [{ id: 'high', name: 'high' }], defaultReasoningEffort: 'high',
+    }],
+    fetch: successfulFetch(),
+  })
+  const resolved = await adapter.resolveModel('qoder-official', 'reasoner')
+  assert.deepEqual(resolved.reasoning, { efforts: [{ id: 'high', name: 'high' }] })
 })
 
 test('QoderAdapter rejects unsupported content before provider I/O', async () => {

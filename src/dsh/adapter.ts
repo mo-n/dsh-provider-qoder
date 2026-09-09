@@ -90,7 +90,7 @@ export class QoderAdapter extends LlmAdapter {
                 name: effort.name,
                 ...effort.description === undefined ? {} : { description: effort.description },
               })),
-              ...configured.defaultReasoningEffort === undefined
+              ...configured.isReasoning === false || configured.defaultReasoningEffort === undefined
                 ? {}
                 : { defaultEffort: ReasoningEffortId(configured.defaultReasoningEffort) },
             },

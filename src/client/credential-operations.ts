@@ -50,9 +50,16 @@ export function reconcileQoderModels(
 ): QoderModelReconciliation {
   const availableIds = new Set(discovered.map(model => model.id))
   const unavailable = known.filter(model => !availableIds.has(model.id))
+  const previous = new Map(known.map(model => [model.id, model]))
+  const reconciled = discovered.map(model => {
+    const budget = previous.get(model.id)?.contextWindow
+    return budget === undefined || model.contextWindow === undefined
+      ? model
+      : { ...model, contextWindow: Math.min(budget, model.contextWindow) }
+  })
   return {
-    catalog: [...discovered, ...unavailable],
-    selected: [...discovered],
+    catalog: [...reconciled, ...unavailable],
+    selected: reconciled,
     unavailableIds: new Set(unavailable.map(model => model.id)),
   }
 }
