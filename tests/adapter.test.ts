@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUserMessage, LlmAdapter, LlmError, type GenerateOptions } from '@deepseek-ai/dsh-llm'
-import { QoderAdapter } from '../src/adapter.ts'
-import type { QoderCatalogModel } from '../src/catalog.ts'
-import { QoderLlmError } from '../src/errors.ts'
-import { createQoderTransport, type QoderTransportOptions } from '../src/transport.ts'
+import { QoderAdapter } from '../src/dsh/adapter.ts'
+import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
+import { createQoderTransport, type QoderTransportOptions } from '../src/qoder/transport/index.ts'
 
 interface TestAdapterOptions extends Omit<QoderTransportOptions, 'region'> {
   region?: QoderTransportOptions['region']

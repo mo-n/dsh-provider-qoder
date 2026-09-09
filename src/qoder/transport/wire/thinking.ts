@@ -1,4 +1,4 @@
-/** Split Qoder content into visible text and reasoning while removing tag artifacts. */
+/** Split Qoder wire content into visible text and reasoning while removing tag artifacts. */
 
 export interface QoderContentSegment {
   type: 'text' | 'reasoning'

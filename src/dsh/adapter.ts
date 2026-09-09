@@ -9,12 +9,12 @@ import {
   type LlmResolvedModelInfo,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import { defaultModels, type QoderCatalogModel } from './catalog.ts'
-import { QoderLlmError } from './errors.ts'
-import type { QoderTransport } from './transport.ts'
+import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { QoderLlmError } from '../qoder/errors.ts'
+import type { QoderTransport } from '../qoder/transport/index.ts'
 
-export { defaultMaxTokens, defaultModels, type QoderCatalogModel } from './catalog.ts'
-export { defaultStreamIdleTimeoutMs } from './transport.ts'
+export { defaultMaxTokens, defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
+export { defaultStreamIdleTimeoutMs } from '../qoder/transport/index.ts'
 
 export interface QoderAdapterOptions {
   resolveTransport: () => QoderTransport

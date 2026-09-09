@@ -1,4 +1,4 @@
-/** Shared Host/browser contract for the one managed Qoder credential. */
+/** Shared DSH host/browser contract for the one managed Qoder credential. */
 
 export const qoderCredentialRef = 'QODER_MANAGED_CREDENTIAL'
 

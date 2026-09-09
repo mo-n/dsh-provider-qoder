@@ -4,7 +4,7 @@
  * Re-arranges standard Base64 chunks and translates characters against
  * a custom alphabet to satisfy Qoder upstream WAF requirements.
  *
- * @module dsh-provider-qoder/encoding
+ * @module dsh-provider-qoder/qoder/transport/wire/encoding
  */
 
 const qoderCustomAlphabet = '_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!'

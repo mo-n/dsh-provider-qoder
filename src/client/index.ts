@@ -6,9 +6,9 @@ import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
-import { qoderCredentialRef } from '../credential-contract.ts'
-import type { QoderAccountInfo } from '../usage.ts'
-import type { QoderCatalogModel } from '../catalog.ts'
+import { qoderCredentialRef } from '../dsh/credential-contract.ts'
+import type { QoderAccountInfo } from '../qoder/account.ts'
+import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
 import type {

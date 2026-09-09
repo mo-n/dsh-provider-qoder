@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
-import { QoderLlmError } from '../src/errors.ts'
-import { createQoderTransport } from '../src/transport.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
+import { createQoderTransport } from '../src/qoder/transport/index.ts'
 
 const catalog = JSON.stringify({ chat: [{ key: 'cmodel', enable: true, display_name: 'Cantus' }] })
 

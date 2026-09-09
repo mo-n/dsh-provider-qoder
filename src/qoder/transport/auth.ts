@@ -1,9 +1,13 @@
 /** PAT exchange and in-memory Qoder job-token lifecycle. */
 
-import type { CosyCredentials } from './cosy.ts'
+import type { CosyCredentials } from './wire/cosy.ts'
 import { getQoderExchangeUrl, getQoderUserInfoUrl, type QoderRegion } from './endpoints.ts'
-import { QoderLlmError, qoderHttpError, qoderRequestId } from './errors.ts'
-import { redactLogPayload, redactLogValue, type QoderLogger } from './logging.ts'
+import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
+import {
+  logParsedResponse,
+  redactLogPayload,
+  type QoderLogger,
+} from './logging.ts'
 import { getMachineId } from './machine-id.ts'
 import {
   defaultMaxErrorBytes,
@@ -177,6 +181,7 @@ export class QoderAuthService {
       } catch {
         throw new QoderLlmError('Qoder PAT exchange returned invalid JSON.', 'MALFORMED_RESPONSE')
       }
+      logParsedResponse(this.logger, 'auth.exchange', data)
       if (!data.token) {
         throw new QoderLlmError('Qoder PAT exchange returned no job token.', 'AUTH')
       }
@@ -256,7 +261,7 @@ export class QoderAuthService {
         this.logger?.error?.('[Qoder UserInfo] Invalid JSON response', redactLogPayload(text))
         throw new QoderLlmError('Qoder identity lookup returned invalid JSON.', 'AUTH')
       }
-      this.logger?.debug?.('[Qoder UserInfo] Subscriber profile resolved', redactLogValue(info))
+      logParsedResponse(this.logger, 'auth.user-info', info)
       if (!info.id) {
         throw new QoderLlmError('Qoder identity lookup returned no user id.', 'AUTH')
       }

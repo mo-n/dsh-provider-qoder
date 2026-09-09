@@ -7,8 +7,8 @@ import {
   getQoderUsageUrl,
   getQoderUserInfoUrl,
   resolveQoderEndpoints,
-} from '../src/endpoints.ts'
-import { computeSigPath } from '../src/cosy.ts'
+} from '../src/qoder/transport/endpoints.ts'
+import { computeSigPath } from '../src/qoder/transport/wire/cosy.ts'
 
 test('resolveQoderEndpoints returns expected endpoints for global and china', () => {
   const globalEndpoints = resolveQoderEndpoints('global')
@@ -87,4 +87,3 @@ test('computeSigPath strips the /algo prefix from China gateway chat URL', () =>
   const cnChatUrl = getQoderChatUrl('china')
   assert.equal(computeSigPath(cnChatUrl), '/api/v2/service/pro/sse/agent_chat_generation')
 })
-

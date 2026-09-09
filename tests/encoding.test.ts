@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { qoderEncodeBody } from '../src/encoding.ts'
+import { qoderEncodeBody } from '../src/qoder/transport/wire/encoding.ts'
 
 test('qoderEncodeBody encodes ASCII strings deterministically', () => {
   const input = '{"test": "hello world"}'

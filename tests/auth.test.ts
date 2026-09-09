@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { QoderAuthService } from '../src/auth.ts'
-import { QoderLlmError } from '../src/errors.ts'
+import { QoderAuthService } from '../src/qoder/transport/auth.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
 
 test('QoderAuthService exchanges once, resolves identity, and caches credentials', async () => {
   let exchangeCalls = 0
@@ -100,6 +100,8 @@ test('QoderAuthService rejects missing identity without leaking provider bodies'
     return true
   })
   assert.doesNotMatch(diagnostics.join('\n'), /pt-secret|secret@example\.com/)
+  assert.match(diagnostics.join('\n'), /auth\.exchange/)
+  assert.match(diagnostics.join('\n'), /auth\.user-info/)
 })
 
 test('QoderAuthService targets region-specific OpenAPI endpoints and caches separately', async () => {

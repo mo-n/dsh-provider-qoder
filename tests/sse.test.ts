@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { QoderLlmError } from '../src/errors.ts'
-import { parseQoderSse } from '../src/sse.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
+import { parseQoderSse } from '../src/qoder/transport/wire/sse.ts'
 
 function streamOf(lines: readonly string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()

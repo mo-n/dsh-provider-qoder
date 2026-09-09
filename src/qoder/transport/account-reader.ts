@@ -2,8 +2,18 @@
 
 import type { QoderAuthService } from './auth.ts'
 import { getQoderUsageUrl, type QoderRegion } from './endpoints.ts'
-import { QoderLlmError, qoderHttpError, qoderRequestId } from './errors.ts'
-import { redactLogPayload, redactLogValue, type QoderLogger } from './logging.ts'
+import type {
+  QoderAccountInfo,
+  QoderQuota,
+  QoderQuotaUsage,
+  QoderSubscriberProfile,
+} from '../account.ts'
+import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
+import {
+  logParsedResponse,
+  redactLogPayload,
+  type QoderLogger,
+} from './logging.ts'
 import {
   defaultMaxErrorBytes,
   defaultMaxJsonBytes,
@@ -16,35 +26,6 @@ import {
 const userAgent = 'dsh-provider-qoder'
 const defaultUsageTtlMs = 60_000
 const defaultUsageTimeoutMs = 15_000
-
-export interface QoderSubscriberProfile {
-  id: string
-  name: string
-  email: string
-}
-
-export interface QoderQuota {
-  total: number
-  used: number
-  remaining: number
-  percentage: number
-  unit: string
-}
-
-export interface QoderQuotaUsage {
-  userQuota?: QoderQuota
-  orgResourcePackage?: QoderQuota
-  totalUsagePercentage?: number
-  isQuotaExceeded?: boolean
-  expiresAt?: string
-  raw?: unknown
-}
-
-export interface QoderAccountInfo {
-  profile: QoderSubscriberProfile
-  usage?: QoderQuotaUsage
-  updatedAt: string
-}
 
 export interface QoderUsageReaderOptions {
   authService: QoderAuthService
@@ -244,7 +225,7 @@ export class QoderUsageReader {
         this.logger?.error?.('[Qoder Usage] Invalid JSON response', redactLogPayload(text))
         throw new QoderLlmError('Failed to parse Qoder quota JSON response', 'USAGE_FETCH_FAILED')
       }
-      this.logger?.debug?.('[Qoder Usage] Quota usage resolved', redactLogValue(data))
+      logParsedResponse(this.logger, 'account.usage', data)
 
       return {
         userQuota: normalizeQuota(data.userQuota),

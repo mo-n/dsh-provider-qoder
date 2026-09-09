@@ -2,9 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { buildAuthHeaders, computeSigPath } from '../src/cosy.ts'
-import { getQoderChatUrl } from '../src/endpoints.ts'
-import { getMachineId } from '../src/machine-id.ts'
+import { buildAuthHeaders, computeSigPath } from '../src/qoder/transport/wire/cosy.ts'
+import { getQoderChatUrl } from '../src/qoder/transport/endpoints.ts'
+import { getMachineId } from '../src/qoder/transport/machine-id.ts'
 
 test('computeSigPath strips the /algo prefix', () => {
   assert.equal(computeSigPath('https://api3.qoder.sh/algo/api/v2/service'), '/api/v2/service')

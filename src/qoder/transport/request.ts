@@ -1,7 +1,7 @@
 /** Internal request lifecycle primitives for the Qoder transport. */
 
 import { createHash } from 'node:crypto'
-import { QoderLlmError } from './errors.ts'
+import { QoderLlmError } from '../errors.ts'
 
 export const defaultMetadataTimeoutMs = 15_000
 export const defaultResponseHeaderTimeoutMs = 30_000

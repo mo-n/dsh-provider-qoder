@@ -4,11 +4,11 @@
  * Implements RSA + AES + MD5 signature generation required by the upstream
  * Qoder gateway.
  *
- * @module dsh-provider-qoder/cosy
+ * @module dsh-provider-qoder/qoder/transport/wire/cosy
  */
 
 import crypto from 'node:crypto'
-import { getMachineId } from './machine-id.ts'
+import { getMachineId } from '../machine-id.ts'
 
 const qoderRSAPublicKey = `-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
@@ -17,7 +17,7 @@ MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`
 
-const qoderIdeVersion = '1.1.3'
+const qoderIdeVersion = '1.1.42'
 const qoderClientType = '5'
 const qoderDataPolicy = 'disagree'
 const qoderLoginVersion = 'v2'

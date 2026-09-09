@@ -9,9 +9,9 @@ import {
   type GenerateOptions,
   type Message,
 } from '@deepseek-ai/dsh-llm'
-import { QoderLlmError } from '../src/errors.ts'
-import { buildQoderRequestBody } from '../src/serialize.ts'
-import { validateAndTranslateMessages } from '../src/translate.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
+import { buildQoderRequestBody } from '../src/qoder/transport/wire/serialize.ts'
+import { validateAndTranslateMessages } from '../src/qoder/transport/wire/translate.ts'
 
 test('validateAndTranslateMessages processes DSH text history', () => {
   const messages = [

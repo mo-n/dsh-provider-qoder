@@ -1,8 +1,8 @@
 /** Translate provider-neutral DSH messages and tools into Qoder wire values. */
 
 import type { ContentBlock, Message, ToolResultBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
-import { QoderLlmError } from './errors.ts'
-import type { QoderWireMessage, QoderWireTool, QoderWireToolCall } from './types.ts'
+import { QoderLlmError } from '../../errors.ts'
+import type { QoderWireMessage, QoderWireTool, QoderWireToolCall } from './wire-types.ts'
 
 function unsupported(message: string): QoderLlmError {
   return new QoderLlmError(message, 'UNSUPPORTED_CONTENT')

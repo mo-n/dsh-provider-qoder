@@ -1,18 +1,23 @@
-/** Fetch and normalize the model catalog exposed to a Qoder subscriber. */
+/** Browser-safe Qoder model catalog types and built-in fallback entries. */
 
-import type { CosyCredentials } from './cosy.ts'
-import { buildAuthHeaders } from './cosy.ts'
-import { getQoderModelListUrl, type QoderRegion } from './endpoints.ts'
-import { QoderLlmError, qoderHttpError, qoderRequestId } from './errors.ts'
-import { redactLogPayload, redactLogValue, type QoderLogger } from './logging.ts'
-import type { QoderCatalogModel } from './catalog.ts'
-import {
-  defaultMaxErrorBytes,
-  defaultMaxJsonBytes,
-  defaultMetadataTimeoutMs,
-  readLimitedText,
-  withDeadline,
-} from './request.ts'
+export interface QoderCatalogModel {
+  id: string
+  name: string
+  description?: string
+  contextWindow?: number
+  maxTokens?: number
+  source?: string
+  isReasoning?: boolean
+  supportsEffort?: boolean
+  reasoningEfforts?: Array<{
+    id: string
+    name: string
+    description?: string
+  }>
+  defaultReasoningEffort?: string
+  priceFactor?: number
+  contextOptions?: Record<string, { tokenCount?: number; isDefault?: boolean }>
+}
 
 interface QoderModelEntry {
   key?: unknown
@@ -38,10 +43,6 @@ const discoveredMetadataKeys = [
   'contextOptions',
 ] as const satisfies readonly (keyof QoderCatalogModel)[]
 
-function positiveNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
-}
-
 const reasoningEffortOrder = new Map([
   ['low', 0],
   ['medium', 1],
@@ -49,6 +50,10 @@ const reasoningEffortOrder = new Map([
   ['xhigh', 3],
   ['max', 4],
 ])
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
 
 function contextOptionsOf(value: unknown): QoderCatalogModel['contextOptions'] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
@@ -141,10 +146,6 @@ export function normalizeQoderModels(payload: unknown): QoderCatalogModel[] {
   return models
 }
 
-/**
- * Restore Qoder-only metadata after DSH's provider-neutral discovery contract
- * has retained only id, name, and token limits.
- */
 export function mergeQoderDiscoveryMetadata(
   configured: readonly QoderCatalogModel[],
   discovered: readonly QoderCatalogModel[],
@@ -175,59 +176,49 @@ export function hasSameQoderDiscoveryMetadata(
   })
 }
 
-export interface FetchQoderModelsOptions {
-  fetch?: typeof fetch
-  signal?: AbortSignal
-  region?: QoderRegion
-  logger?: QoderLogger
-  timeoutMs?: number
-}
+export const defaultMaxTokens = 32_768
 
-export async function fetchQoderModels(
-  credentials: CosyCredentials,
-  options: FetchQoderModelsOptions = {},
-): Promise<QoderCatalogModel[]> {
-  const url = getQoderModelListUrl(options.region)
-  const fetchImpl = options.fetch ?? globalThis.fetch
-  const startedAt = performance.now()
-  const deadline = withDeadline(options.signal, options.timeoutMs ?? defaultMetadataTimeoutMs)
-  options.logger?.debug?.('[Qoder Models] Requesting model catalog', { url })
-  try {
-    const response = await fetchImpl(url, {
-      method: 'GET',
-      headers: { accept: 'application/json', ...buildAuthHeaders(null, url, credentials) },
-      signal: deadline.signal,
-    })
-    options.logger?.debug?.('[Qoder Models] Catalog request completed', {
-      url,
-      status: response.status,
-      durationMs: Math.round(performance.now() - startedAt),
-      ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
-    })
-    const text = await readLimitedText(
-      response,
-      response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
-      'Qoder model discovery response',
-    )
-    if (!response.ok) {
-      options.logger?.error?.('[Qoder Models] Catalog request failed', redactLogPayload(text))
-      throw qoderHttpError(`Qoder model discovery failed with HTTP status ${response.status}.`, response)
-    }
-    let payload: unknown
-    try {
-      payload = JSON.parse(text)
-    } catch {
-      throw new QoderLlmError('Qoder model discovery returned invalid JSON.', 'MALFORMED_RESPONSE')
-    }
-    const models = normalizeQoderModels(payload)
-    if (models.length === 0) throw new QoderLlmError('Qoder model discovery returned no enabled models.', 'EMPTY_RESPONSE')
-    options.logger?.debug?.('[Qoder Models] Model catalog resolved', { models })
-    return models
-  } catch (error) {
-    if (error instanceof QoderLlmError) throw error
-    if (options.signal?.aborted) throw new QoderLlmError('Qoder model discovery was aborted.', 'ABORTED')
-    if (deadline.timeoutSignal.aborted) throw new QoderLlmError('Qoder model discovery timed out.', 'TIMEOUT')
-    options.logger?.error?.('[Qoder Models] Catalog network request failed', redactLogValue(error))
-    throw new QoderLlmError('Qoder model discovery network request failed.', 'TRANSPORT', { cause: error })
-  }
-}
+export const defaultModels: QoderCatalogModel[] = [
+  {
+    id: 'cmodel',
+    name: 'Cantus (Qoder)',
+    description: 'Default Global Qoder subscription model for quick validation',
+    contextWindow: 1_000_000,
+    maxTokens: defaultMaxTokens,
+  },
+  {
+    id: 'auto',
+    name: 'Qoder Auto',
+    description: 'Server-routed Global Qoder model pool',
+    contextWindow: 180_000,
+    maxTokens: defaultMaxTokens,
+  },
+  {
+    id: 'ultimate',
+    name: 'Qoder Ultimate',
+    description: 'Highest-capability Global Qoder model pool',
+    contextWindow: 1_000_000,
+    maxTokens: defaultMaxTokens,
+  },
+  {
+    id: 'performance',
+    name: 'Qoder Performance',
+    description: 'Performance-oriented Global Qoder model pool',
+    contextWindow: 1_000_000,
+    maxTokens: defaultMaxTokens,
+  },
+  {
+    id: 'efficient',
+    name: 'Qoder Efficient',
+    description: 'Efficiency-oriented Global Qoder model pool',
+    contextWindow: 180_000,
+    maxTokens: defaultMaxTokens,
+  },
+  {
+    id: 'lite',
+    name: 'Qoder Lite',
+    description: 'Basic Global Qoder model pool',
+    contextWindow: 180_000,
+    maxTokens: defaultMaxTokens,
+  },
+]

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { isEnvironmentCredentialSource } from '../credential-contract.ts'
-import type { QoderAccountInfo, QoderQuota } from '../usage.ts'
+import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
+import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
 import type { QoderCredentialInjected, QoderCredentialStatus } from './credential-operations.ts'
 import css from './QoderCredentialCard.module.css'
 

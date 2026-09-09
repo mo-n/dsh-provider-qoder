@@ -1,4 +1,4 @@
-/** Host-side resolution of the one managed Qoder credential. */
+/** DSH host-side resolution of the one managed Qoder credential. */
 
 import { credentialRef, type CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { isEnvironmentCredentialSource, qoderCredentialRef } from './credential-contract.ts'

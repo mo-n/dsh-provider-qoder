@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { LlmError } from '@deepseek-ai/dsh-llm'
-import { QoderLlmError, qoderHttpError, retryAfterMs } from '../src/errors.ts'
+import { QoderLlmError, qoderHttpError, retryAfterMs } from '../src/qoder/errors.ts'
 
 test('QoderLlmError is a structured DSH LlmError', () => {
   const error = new QoderLlmError('unavailable', 'SERVER', { status: 503 })

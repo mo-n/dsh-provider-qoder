@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
-import { managedQoderCredentialRef, resolveManagedQoderPat } from '../src/credential.ts'
-import { qoderCredentialRef } from '../src/credential-contract.ts'
+import { managedQoderCredentialRef, resolveManagedQoderPat } from '../src/dsh/credential.ts'
+import { qoderCredentialRef } from '../src/dsh/credential-contract.ts'
 
 function provider(value: string | undefined, source = 'file'): CredentialProvider {
   return {

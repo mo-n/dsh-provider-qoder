@@ -1,4 +1,4 @@
-/** Bounded, redacted diagnostics shared by Qoder host services. */
+/** Bounded, redacted diagnostics internal to the Qoder transport. */
 
 export interface QoderLogger {
   debug?(message: string, ...details: unknown[]): void
@@ -62,4 +62,13 @@ export function redactLogPayload(text: string): unknown {
   } catch {
     return redactLogValue(text)
   }
+}
+
+/** Log one successfully parsed non-stream response through the shared redaction policy. */
+export function logParsedResponse(
+  logger: QoderLogger | undefined,
+  operation: string,
+  result: unknown,
+): void {
+  logger?.debug?.('[Qoder Response] Parsed', redactLogValue({ operation, result }))
 }

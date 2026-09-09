@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { redactLogPayload, redactLogValue } from '../src/logging.ts'
+import {
+  logParsedResponse,
+  redactLogPayload,
+  redactLogValue,
+} from '../src/qoder/transport/logging.ts'
 
 test('Qoder diagnostics redact credentials and subscriber identifiers while preserving useful fields', () => {
   const redacted = redactLogValue({
@@ -22,4 +26,23 @@ test('Qoder diagnostics redact credentials and subscriber identifiers while pres
 test('Qoder diagnostics redact token-like values in JSON and plain-text payloads', () => {
   assert.doesNotMatch(JSON.stringify(redactLogPayload('{"token":"jt-json-secret"}')), /jt-json-secret/)
   assert.doesNotMatch(String(redactLogPayload('upstream rejected pt-plain-secret')), /pt-plain-secret/)
+})
+
+test('parsed response logging uses one event shape and redacts its result', () => {
+  const entries: Array<{ message: string; details: unknown }> = []
+  logParsedResponse({
+    debug: (message, details) => entries.push({ message, details }),
+  }, 'auth.exchange', {
+    token: 'jt-parsed-secret',
+    expires_in: 3_600_000,
+  })
+
+  assert.equal(entries[0]?.message, '[Qoder Response] Parsed')
+  assert.deepEqual(entries[0]?.details, {
+    operation: 'auth.exchange',
+    result: {
+      token: '[REDACTED]',
+      expires_in: 3_600_000,
+    },
+  })
 })

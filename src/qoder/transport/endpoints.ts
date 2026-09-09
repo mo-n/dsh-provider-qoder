@@ -1,6 +1,8 @@
 /** Qoder transport endpoints for Global and China service regions. */
 
-export type QoderRegion = 'global' | 'china'
+import type { QoderRegion } from '../region.ts'
+
+export type { QoderRegion } from '../region.ts'
 
 export interface QoderRegionEndpoints {
   baseUrl: string
@@ -49,4 +51,3 @@ export function getQoderUsageUrl(region: QoderRegion = 'global'): string {
   const { openApiUrl } = resolveQoderEndpoints(region)
   return `${openApiUrl}/api/v2/quota/usage`
 }
-

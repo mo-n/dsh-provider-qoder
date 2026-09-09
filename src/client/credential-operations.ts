@@ -1,6 +1,6 @@
-import type { QoderAccountInfo } from '../usage.ts'
-import type { QoderCatalogModel } from '../catalog.ts'
-import type { QoderRegion } from '../endpoints.ts'
+import type { QoderAccountInfo } from '../qoder/account.ts'
+import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 
 export interface QoderCredentialOperations {

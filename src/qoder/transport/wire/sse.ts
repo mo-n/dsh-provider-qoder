@@ -6,9 +6,9 @@ import {
   type StreamChunk,
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
-import { QoderLlmError, qoderHttpError } from './errors.ts'
+import { QoderLlmError, qoderHttpError } from '../../errors.ts'
 import { QoderThinkingParser, type QoderContentSegment } from './thinking.ts'
-import type { QoderInnerChunk, QoderSseEnvelope } from './types.ts'
+import type { QoderInnerChunk, QoderSseEnvelope } from './wire-types.ts'
 
 const doneMarker = '[DONE]'
 export const defaultMaxSseBufferChars = 2 * 1024 * 1024

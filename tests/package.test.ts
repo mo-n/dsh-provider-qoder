@@ -143,3 +143,26 @@ test('legacy model configuration is scoped to its selected region', async () => 
   assert.ok((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'cmodel'))
   assert.equal((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'legacy-china'), false)
 })
+
+test('apply succeeds with default Config schema and empty models array', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  const normalizedConfig = plugin.Config({})
+  assert.deepEqual(normalizedConfig.models, [])
+  plugin.apply(ctx, normalizedConfig)
+  const models = await ctx.llm.listModels('qoder-official')
+  assert.ok(models.length > 0)
+  assert.ok(models.some(model => model.id === 'cmodel'))
+
+  const ctxEmptyModels = new Context()
+  await ctxEmptyModels.plugin(LlmRuntime)
+  await ctxEmptyModels.plugin(TestCredentials)
+  await ctxEmptyModels.plugin(MemorySettings).await()
+  plugin.apply(ctxEmptyModels, { models: [] })
+  const fallbackModels = await ctxEmptyModels.llm.listModels('qoder-official')
+  assert.ok(fallbackModels.length > 0)
+  assert.ok(fallbackModels.some(model => model.id === 'cmodel'))
+})
+

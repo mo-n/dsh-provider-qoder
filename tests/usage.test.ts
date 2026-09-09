@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { QoderAuthService } from '../src/auth.ts'
-import { QoderLlmError } from '../src/errors.ts'
-import { QoderUsageReader } from '../src/usage.ts'
+import { QoderAuthService } from '../src/qoder/transport/auth.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
+import { QoderUsageReader } from '../src/qoder/transport/account-reader.ts'
 
 test('QoderUsageReader reads subscriber profile and quota usage, and caches within TTL', async () => {
   let quotaCalls = 0
+  const diagnostics: string[] = []
   const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input)
     if (url.includes('/jobToken/exchange')) {
@@ -53,6 +54,9 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
     authService,
     fetch: fetchMock as typeof fetch,
     ttlMs: 60_000,
+    logger: {
+      debug: (message, ...details) => diagnostics.push(JSON.stringify([message, ...details])),
+    },
   })
 
   const first = await reader.readAccount('pt-test')
@@ -66,6 +70,7 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
   assert.equal(first.usage?.orgResourcePackage?.used, 0)
   assert.equal(first.usage?.orgResourcePackage?.remaining, 3000)
   assert.equal(quotaCalls, 1)
+  assert.match(diagnostics.join('\n'), /account\.usage/)
 
 
   // Cache hit
