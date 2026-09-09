@@ -5,7 +5,7 @@ import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from './errors.ts'
 import { translateTools, validateAndTranslateMessages } from './translate.ts'
 import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './types.ts'
-import type { QoderCatalogModel } from './adapter.ts'
+import type { QoderCatalogModel } from './catalog.ts'
 
 function stableHash(prefix: string, ...inputs: string[]): string {
   const hash = crypto.createHash('sha256')

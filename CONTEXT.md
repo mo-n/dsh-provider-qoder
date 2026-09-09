@@ -25,8 +25,8 @@ The provider-facing identifier of a Qoder model selected for a request.
 _Avoid_: display name, DSH provider route
 
 **Qoder transport**:
-The boundary that authenticates a Qoder subscriber, translates model requests, and returns model stream events without owning agent tools or workspace operations.
-_Avoid_: Qoder agent, Qoder Agent SDK
+The provider-side capability that owns all communication with Qoder: authenticating a subscriber, discovering models, reading subscriber profile and quota, translating model requests, and returning model stream events. It does not own agent tools or workspace operations.
+_Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK
 
 **Qoder tool exchange**:
 The provider-level representation of DSH tool definitions, model-requested tool calls, and correlated tool results transported across Qoder model turns. DSH remains responsible for executing tools.
@@ -57,7 +57,7 @@ The point-in-time metrics of a Qoder subscriber's model consumption, remaining a
 _Avoid_: billing balance, token count
 
 **Qoder service region**:
-The target service environment (`global` or `china`) of the Qoder platform selected in settings.
+The target service environment (`global` or `china`) of the Qoder platform selected in settings. A Qoder model catalog belongs to exactly one service region and must not be merged with another region's catalog.
 _Avoid_: endpoint mode, cluster, server flavor
 
 **Global Qoder service**:
@@ -67,4 +67,3 @@ _Avoid_: international endpoint, global cluster
 **China Qoder service**:
 The Qoder service associated with `qoder.com.cn` accounts and mainland China endpoints.
 _Avoid_: domestic service, CN endpoint
-

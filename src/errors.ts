@@ -4,7 +4,7 @@
  * @module dsh-provider-qoder/errors
  */
 
-import { LlmError, type LlmErrorOptions } from '@deepseek-ai/dsh-llm'
+import { LlmError, ProviderRequestId, type LlmErrorOptions } from '@deepseek-ai/dsh-llm'
 
 export class QoderLlmError extends LlmError {
   constructor(message: string, code: string = 'UNKNOWN_ERROR', options?: LlmErrorOptions) {
@@ -29,10 +29,20 @@ export function qoderHttpError(
             ? 'INVALID_REQUEST'
             : 'PROVIDER_ERROR'
   const providerRetryAfterMs = retryAfterMs(response.headers?.get('retry-after') ?? null)
+  const requestId = qoderRequestId(response.headers)
   return new QoderLlmError(message, code, {
     status,
     ...providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs },
+    ...requestId === undefined ? {} : { requestId },
   })
+}
+
+export function qoderRequestId(headers?: Pick<Headers, 'get'>): ReturnType<typeof ProviderRequestId> | undefined {
+  const value = headers?.get('x-request-id')
+    ?? headers?.get('request-id')
+    ?? headers?.get('x-amzn-requestid')
+  const normalized = value?.trim()
+  return normalized ? ProviderRequestId(normalized) : undefined
 }
 
 export function retryAfterMs(value: string | null, nowMs = Date.now()): number | undefined {

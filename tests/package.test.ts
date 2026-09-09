@@ -11,7 +11,7 @@ import type {
   CredentialRef,
   ResolvedCredential,
 } from '@deepseek-ai/dsh-credentials'
-import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
 
@@ -77,6 +77,8 @@ test('package exports the expected plugin surface', () => {
   assert.deepEqual(plugin.inject, ['llm', 'credentials', 'connection'])
   assert.equal(typeof plugin.apply, 'function')
   assert.equal(typeof plugin.Config, 'function')
+  assert.equal('QoderAdapter' in plugin, false)
+  assert.equal('fetchQoderModels' in plugin, false)
   assert.equal('apiKeyEnv' in plugin.Config({}), false)
 })
 
@@ -103,14 +105,41 @@ test('apply registers a valid adapter with the real DSH runtime', async () => {
     jitterRatio: 0.1,
   })
   await ctx.settings.update('provider-qoder' as SettingsNamespace, {
-    models: [{ id: 'custom-qoder', name: 'Custom Qoder' }],
+    modelsByRegion: { global: [{ id: 'custom-qoder', name: 'Custom Qoder' }] },
   })
   assert.deepEqual(
     (await ctx.llm.listModels('qoder-official')).map(model => model.id),
     ['custom-qoder'],
   )
+  await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'china' })
+  assert.ok((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'cmodel'))
+  assert.equal((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'custom-qoder'), false)
+  await ctx.settings.update('provider-qoder' as SettingsNamespace, {
+    modelsByRegion: {
+      global: [{ id: 'custom-qoder', name: 'Custom Qoder' }],
+      china: [{ id: 'china-qoder', name: 'China Qoder' }],
+    },
+  })
+  assert.deepEqual((await ctx.llm.listModels('qoder-official')).map(model => model.id), ['china-qoder'])
+  await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'global' })
+  assert.deepEqual((await ctx.llm.listModels('qoder-official')).map(model => model.id), ['custom-qoder'])
   const prepared = await ctx.llm.prepareCall({ provider: 'qoder-official', model: 'cmodel' })
   assert.equal(prepared.config.provider, 'qoder-official')
   assert.equal(prepared.config.model, 'cmodel')
-  assert.ok(new plugin.QoderAdapter({ resolvePat: () => Promise.resolve('') }) instanceof LlmAdapter)
+})
+
+test('legacy model configuration is scoped to its selected region', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  plugin.apply(ctx, {
+    region: 'china',
+    models: [{ id: 'legacy-china', name: 'Legacy China' }],
+  })
+
+  assert.deepEqual((await ctx.llm.listModels('qoder-official')).map(model => model.id), ['legacy-china'])
+  await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'global' })
+  assert.ok((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'cmodel'))
+  assert.equal((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'legacy-china'), false)
 })

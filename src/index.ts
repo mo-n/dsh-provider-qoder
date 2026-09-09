@@ -1,44 +1,30 @@
-/** Register the Global Qoder subscription provider with DSH. */
+/** Register the Qoder subscription provider with DSH. */
 
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
-import {
-  defaultModels,
-  defaultStreamIdleTimeoutMs,
-  QoderAdapter,
-  type QoderCatalogModel,
-} from './adapter.ts'
-import { QoderAuthService } from './auth.ts'
+import { QoderAdapter } from './adapter.ts'
+import { defaultModels, type QoderCatalogModel } from './catalog.ts'
 import { resolveManagedQoderPat } from './credential.ts'
+import type { QoderRegion } from './endpoints.ts'
 import { QoderLlmError } from './errors.ts'
 import { redactLogValue, type QoderLogger } from './logging.ts'
 import {
-  fetchQoderModels,
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
 } from './models.ts'
-import type { QoderRegion } from './endpoints.ts'
-import { QoderUsageReader } from './usage.ts'
+import {
+  createQoderTransport,
+  defaultStreamIdleTimeoutMs,
+  type QoderTransport,
+} from './transport.ts'
+import type { QoderAccountInfo } from './usage.ts'
 
-export * from './adapter.ts'
-export * from './auth.ts'
-export * from './cosy.ts'
-export * from './credential-contract.ts'
-export * from './credential.ts'
-export * from './encoding.ts'
-export * from './endpoints.ts'
-export * from './errors.ts'
-export * from './machine-id.ts'
-export * from './logging.ts'
-export * from './models.ts'
-export * from './serialize.ts'
-export * from './sse.ts'
-export * from './translate.ts'
-export * from './types.ts'
-export * from './usage.ts'
+export type { QoderCatalogModel } from './catalog.ts'
+export type { QoderRegion } from './endpoints.ts'
+export type { QoderAccountInfo } from './usage.ts'
 
 export const name = 'provider-qoder'
 export const inject = ['llm', 'credentials', 'connection']
@@ -49,8 +35,15 @@ const qoderChannel = '/qoder-subscription'
 const fiberDisposed: FiberState = 4
 const fiberUnloading: FiberState = 5
 
+export interface QoderModelsByRegion {
+  global?: QoderCatalogModel[]
+  china?: QoderCatalogModel[]
+}
+
 export interface Config {
   region?: QoderRegion
+  modelsByRegion?: QoderModelsByRegion
+  /** @deprecated Migrated to modelsByRegion for the selected region. */
   models?: QoderCatalogModel[]
   streamIdleTimeoutMs?: number
 }
@@ -77,9 +70,12 @@ const catalogModel: z<QoderCatalogModel> = z.object({
   })),
 })
 
+const modelsByRegionSchema = z.dict(z.array(catalogModel)) as z<QoderModelsByRegion>
+
 export const Config: z<Config> = z.object({
   region: z.union(['global', 'china'] as const).default('global'),
-  models: z.array(catalogModel).default(defaultModels),
+  modelsByRegion: modelsByRegionSchema.default({}),
+  models: z.array(catalogModel),
   streamIdleTimeoutMs: z.number().step(1).min(1).default(defaultStreamIdleTimeoutMs),
 })
 
@@ -95,6 +91,19 @@ function resolveModels(models: readonly QoderCatalogModel[] | undefined): QoderC
   })
 }
 
+function modelsFor(
+  config: Config,
+  region: QoderRegion,
+  legacyModelsRegion: QoderRegion = config.region ?? 'global',
+): QoderCatalogModel[] {
+  const scoped = config.modelsByRegion?.[region]
+  if (scoped !== undefined) return resolveModels(scoped)
+  if (legacyModelsRegion === region && config.models !== undefined && config.models.length > 0) {
+    return resolveModels(config.models)
+  }
+  return resolveModels(defaultModels)
+}
+
 function publicError(message: string) {
   return {
     ok: false as const,
@@ -104,66 +113,111 @@ function publicError(message: string) {
 
 export function apply(ctx: Context, config: Config = {}): void {
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
-  let current = (): Config => baseConfig
-  const authService = new QoderAuthService({
-    logger,
-    resolveRegion: () => current().region ?? 'global',
-  })
-  const usageReader = new QoderUsageReader({
-    authService,
-    logger,
-    resolveRegion: () => current().region ?? 'global',
-  })
-
+  const initialRegion = config.region ?? 'global'
   const baseConfig: Config = {
-    region: config.region ?? 'global',
-    models: resolveModels(config.models),
+    region: initialRegion,
+    modelsByRegion: { ...config.modelsByRegion },
+    ...config.models === undefined ? {} : { models: resolveModels(config.models) },
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
   }
-  let discoveredCatalog: readonly QoderCatalogModel[] = []
-  let previousRegion = baseConfig.region ?? 'global'
-  const resolveConfig = () => ({
-    region: current().region ?? 'global',
-    models: mergeQoderDiscoveryMetadata(resolveModels(current().models), discoveredCatalog),
-    streamIdleTimeoutMs: current().streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
+  let current = (): Config => baseConfig
+  let legacyModelsRegion = initialRegion
+  const discoveredCatalogs: Record<QoderRegion, readonly QoderCatalogModel[]> = {
+    global: [],
+    china: [],
+  }
+
+  const createTransport = (
+    region: QoderRegion,
+    streamIdleTimeoutMs: number,
+    resolvePat: () => Promise<string> = () => resolveManagedQoderPat(ctx.credentials),
+  ): QoderTransport => createQoderTransport({
+    region,
+    resolvePat,
+    logger,
+    streamIdleTimeoutMs,
   })
+
+  const resolveConfig = () => {
+    const value = current()
+    const region = value.region ?? 'global'
+    return {
+      region,
+      models: mergeQoderDiscoveryMetadata(
+        modelsFor(value, region, legacyModelsRegion),
+        discoveredCatalogs[region],
+      ),
+      streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
+    }
+  }
+
   const initial = resolveConfig()
+  let activeTransport = createTransport(initial.region, initial.streamIdleTimeoutMs)
+  let activeTransportConfig = {
+    region: initial.region,
+    streamIdleTimeoutMs: initial.streamIdleTimeoutMs,
+  }
   const adapter = new QoderAdapter({
-    resolvePat: () => resolveManagedQoderPat(ctx.credentials),
+    resolveTransport: () => activeTransport,
     models: initial.models,
     providerId: providerQoder,
     providerName: 'Qoder',
-    authService,
-    logger,
-    streamIdleTimeoutMs: initial.streamIdleTimeoutMs,
-    region: initial.region,
   })
 
   const registration = ctx.llm.registerAdapter([providerQoder], adapter)
   const refreshAdapter = (): void => {
     const next = resolveConfig()
-    if (next.region !== previousRegion) {
-      authService.clear()
-      usageReader.clear()
-      previousRegion = next.region
+    if (next.region !== activeTransportConfig.region
+      || next.streamIdleTimeoutMs !== activeTransportConfig.streamIdleTimeoutMs) {
+      activeTransport = createTransport(next.region, next.streamIdleTimeoutMs)
+      activeTransportConfig = {
+        region: next.region,
+        streamIdleTimeoutMs: next.streamIdleTimeoutMs,
+      }
     }
-    adapter.replaceConfig(next.models, next.streamIdleTimeoutMs, next.region)
+    adapter.replaceModels(next.models)
     registration.replace([providerQoder])
   }
 
   ctx.inject(['settings'], (settingsCtx) => {
     const scope = settingsCtx.settings.register(settingsNamespace, Config, {
       base: baseConfig,
-      validate: value => { resolveModels(value.models) },
+      validate: (value) => {
+        for (const region of Object.keys(value.modelsByRegion ?? {})) {
+          if (region !== 'global' && region !== 'china') {
+            throw new Error(`provider-qoder: unsupported model catalog region "${region}"`)
+          }
+        }
+        modelsFor(value, 'global', legacyModelsRegion)
+        modelsFor(value, 'china', legacyModelsRegion)
+      },
     })
+    legacyModelsRegion = scope.get().region ?? initialRegion
     current = () => scope.get()
     refreshAdapter()
+
+    const loaded = scope.get()
+    const loadedRegion = loaded.region ?? 'global'
+    if (loaded.models !== undefined && loaded.models.length > 0
+      && loaded.modelsByRegion?.[loadedRegion] === undefined) {
+      void scope.update({
+        modelsByRegion: {
+          ...loaded.modelsByRegion,
+          [loadedRegion]: resolveModels(loaded.models),
+        },
+      }).catch(error => logger?.error?.('[Qoder Settings] Failed to migrate model catalog', redactLogValue(error)))
+    }
+
     scope.watch(async (next) => {
       if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
       refreshAdapter()
-      const enriched = mergeQoderDiscoveryMetadata(resolveModels(next.models), discoveredCatalog)
-      if (!hasSameQoderDiscoveryMetadata(next.models, enriched)) {
-        await scope.update({ models: enriched })
+      const region = next.region ?? 'global'
+      const selected = modelsFor(next, region, legacyModelsRegion)
+      const enriched = mergeQoderDiscoveryMetadata(selected, discoveredCatalogs[region])
+      if (!hasSameQoderDiscoveryMetadata(selected, enriched)) {
+        await scope.update({
+          modelsByRegion: { ...next.modelsByRegion, [region]: enriched },
+        })
       }
     })
     settingsCtx.effect(() => () => {
@@ -173,13 +227,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
   })
 
-  const discoverModels = async (signal?: AbortSignal, suppliedPat?: string): Promise<QoderCatalogModel[]> => {
-    const pat = suppliedPat?.trim() || await resolveManagedQoderPat(ctx.credentials)
-    if (!pat) throw new QoderLlmError('Qoder PAT is not configured.', 'MISSING_CREDENTIAL')
-    const region = current().region ?? 'global'
-    const credentials = await authService.getCredentials(pat, signal, region)
-    const models = await fetchQoderModels(credentials, { signal, logger, region })
-    discoveredCatalog = models
+  const discoverModels = async (signal?: AbortSignal, suppliedPat?: string): Promise<readonly QoderCatalogModel[]> => {
+    const snapshot = resolveConfig()
+    const normalizedPat = suppliedPat?.trim()
+    const transport = normalizedPat
+      ? createTransport(snapshot.region, snapshot.streamIdleTimeoutMs, () => Promise.resolve(normalizedPat))
+      : activeTransport
+    const models = await transport.discoverModels(signal)
+    discoveredCatalogs[snapshot.region] = models
     return models
   }
 
@@ -208,26 +263,13 @@ export function apply(ctx: Context, config: Config = {}): void {
           return publicError(error instanceof Error ? error.message : 'Failed to discover Qoder models')
         }
       }
+
       const force = typeof payload === 'object' && payload !== null && 'force' in payload
         ? payload.force === true
         : false
       logger?.debug?.('[Qoder RPC] Reading subscriber account', { force })
-
-      let pat: string
       try {
-        pat = await resolveManagedQoderPat(ctx.credentials)
-      } catch (error) {
-        if (signal.aborted) throw error
-        logger?.error?.('[Qoder RPC] Failed to resolve managed PAT', redactLogValue(error))
-        return publicError(error instanceof Error ? error.message : 'No Qoder PAT configured')
-      }
-      if (!pat) {
-        logger?.warn?.('[Qoder RPC] No managed Qoder PAT is configured')
-        return publicError('Qoder PAT is not configured')
-      }
-
-      try {
-        const account = await usageReader.readAccount(pat, { force, signal, region: current().region ?? 'global' })
+        const account = await activeTransport.readAccount({ force, signal })
         logger?.debug?.('[Qoder RPC] Subscriber account resolved')
         return { ok: true, value: account }
       } catch (error) {

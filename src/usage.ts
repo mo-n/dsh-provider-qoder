@@ -2,8 +2,16 @@
 
 import type { QoderAuthService } from './auth.ts'
 import { getQoderUsageUrl, type QoderRegion } from './endpoints.ts'
-import { QoderLlmError, qoderHttpError } from './errors.ts'
+import { QoderLlmError, qoderHttpError, qoderRequestId } from './errors.ts'
 import { redactLogPayload, redactLogValue, type QoderLogger } from './logging.ts'
+import {
+  defaultMaxErrorBytes,
+  defaultMaxJsonBytes,
+  opaqueCredentialKey,
+  readLimitedText,
+  retryMetadataRead,
+  SingleFlight,
+} from './request.ts'
 
 const userAgent = 'dsh-provider-qoder'
 const defaultUsageTtlMs = 60_000
@@ -43,7 +51,6 @@ export interface QoderUsageReaderOptions {
   fetch?: typeof fetch
   ttlMs?: number
   timeoutMs?: number
-  resolveRegion?: () => QoderRegion
   region?: QoderRegion
   logger?: QoderLogger
 }
@@ -113,33 +120,23 @@ export class QoderUsageReader {
   private readonly fetchImpl: typeof fetch
   private readonly ttlMs: number
   private readonly timeoutMs: number
-  private readonly resolveRegion?: () => QoderRegion
-  private region?: QoderRegion
+  private readonly region: QoderRegion
   private readonly logger?: QoderLogger
   private readonly cache = new Map<string, { info: QoderAccountInfo; expiresAt: number }>()
+  private readonly flights = new SingleFlight<QoderAccountInfo>()
 
   constructor(options: QoderUsageReaderOptions) {
     this.authService = options.authService
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.ttlMs = options.ttlMs ?? defaultUsageTtlMs
     this.timeoutMs = options.timeoutMs ?? defaultUsageTimeoutMs
-    this.resolveRegion = options.resolveRegion
-    this.region = options.region
+    this.region = options.region ?? 'global'
     this.logger = options.logger
-  }
-
-  setRegion(region: QoderRegion): void {
-    this.region = region
-  }
-
-  currentRegion(): QoderRegion {
-    if (this.resolveRegion) return this.resolveRegion()
-    return this.region ?? 'global'
   }
 
   async readAccount(
     pat: string,
-    options?: { force?: boolean; signal?: AbortSignal; region?: QoderRegion },
+    options?: { force?: boolean; signal?: AbortSignal },
   ): Promise<QoderAccountInfo> {
     if (!pat || typeof pat !== 'string') {
       throw new QoderLlmError(
@@ -148,8 +145,7 @@ export class QoderUsageReader {
       )
     }
 
-    const effectiveRegion = options?.region ?? this.currentRegion()
-    const cacheKey = `${effectiveRegion}:${pat}`
+    const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
 
     if (!options?.force) {
       const cached = this.cache.get(cacheKey)
@@ -158,14 +154,27 @@ export class QoderUsageReader {
       }
     }
 
-    const creds = await this.authService.getCredentials(pat, options?.signal, effectiveRegion)
+    return this.flights.run(
+      cacheKey,
+      options?.signal,
+      sharedSignal => this.loadAccount(pat, sharedSignal, cacheKey),
+      () => new QoderLlmError('Qoder account request was aborted.', 'ABORTED'),
+    )
+  }
+
+  private async loadAccount(
+    pat: string,
+    signal: AbortSignal,
+    cacheKey: string,
+  ): Promise<QoderAccountInfo> {
+    const creds = await this.authService.getCredentials(pat, signal)
     const profile: QoderSubscriberProfile = {
       id: creds.userID,
       name: creds.name || 'Qoder User',
       email: creds.email || '',
     }
 
-    const usage = await this.fetchUsage(creds.authToken, options?.signal, effectiveRegion)
+    const usage = await retryMetadataRead(signal, () => this.fetchUsage(creds.authToken, signal))
 
     const accountInfo: QoderAccountInfo = {
       profile,
@@ -183,19 +192,17 @@ export class QoderUsageReader {
 
   clear(pat?: string): void {
     if (pat) {
-      for (const key of this.cache.keys()) {
-        if (key.endsWith(`:${pat}`) || key === pat) this.cache.delete(key)
-      }
+      this.cache.delete(`${this.region}:${opaqueCredentialKey(pat)}`)
     } else {
       this.cache.clear()
     }
   }
 
-  private async fetchUsage(jobToken: string, signal?: AbortSignal, region?: QoderRegion): Promise<QoderQuotaUsage> {
-    const effectiveRegion = region ?? this.currentRegion()
-    const url = getQoderUsageUrl(effectiveRegion)
+  private async fetchUsage(jobToken: string, signal?: AbortSignal): Promise<QoderQuotaUsage> {
+    const url = getQoderUsageUrl(this.region)
     const timeoutSignal = AbortSignal.timeout(this.timeoutMs)
     const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
+    const startedAt = performance.now()
     this.logger?.debug?.('[Qoder Usage] Requesting quota usage', { url })
     try {
       const response = await this.fetchImpl(url, {
@@ -213,13 +220,19 @@ export class QoderUsageReader {
       this.logger?.debug?.('[Qoder Usage] Request completed', {
         status: response.status,
         statusText: response.statusText,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
       })
-      const text = await response.text()
+      const text = await readLimitedText(
+        response,
+        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
+        'Qoder quota usage response',
+      )
 
       if (!response.ok) {
         this.logger?.error?.('[Qoder Usage] Request failed', redactLogPayload(text))
         throw qoderHttpError(
-          `Failed to fetch Qoder quota usage with status ${response.status}: ${text}`,
+          `Failed to fetch Qoder quota usage with status ${response.status}.`,
           response,
         )
       }

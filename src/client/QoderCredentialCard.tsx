@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { isEnvironmentCredentialSource } from '../credential-contract.ts'
-import type { QoderCatalogModel } from '../adapter.ts'
+import { defaultModels, type QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from '../endpoints.ts'
 import type { QoderCredentialInjected, QoderCredentialStatus } from './credential-operations.ts'
 import { QoderModelCatalog, validateModelCatalog } from './QoderModelCatalog.tsx'
@@ -13,10 +13,19 @@ type ViewState =
   | { status: 'failed' }
   | { status: 'ready'; info: QoderCredentialStatus }
 
-function modelsOf(value: unknown): QoderCatalogModel[] {
+function modelsOf(value: unknown, selectedRegion?: QoderRegion): QoderCatalogModel[] {
   if (typeof value !== 'object' || value === null) return []
-  const models = (value as { models?: unknown }).models
-  return Array.isArray(models) ? models as QoderCatalogModel[] : []
+  const section = value as {
+    region?: unknown
+    models?: unknown
+    modelsByRegion?: Partial<Record<QoderRegion, unknown>>
+  }
+  const region = selectedRegion ?? (section.region === 'china' ? 'china' : 'global')
+  const scoped = section.modelsByRegion?.[region]
+  if (Array.isArray(scoped)) return scoped as QoderCatalogModel[]
+  return region === (section.region === 'china' ? 'china' : 'global') && Array.isArray(section.models)
+    ? section.models as QoderCatalogModel[]
+    : defaultModels.map(model => ({ ...model }))
 }
 
 function regionOf(value: unknown): QoderRegion {
@@ -43,10 +52,10 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
 
   useEffect(() => {
     if (modelSnapshot.status === 'ready') {
-      if (!modelsDirty) setModelDraft(modelsOf(modelSnapshot.value))
+      if (!modelsDirty) setModelDraft(modelsOf(modelSnapshot.value, regionDraft))
       if (!regionDirty) setRegionDraft(regionOf(modelSnapshot.value))
     }
-  }, [modelSnapshot, modelsDirty, regionDirty])
+  }, [modelSnapshot, modelsDirty, regionDirty, regionDraft])
 
   const load = useCallback(async () => {
     const info = await operations.describe()
@@ -82,7 +91,7 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
 
   const closeEditor = (): void => {
     setDraft('')
-    setModelDraft(modelsOf(modelSnapshot.value))
+    setModelDraft(modelsOf(modelSnapshot.value, regionOf(modelSnapshot.value)))
     setRegionDraft(regionOf(modelSnapshot.value))
     setModelsDirty(false)
     setRegionDirty(false)
@@ -106,7 +115,7 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
       setRegionDirty(false)
     }
     if (modelsDirty) {
-      const storedModels = await operations.storeModels(modelDraft)
+      const storedModels = await operations.storeModels(regionDraft, modelDraft)
       if (!storedModels) {
         setNotice('saveFailed')
         setMutation(undefined)
@@ -184,6 +193,8 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
                   disabled={!modelWritable || busy}
                   onClick={() => {
                     setRegionDraft('global')
+                    setModelDraft(modelsOf(modelSnapshot.value, 'global'))
+                    setModelsDirty(false)
                     setRegionDirty(true)
                   }}
                 >
@@ -197,6 +208,8 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
                   disabled={!modelWritable || busy}
                   onClick={() => {
                     setRegionDraft('china')
+                    setModelDraft(modelsOf(modelSnapshot.value, 'china'))
+                    setModelsDirty(false)
                     setRegionDirty(true)
                   }}
                 >

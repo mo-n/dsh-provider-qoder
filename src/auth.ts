@@ -2,9 +2,16 @@
 
 import type { CosyCredentials } from './cosy.ts'
 import { getQoderExchangeUrl, getQoderUserInfoUrl, type QoderRegion } from './endpoints.ts'
-import { QoderLlmError, qoderHttpError } from './errors.ts'
+import { QoderLlmError, qoderHttpError, qoderRequestId } from './errors.ts'
 import { redactLogPayload, redactLogValue, type QoderLogger } from './logging.ts'
 import { getMachineId } from './machine-id.ts'
+import {
+  defaultMaxErrorBytes,
+  defaultMaxJsonBytes,
+  opaqueCredentialKey,
+  readLimitedText,
+  retryMetadataRead,
+} from './request.ts'
 
 const userAgent = 'dsh-provider-qoder'
 const expiryBufferMs = 5 * 60 * 1000
@@ -28,7 +35,6 @@ export interface QoderAuthServiceOptions {
   fetch?: typeof fetch
   timeoutMs?: number
   resolveMachineId?: () => string
-  resolveRegion?: () => QoderRegion
   region?: QoderRegion
   logger?: QoderLogger
 }
@@ -57,33 +63,20 @@ export class QoderAuthService {
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
   private readonly resolveMachineId: () => string
-  private readonly resolveRegion?: () => QoderRegion
-  private region?: QoderRegion
+  private readonly region: QoderRegion
   private readonly logger?: QoderLogger
 
   constructor(options: QoderAuthServiceOptions = {}) {
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.timeoutMs = options.timeoutMs ?? defaultAuthTimeoutMs
     this.resolveMachineId = options.resolveMachineId ?? getMachineId
-    this.resolveRegion = options.resolveRegion
-    this.region = options.region
+    this.region = options.region ?? 'global'
     this.logger = options.logger
-  }
-
-  setRegion(region: QoderRegion): void {
-    this.region = region
-  }
-
-  currentRegion(): QoderRegion {
-    if (this.resolveRegion) return this.resolveRegion()
-    return this.region ?? 'global'
   }
 
   clear(pat?: string): void {
     if (pat) {
-      for (const key of this.cache.keys()) {
-        if (key.endsWith(`:${pat}`) || key === pat) this.cache.delete(key)
-      }
+      this.cache.delete(`${this.region}:${opaqueCredentialKey(pat)}`)
     } else {
       this.cache.clear()
     }
@@ -93,7 +86,6 @@ export class QoderAuthService {
   async getCredentials(
     pat: string,
     signal?: AbortSignal,
-    region?: QoderRegion,
   ): Promise<CosyCredentials> {
     if (!pat || typeof pat !== 'string') {
       throw new QoderLlmError(
@@ -103,21 +95,20 @@ export class QoderAuthService {
     }
     if (signal?.aborted) throw abortedError()
 
-    const effectiveRegion = region ?? this.currentRegion()
-    const cacheKey = `${effectiveRegion}:${pat}`
+    const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
 
     const cached = this.cache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now() + expiryBufferMs) return cached.creds
 
     let entry = this.inFlight.get(cacheKey)
-    if (entry === undefined) {
+    if (entry === undefined || entry.controller.signal.aborted) {
       const controller = new AbortController()
       const created = {} as InFlightEntry
       created.controller = controller
       created.waiters = 0
       created.settled = false
       created.timeout = setTimeout(() => controller.abort('authentication timeout'), this.timeoutMs)
-      created.promise = this.exchangeAndResolve(pat, controller.signal, effectiveRegion).finally(() => {
+      created.promise = this.exchangeAndResolve(pat, controller.signal).finally(() => {
         created.settled = true
         clearTimeout(created.timeout)
         if (this.inFlight.get(cacheKey) === created) this.inFlight.delete(cacheKey)
@@ -131,21 +122,24 @@ export class QoderAuthService {
       return await waitForFlight(entry.promise, signal)
     } finally {
       entry.waiters--
-      if (entry.waiters === 0 && !entry.settled) entry.controller.abort('all callers aborted')
+      if (entry.waiters === 0 && !entry.settled) {
+        if (this.inFlight.get(cacheKey) === entry) this.inFlight.delete(cacheKey)
+        entry.controller.abort('all callers aborted')
+      }
     }
   }
 
   private async exchangeAndResolve(
     pat: string,
     signal: AbortSignal,
-    region: QoderRegion,
   ): Promise<CosyCredentials> {
     let jobToken: string
     let expiresAt = Date.now() + defaultExpiryMs
 
     try {
-      const url = getQoderExchangeUrl(region)
-      this.logger?.debug?.('[Qoder Auth] Exchanging PAT for job token', { url, region })
+      const url = getQoderExchangeUrl(this.region)
+      const startedAt = performance.now()
+      this.logger?.debug?.('[Qoder Auth] Exchanging PAT for job token', { url, region: this.region })
       const response = await this.fetchImpl(url, {
         method: 'POST',
         headers: {
@@ -161,20 +155,27 @@ export class QoderAuthService {
       this.logger?.debug?.('[Qoder Auth] Exchange completed', {
         status: response.status,
         statusText: response.statusText,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
       })
+      const responseText = await readLimitedText(
+        response,
+        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
+        'Qoder PAT exchange response',
+      )
       if (!response.ok) {
-        const errorText = await response.text()
-        this.logger?.error?.('[Qoder Auth] Exchange failed', redactLogPayload(errorText))
+        this.logger?.error?.('[Qoder Auth] Exchange failed', redactLogPayload(responseText))
         throw qoderHttpError(
           `Qoder PAT exchange failed with HTTP status ${response.status}.`,
           response,
         )
       }
 
-      const data = await response.json() as {
-        token?: string
-        expires_at?: string
-        expires_in?: number
+      let data: { token?: string; expires_at?: string; expires_in?: number }
+      try {
+        data = JSON.parse(responseText) as typeof data
+      } catch {
+        throw new QoderLlmError('Qoder PAT exchange returned invalid JSON.', 'MALFORMED_RESPONSE')
       }
       if (!data.token) {
         throw new QoderLlmError('Qoder PAT exchange returned no job token.', 'AUTH')
@@ -194,7 +195,7 @@ export class QoderAuthService {
       throw new QoderLlmError('Qoder PAT exchange network request failed.', 'TRANSPORT', { cause: error })
     }
 
-    const userInfo = await this.fetchUserInfo(jobToken, signal, region)
+    const userInfo = await retryMetadataRead(signal, () => this.fetchUserInfo(jobToken, signal))
     const creds: CosyCredentials = {
       userID: userInfo.userID,
       authToken: jobToken,
@@ -202,7 +203,7 @@ export class QoderAuthService {
       email: userInfo.email,
       machineID: this.resolveMachineId(),
     }
-    const cacheKey = `${region}:${pat}`
+    const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
     this.cache.set(cacheKey, { creds, expiresAt })
     return creds
   }
@@ -210,9 +211,9 @@ export class QoderAuthService {
   private async fetchUserInfo(
     jobToken: string,
     signal: AbortSignal,
-    region: QoderRegion,
   ): Promise<{ userID: string; email: string; name: string }> {
-    const url = getQoderUserInfoUrl(region)
+    const url = getQoderUserInfoUrl(this.region)
+    const startedAt = performance.now()
     this.logger?.debug?.('[Qoder UserInfo] Requesting subscriber profile', { url })
     try {
       const response = await this.fetchImpl(url, {
@@ -228,8 +229,14 @@ export class QoderAuthService {
       this.logger?.debug?.('[Qoder UserInfo] Request completed', {
         status: response.status,
         statusText: response.statusText,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
       })
-      const text = await response.text()
+      const text = await readLimitedText(
+        response,
+        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
+        'Qoder identity lookup response',
+      )
       if (!response.ok) {
         this.logger?.error?.('[Qoder UserInfo] Request failed', redactLogPayload(text))
         throw qoderHttpError(

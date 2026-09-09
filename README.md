@@ -69,11 +69,11 @@ Verify that the PAT is valid and matches the saved service region. If modified, 
 
 ### Models remain unavailable after switching regions
 
-Switching regions does not automatically update your PAT or refetch models. After saving the PAT for the corresponding region, refetch available models, save your selection, and choose an available Qoder model in your conversation.
+Global and China model catalogs are stored separately. Switching regions does not automatically update your PAT or refetch that region's models; after saving the matching PAT, fetch and save the models for the selected region.
 
 ### Are requests automatically retried?
 
-Automatic retries are managed by DSH. To enable retries, the running profile should include `@deepseek-ai/dsh-llm-retry`. The plugin reports empty responses, rate limits, server errors, timeouts, and transport errors using DSH's default retry policy; authentication, invalid requests, cancellations, quota issues, and protocol formatting errors are not retried by default.
+Model-generation retries are managed by DSH. To enable them, the running profile should include `@deepseek-ai/dsh-llm-retry`. The plugin reports empty responses, rate limits, server errors, timeouts, and transport errors using DSH's default retry policy; authentication, invalid requests, cancellations, quota issues, and protocol formatting errors are not retried by default. The Qoder transport may independently retry an idempotent model-catalog, subscriber-profile, or quota read once, but never retries a model-generation POST internally.
 
 ## Install from Source & Development
 

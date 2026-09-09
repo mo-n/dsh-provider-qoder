@@ -112,7 +112,7 @@ test('QoderUsageReader surfaces quota failures and does not cache them', async (
     return true
   })
   await assert.rejects(reader.readAccount('pt-error-test'))
-  assert.equal(quotaCalls, 2)
+  assert.equal(quotaCalls, 4)
 })
 
 test('QoderUsageReader propagates caller cancellation and does not cache the partial account', async () => {
@@ -193,4 +193,31 @@ test('QoderUsageReader bounds a stalled quota request with its own timeout', asy
     assert.equal((error as QoderLlmError).code, 'TIMEOUT')
     return true
   })
+})
+
+test('QoderUsageReader shares a concurrent quota cache miss', async () => {
+  let quotaCalls = 0
+  const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-shared' }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-shared' }))
+    if (url.includes('/quota/usage')) {
+      quotaCalls++
+      await new Promise(resolve => setTimeout(resolve, 5))
+      return new Response(JSON.stringify({ userQuota: { total: 10, used: 1, remaining: 9 } }))
+    }
+    throw new Error(`unexpected URL: ${url}`)
+  }
+  const authService = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+  const reader = new QoderUsageReader({ authService, fetch: fetchMock as typeof fetch })
+
+  const [first, second] = await Promise.all([
+    reader.readAccount('pt-shared'),
+    reader.readAccount('pt-shared'),
+  ])
+  assert.equal(quotaCalls, 1)
+  assert.equal(first, second)
 })

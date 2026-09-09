@@ -8,7 +8,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { qoderCredentialRef } from '../credential-contract.ts'
 import type { QoderAccountInfo } from '../usage.ts'
-import type { QoderCatalogModel } from '../adapter.ts'
+import type { QoderCatalogModel } from '../catalog.ts'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
 import type {
@@ -117,9 +117,13 @@ export function apply(ctx: ClientContext): void {
     },
     getModelSnapshot: () => modelScope.getSnapshot() as QoderModelSettingsSnapshot,
     subscribeModels: listener => modelScope.subscribe(listener),
-    storeModels: async (models) => {
+    storeModels: async (region, models) => {
       try {
-        await modelScope.set('models', models)
+        const current = modelScope.getSnapshot().value
+        await modelScope.set('modelsByRegion', {
+          ...current?.modelsByRegion,
+          [region]: models,
+        })
         return true
       } catch {
         return false

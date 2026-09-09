@@ -11,9 +11,11 @@ import { QoderThinkingParser, type QoderContentSegment } from './thinking.ts'
 import type { QoderInnerChunk, QoderSseEnvelope } from './types.ts'
 
 const doneMarker = '[DONE]'
+export const defaultMaxSseBufferChars = 2 * 1024 * 1024
 
 export interface QoderSseOptions {
   onActivity?: () => void
+  maxBufferChars?: number
 }
 
 interface TextualBlockState {
@@ -119,6 +121,7 @@ export async function* parseQoderSse(
   let pendingUsage: TokenUsage | undefined
   let terminalKind: SuccessfulFinishKind = 'stop'
   let sawContent = false
+  const maxBufferChars = options.maxBufferChars ?? defaultMaxSseBufferChars
 
   const closeTextual = (): StreamChunk[] => {
     if (activeTextual === undefined) return []
@@ -177,6 +180,9 @@ export async function* parseQoderSse(
       } else {
         options.onActivity?.()
         buffer += decoder.decode(value, { stream: true })
+        if (buffer.length > maxBufferChars) {
+          throw malformed('Qoder SSE frame exceeded its size limit.')
+        }
       }
 
       while (!sawDone) {

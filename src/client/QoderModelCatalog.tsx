@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { QoderCatalogModel } from '../adapter.ts'
+import type { QoderCatalogModel } from '../catalog.ts'
 import {
   reconcileQoderModels,
   type QoderCredentialOperations,

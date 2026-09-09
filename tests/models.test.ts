@@ -128,7 +128,12 @@ test('fetchQoderModels calls the encoded Global catalog with COSY authentication
   const headers = request?.init?.headers as Record<string, string>
   assert.match(headers.Authorization, /^Bearer COSY\./u)
   assert.equal(headers['Cosy-Sigpath'], '/api/v2/model/list')
-  assert.deepEqual(logs, [
+  assert.equal(typeof (logs[1]?.details as { durationMs?: unknown }).durationMs, 'number')
+  assert.deepEqual(logs.map((entry) => {
+    if (entry.message !== '[Qoder Models] Catalog request completed') return entry
+    const { durationMs: _, ...details } = entry.details as Record<string, unknown>
+    return { ...entry, details }
+  }), [
     {
       message: '[Qoder Models] Requesting model catalog',
       details: { url: 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1' },
@@ -164,4 +169,37 @@ test('fetchQoderModels classifies HTTP and network failures', async () => {
   await assert.rejects(() => fetchQoderModels(credentials, {
     fetch: (async () => { throw new TypeError('fetch failed') }) as typeof fetch,
   }), (error: Error) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
+})
+
+test('fetchQoderModels applies its own deadline and normalizes body-read cancellation', async () => {
+  const credentials = {
+    userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
+  }
+  await assert.rejects(() => fetchQoderModels(credentials, {
+    timeoutMs: 5,
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('timeout', 'AbortError')), { once: true })
+    })) as typeof fetch,
+  }), (error: Error) => error instanceof QoderLlmError && error.code === 'TIMEOUT')
+
+  const caller = new AbortController()
+  await assert.rejects(() => fetchQoderModels(credentials, {
+    signal: caller.signal,
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        init?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')))
+        queueMicrotask(() => caller.abort())
+      },
+    }))) as typeof fetch,
+  }), (error: Error) => error instanceof QoderLlmError && error.code === 'ABORTED')
+})
+
+test('fetchQoderModels rejects oversized catalog responses', async () => {
+  await assert.rejects(() => fetchQoderModels({
+    userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
+  }, {
+    fetch: (async () => new Response('', {
+      headers: { 'content-length': String(3 * 1024 * 1024) },
+    })) as typeof fetch,
+  }), (error: Error) => error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE')
 })

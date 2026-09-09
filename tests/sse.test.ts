@@ -202,3 +202,15 @@ test('parseQoderSse preserves explicit upstream error statuses', async () => {
     && error.message === 'Qoder service returned upstream error status 503.'
   ))
 })
+
+test('parseQoderSse rejects an oversized unterminated frame', async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: 12345678901234567890'))
+      controller.close()
+    },
+  })
+  await assert.rejects(async () => {
+    for await (const _chunk of parseQoderSse(stream, { maxBufferChars: 16 })) continue
+  }, (error: Error) => error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE')
+})

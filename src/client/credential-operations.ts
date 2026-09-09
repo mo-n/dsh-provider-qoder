@@ -1,5 +1,5 @@
 import type { QoderAccountInfo } from '../usage.ts'
-import type { QoderCatalogModel } from '../adapter.ts'
+import type { QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from '../endpoints.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 
@@ -10,7 +10,7 @@ export interface QoderCredentialOperations {
   getAccount(force?: boolean): Promise<QoderAccountResult | undefined>
   getModelSnapshot(): QoderModelSettingsSnapshot
   subscribeModels(listener: () => void): () => void
-  storeModels(models: QoderCatalogModel[]): Promise<boolean>
+  storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<boolean>
   storeRegion(region: QoderRegion): Promise<boolean>
   discoverModels(): Promise<QoderModelDiscoveryResult>
   subscribe(listener: () => void): () => void
@@ -18,6 +18,8 @@ export interface QoderCredentialOperations {
 
 export interface QoderModelSettingsSection {
   region?: QoderRegion
+  modelsByRegion?: Partial<Record<QoderRegion, QoderCatalogModel[]>>
+  /** @deprecated Migrated to modelsByRegion. */
   models?: QoderCatalogModel[]
 }
 

@@ -123,19 +123,33 @@ test('QoderAuthService targets region-specific OpenAPI endpoints and caches sepa
     }
     throw new Error(`unexpected URL: ${url}`)
   }
-  const service = new QoderAuthService({
+  const globalService = new QoderAuthService({
     fetch: fetchMock as typeof fetch,
     resolveMachineId: () => 'machine-test',
+    region: 'global',
+  })
+  const chinaService = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+    region: 'china',
   })
 
-  const globalCreds = await service.getCredentials('pt-test', undefined, 'global')
+  const globalCreds = await globalService.getCredentials('pt-test')
   assert.equal(globalCreds.authToken, 'jt-global')
   assert.equal(globalCreds.userID, 'user-global')
   assert.ok(requests.some(url => url.includes('openapi.qoder.sh/api/v1/jobToken/exchange')))
 
-  const chinaCreds = await service.getCredentials('pt-test', undefined, 'china')
+  const chinaCreds = await chinaService.getCredentials('pt-test')
   assert.equal(chinaCreds.authToken, 'jt-china')
   assert.equal(chinaCreds.userID, 'user-cn')
   assert.ok(requests.some(url => url.includes('openapi.qoder.com.cn/api/v1/jobToken/exchange')))
 })
 
+test('QoderAuthService classifies malformed exchange JSON as a protocol failure', async () => {
+  const service = new QoderAuthService({
+    fetch: (async () => new Response('{')) as typeof fetch,
+  })
+  await assert.rejects(service.getCredentials('pt-malformed'), (error: Error) => (
+    error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE'
+  ))
+})

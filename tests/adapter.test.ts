@@ -2,7 +2,26 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUserMessage, LlmAdapter, LlmError, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderAdapter } from '../src/adapter.ts'
+import type { QoderCatalogModel } from '../src/catalog.ts'
 import { QoderLlmError } from '../src/errors.ts'
+import { createQoderTransport, type QoderTransportOptions } from '../src/transport.ts'
+
+interface TestAdapterOptions extends Omit<QoderTransportOptions, 'region'> {
+  region?: QoderTransportOptions['region']
+  models?: readonly QoderCatalogModel[]
+}
+
+function testAdapter(options: TestAdapterOptions): QoderAdapter {
+  const { models, ...transportOptions } = options
+  const transport = createQoderTransport({
+    ...transportOptions,
+    region: options.region ?? 'global',
+  })
+  return new QoderAdapter({
+    resolveTransport: () => transport,
+    models,
+  })
+}
 
 function request(signal?: AbortSignal): GenerateOptions {
   return {
@@ -31,7 +50,7 @@ function successfulFetch(assertChat?: (init?: RequestInit) => void): typeof fetc
 }
 
 test('QoderAdapter implements the real DSH adapter and model contracts', async () => {
-  const adapter = new QoderAdapter({ resolvePat: () => Promise.resolve('pt-token'), fetch: successfulFetch() })
+  const adapter = testAdapter({ resolvePat: () => Promise.resolve('pt-token'), fetch: successfulFetch() })
   assert.ok(adapter instanceof LlmAdapter)
   assert.equal(adapter.providerRetryPolicy('qoder-official'), undefined)
   assert.equal(adapter.providerInfo('qoder-official').id, 'qoder-official')
@@ -45,7 +64,7 @@ test('QoderAdapter implements the real DSH adapter and model contracts', async (
 
 test('QoderAdapter resolves the PAT through its configured credential boundary', async () => {
   let resolvePatCalls = 0
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => {
       resolvePatCalls++
       return Promise.resolve('pt-token-from-resolver')
@@ -58,7 +77,7 @@ test('QoderAdapter resolves the PAT through its configured credential boundary',
 
 test('QoderAdapter directs missing managed credentials to the Qoder settings page', async () => {
   let fetchCalls = 0
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve(''),
     fetch: (async () => { fetchCalls++; throw new Error('must not fetch') }) as typeof fetch,
   })
@@ -75,7 +94,7 @@ test('QoderAdapter directs missing managed credentials to the Qoder settings pag
 })
 
 test('QoderAdapter streams through DSH chunks and sends attribution', async () => {
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     fetch: successfulFetch((init) => {
       const headers = init?.headers as Record<string, string>
@@ -91,11 +110,11 @@ test('QoderAdapter streams through DSH chunks and sends attribution', async () =
 
 test('QoderAdapter replaces its live model catalog and transport source', async () => {
   let source: string | undefined
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     fetch: successfulFetch((init) => { source = (init?.headers as Record<string, string>)['x-model-source'] }),
   })
-  adapter.replaceConfig([{ id: 'live', name: 'Live', source: 'subscriber', maxTokens: 2048 }], 60_000)
+  adapter.replaceModels([{ id: 'live', name: 'Live', source: 'subscriber', maxTokens: 2048 }])
   assert.deepEqual((await adapter.listModels('qoder-official')).map(model => model.id), ['live'])
   const options = request()
   options.model = 'live'
@@ -104,7 +123,7 @@ test('QoderAdapter replaces its live model catalog and transport source', async 
 })
 
 test('QoderAdapter resolves only explicitly advertised reasoning efforts', async () => {
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     models: [{
       id: 'reasoner',
@@ -128,7 +147,7 @@ test('QoderAdapter resolves only explicitly advertised reasoning efforts', async
 })
 
 test('QoderAdapter appends the advertised price factor to model display names', async () => {
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     models: [
       { id: 'priced', name: 'Priced', priceFactor: 1.6 },
@@ -146,7 +165,7 @@ test('QoderAdapter appends the advertised price factor to model display names', 
 
 test('QoderAdapter rejects unsupported content before provider I/O', async () => {
   let fetchCalls = 0
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     fetch: (async () => { fetchCalls++; throw new Error('must not fetch') }) as typeof fetch,
   })
@@ -164,7 +183,7 @@ test('QoderAdapter rejects unsupported content before provider I/O', async () =>
 
 test('QoderAdapter aborts an idle provider stream', async () => {
   const fetchMock = successfulFetch()
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     streamIdleTimeoutMs: 10,
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -190,7 +209,7 @@ test('QoderAdapter aborts an idle provider stream', async () => {
 test('QoderAdapter logs stream failures through the host logger', async () => {
   const fetchMock = successfulFetch()
   const entries: unknown[][] = []
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     logger: {
       error(message, ...details) {
@@ -220,7 +239,7 @@ test('QoderAdapter logs stream failures through the host logger', async () => {
 
 test('QoderAdapter maps rate limits and network failures to retryable DSH errors', async () => {
   const fetchMock = successfulFetch()
-  const limited = new QoderAdapter({
+  const limited = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       if (!String(input).includes('/agent_chat_generation')) return fetchMock(input, init)
@@ -237,7 +256,7 @@ test('QoderAdapter maps rate limits and network failures to retryable DSH errors
     return true
   })
 
-  const unavailable = new QoderAdapter({
+  const unavailable = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       if (!String(input).includes('/agent_chat_generation')) return fetchMock(input, init)
@@ -257,7 +276,7 @@ test('QoderAdapter does not log caller cancellation as a stream failure', async 
   const fetchMock = successfulFetch()
   const caller = new AbortController()
   const entries: unknown[][] = []
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     logger: { error: (...entry) => entries.push(entry) },
     fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -299,7 +318,7 @@ test('QoderAdapter routes chat streaming to the configured region endpoint', asy
     }
     throw new Error(`unexpected URL: ${url}`)
   }
-  const adapter = new QoderAdapter({
+  const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     fetch: fetchMock as typeof fetch,
     region: 'china',
@@ -308,8 +327,11 @@ test('QoderAdapter routes chat streaming to the configured region endpoint', asy
   for await (const _chunk of adapter.stream(request())) continue
   assert.ok(targetUrl.startsWith('https://gateway.qoder.com.cn/'))
 
-  adapter.replaceConfig((adapter as unknown as { catalogModels: [] }).catalogModels, 5000, 'global')
-  for await (const _chunk of adapter.stream(request())) continue
+  const globalAdapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    fetch: fetchMock as typeof fetch,
+    region: 'global',
+  })
+  for await (const _chunk of globalAdapter.stream(request())) continue
   assert.ok(targetUrl.startsWith('https://api3.qoder.sh/'))
 })
-

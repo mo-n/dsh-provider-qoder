@@ -34,3 +34,11 @@ test('retryAfterMs accepts delay-seconds and future HTTP dates', () => {
   assert.equal(retryAfterMs('invalid', now), undefined)
   assert.equal(retryAfterMs('Wed, 02 Sep 2026 00:00:00 GMT', now), undefined)
 })
+
+test('qoderHttpError preserves an upstream request id', () => {
+  const error = qoderHttpError('unavailable', {
+    status: 503,
+    headers: new Headers({ 'x-request-id': 'request-42' }),
+  })
+  assert.equal(error.failure.requestId, 'request-42')
+})
