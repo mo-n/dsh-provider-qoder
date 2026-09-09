@@ -54,11 +54,14 @@ test('QoderAdapter implements the real DSH adapter and model contracts', async (
   assert.ok(adapter instanceof LlmAdapter)
   assert.equal(adapter.providerRetryPolicy('qoder-official'), undefined)
   assert.equal(adapter.providerInfo('qoder-official').id, 'qoder-official')
-  const modelIds = (await adapter.listModels('qoder-official')).map(model => model.id)
+  const models = await adapter.listModels('qoder-official')
+  const modelIds = models.map(model => model.id)
   assert.ok(modelIds.length > 1)
   assert.ok(modelIds.includes('cmodel'))
   assert.ok(modelIds.includes('auto'))
   assert.ok(modelIds.includes('ultimate'))
+  assert.deepEqual(models.find(model => model.id === 'cmodel')?.inputModalities, ['text', 'image'])
+  assert.deepEqual(models.find(model => model.id === 'lite')?.inputModalities, ['text'])
   assert.equal((await adapter.resolveModel('qoder-official', 'custom')).id, 'custom')
 })
 
@@ -170,6 +173,7 @@ test('QoderAdapter rejects unsupported content before provider I/O', async () =>
     fetch: (async () => { fetchCalls++; throw new Error('must not fetch') }) as typeof fetch,
   })
   const options = request()
+  options.model = 'lite'
   options.messages = [createUserMessage({ content: [{ type: 'image' } as never], source: { kind: 'user' } })]
   await assert.rejects(async () => {
     for await (const _chunk of adapter.stream(options)) continue
@@ -178,6 +182,46 @@ test('QoderAdapter rejects unsupported content before provider I/O', async () =>
     assert.equal((error as QoderLlmError).code, 'UNSUPPORTED_CONTENT')
     return true
   })
+  assert.equal(fetchCalls, 0)
+})
+
+test('QoderAdapter prepares image attachments before resolving credentials or provider I/O', async () => {
+  let resolvePatCalls = 0
+  let fetchCalls = 0
+  const adapter = testAdapter({
+    resolvePat: () => { resolvePatCalls++; return Promise.resolve('pt-token') },
+    attachments: {
+      imageLimits: {
+        maxImageBytes: 5 * 1024 * 1024,
+        maxImagesPerMessage: 20,
+        maxMessageImageBytes: 100 * 1024 * 1024,
+        maxImagePixels: 40_000_000,
+        maxImageDimension: 2_000,
+        mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+      },
+      readImageRequest: async () => { throw new Error('missing attachment') },
+    },
+    fetch: (async () => { fetchCalls++; throw new Error('must not fetch') }) as typeof fetch,
+  })
+  const options = request()
+  options.messages = [createUserMessage({
+    content: [{
+      type: 'image',
+      attachment: {
+        attachmentId: 'sha256:missing' as never,
+        mediaType: 'image/png',
+        bytes: 3,
+        width: 1,
+        height: 1,
+      },
+    }],
+    source: { kind: 'user' },
+  })]
+
+  await assert.rejects(async () => {
+    for await (const _chunk of adapter.stream(options)) continue
+  }, (error: Error) => error instanceof QoderLlmError && error.code === 'ATTACHMENT')
+  assert.equal(resolvePatCalls, 0)
   assert.equal(fetchCalls, 0)
 })
 

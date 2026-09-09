@@ -31,7 +31,7 @@ function modelInfo(provider: string, model: QoderCatalogModel): LlmModelInfo {
       ? model.name
       : `${model.name} （${model.priceFactor}x）`,
     description: model.description,
-    inputModalities: ['text'],
+    inputModalities: model.supportsImages === true ? ['text', 'image'] : ['text'],
   }
 }
 

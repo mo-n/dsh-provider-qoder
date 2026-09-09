@@ -34,6 +34,7 @@ const catalogModel: z<QoderCatalogModel> = z.object({
   })),
   defaultReasoningEffort: z.string(),
   priceFactor: z.number().min(0),
+  supportsImages: z.boolean(),
   contextOptions: z.dict(z.object({
     tokenCount: z.number().step(1).min(1),
     isDefault: z.boolean(),

@@ -1,6 +1,7 @@
 /** The only external seam for communication with Qoder. */
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { QoderAccountInfo } from '../account.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from '../region.ts'
@@ -24,6 +25,7 @@ export interface QoderTransportOptions {
   responseHeaderTimeoutMs?: number
   metadataTimeoutMs?: number
   resolveMachineId?: () => string
+  attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
 }
 
 export function createQoderTransport(options: QoderTransportOptions): QoderTransport {

@@ -74,7 +74,7 @@ class TestCredentials extends CredentialProvider {
 
 test('package exports the expected plugin surface', () => {
   assert.equal(plugin.name, 'provider-qoder')
-  assert.deepEqual(plugin.inject, ['llm', 'credentials', 'connection'])
+  assert.deepEqual(plugin.inject, ['llm', 'credentials', 'connection', 'attachments'])
   assert.equal(typeof plugin.apply, 'function')
   assert.equal(typeof plugin.Config, 'function')
   assert.equal('QoderAdapter' in plugin, false)

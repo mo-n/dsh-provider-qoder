@@ -2,7 +2,7 @@
 
 English | [简体中文](./README_CN.md)
 
-`dsh-provider-qoder` integrates your Qoder subscription into DeepSeek Harness (DSH), supporting streaming text, reasoning content, and tool calls, with support for both Global and China Qoder services.
+`dsh-provider-qoder` integrates your Qoder subscription into DeepSeek Harness (DSH), supporting text and image input, streaming text, reasoning content, and tool calls across Global and China Qoder services.
 
 The plugin handles authentication and model communication, while tool execution, workspace operations, and permission management are handled by DSH.
 This project is a community adapter plugin.
@@ -12,7 +12,8 @@ This project is a community adapter plugin.
 - Configure subscription access via Qoder Personal Access Token (PAT).
 - Supports both Global (`global`) and China (`china`) services.
 - Discovers available models for your account, allows selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
-- Supports streaming responses, reasoning content, tool calls, and multi-turn interactions with text-based tool results.
+- Sends DSH image attachments to models advertised by Qoder as vision-language models, including images returned by tools.
+- Supports streaming responses, reasoning content, tool calls, and multi-turn interactions.
 - View account information, personal quota, organization resource packs, and reset dates in Settings.
 
 ## Installation
@@ -51,7 +52,7 @@ Select the region matching your account, enter your Qoder PAT into the input box
 3. Select the models you want to enable (keep at least one), then click **Save**.
 4. Select a Qoder model in the DSH model picker to start chatting.
 
-Fetching models uses the **saved PAT and service region**. If you switch accounts or regions, save your changes first before fetching models again. The initial model catalog is only a candidate reference; actual available models are subject to account query results. Model multipliers and reasoning effort options are provided by Qoder and may not be available for all models.
+Fetching models uses the **saved PAT and service region**. If you switch accounts or regions, save your changes first before fetching models again. The initial model catalog is only a candidate reference; actual available models are subject to account query results. Model multipliers, reasoning effort options, and image-input capability are provided by Qoder and may not be available for all models.
 
 ### 3. View Account & Quota
 

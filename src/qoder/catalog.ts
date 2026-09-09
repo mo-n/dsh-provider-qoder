@@ -17,6 +17,7 @@ export interface QoderCatalogModel {
   defaultReasoningEffort?: string
   priceFactor?: number
   contextOptions?: Record<string, { tokenCount?: number; isDefault?: boolean }>
+  supportsImages?: boolean
 }
 
 interface QoderModelEntry {
@@ -30,6 +31,7 @@ interface QoderModelEntry {
   thinking_config?: unknown
   source?: unknown
   price_factor?: unknown
+  is_vl?: unknown
 }
 
 const discoveredMetadataKeys = [
@@ -41,6 +43,7 @@ const discoveredMetadataKeys = [
   'defaultReasoningEffort',
   'priceFactor',
   'contextOptions',
+  'supportsImages',
 ] as const satisfies readonly (keyof QoderCatalogModel)[]
 
 const reasoningEffortOrder = new Map([
@@ -137,6 +140,7 @@ export function normalizeQoderModels(payload: unknown): QoderCatalogModel[] {
       source: typeof raw.source === 'string' && raw.source.trim() ? raw.source.trim() : 'system',
       isReasoning: raw.is_reasoning === true || thinking,
       supportsEffort: reasoning.efforts !== undefined,
+      supportsImages: raw.is_vl === true,
       ...reasoning.efforts === undefined ? {} : { reasoningEfforts: reasoning.efforts },
       ...reasoning.defaultEffort === undefined ? {} : { defaultReasoningEffort: reasoning.defaultEffort },
       ...positiveNumber(raw.price_factor) === undefined ? {} : { priceFactor: positiveNumber(raw.price_factor) },
@@ -185,6 +189,7 @@ export const defaultModels: QoderCatalogModel[] = [
     description: 'Default Global Qoder subscription model for quick validation',
     contextWindow: 1_000_000,
     maxTokens: defaultMaxTokens,
+    supportsImages: true,
   },
   {
     id: 'auto',
@@ -192,6 +197,7 @@ export const defaultModels: QoderCatalogModel[] = [
     description: 'Server-routed Global Qoder model pool',
     contextWindow: 180_000,
     maxTokens: defaultMaxTokens,
+    supportsImages: true,
   },
   {
     id: 'ultimate',
@@ -199,6 +205,7 @@ export const defaultModels: QoderCatalogModel[] = [
     description: 'Highest-capability Global Qoder model pool',
     contextWindow: 1_000_000,
     maxTokens: defaultMaxTokens,
+    supportsImages: true,
   },
   {
     id: 'performance',
@@ -206,6 +213,7 @@ export const defaultModels: QoderCatalogModel[] = [
     description: 'Performance-oriented Global Qoder model pool',
     contextWindow: 1_000_000,
     maxTokens: defaultMaxTokens,
+    supportsImages: true,
   },
   {
     id: 'efficient',
@@ -213,6 +221,7 @@ export const defaultModels: QoderCatalogModel[] = [
     description: 'Efficiency-oriented Global Qoder model pool',
     contextWindow: 180_000,
     maxTokens: defaultMaxTokens,
+    supportsImages: true,
   },
   {
     id: 'lite',

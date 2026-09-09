@@ -28,6 +28,10 @@ _Avoid_: display name, DSH provider route
 The provider-side capability that owns all communication with Qoder: authenticating a subscriber, discovering models, reading subscriber profile and quota, translating model requests, and returning model stream events. It does not own agent tools or workspace operations.
 _Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK
 
+**Qoder multimodal input**:
+Text and durable raster-image content accepted together by a Qoder vision-language model; it does not include arbitrary binary files such as PDFs, audio, video, or archives.
+_Avoid_: Qoder image upload, arbitrary file upload
+
 **Qoder tool exchange**:
 The provider-level representation of DSH tool definitions, model-requested tool calls, and correlated tool results transported across Qoder model turns. DSH remains responsible for executing tools.
 _Avoid_: Qoder tool execution, Qoder agent loop

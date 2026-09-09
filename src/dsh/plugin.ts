@@ -2,6 +2,7 @@
 
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
+import type {} from '@deepseek-ai/dsh-attachment'
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
@@ -22,7 +23,7 @@ import {
 import { Config, modelsFor, resolveModels, type Config as QoderConfig } from './config.ts'
 
 export const name = 'provider-qoder'
-export const inject = ['llm', 'credentials', 'connection']
+export const inject = ['llm', 'credentials', 'connection', 'attachments']
 
 const providerQoder = 'qoder-official'
 const settingsNamespace = 'provider-qoder' as SettingsNamespace
@@ -74,6 +75,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     resolvePat,
     logger,
     streamIdleTimeoutMs,
+    attachments: ctx.attachments,
   })
 
   const resolveConfig = () => {

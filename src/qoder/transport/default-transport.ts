@@ -1,6 +1,7 @@
 /** Deep module owning all communication with Qoder. */
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { QoderAuthService } from './auth.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from './endpoints.ts'
@@ -36,6 +37,7 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly auth: QoderAuthService
   private readonly usage: QoderUsageReader
   private readonly modelFlights = new SingleFlight<readonly QoderCatalogModel[]>()
+  private readonly attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
 
   constructor(options: QoderTransportOptions) {
     this.region = options.region
@@ -45,6 +47,7 @@ export class DefaultQoderTransport implements QoderTransport {
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs
     this.responseHeaderTimeoutMs = options.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs
     this.metadataTimeoutMs = options.metadataTimeoutMs
+    this.attachments = options.attachments
     this.auth = new QoderAuthService({
       fetch: this.fetchImpl,
       logger: this.logger,
@@ -112,7 +115,7 @@ export class DefaultQoderTransport implements QoderTransport {
     if (options.signal?.aborted) throw aborted('Request was aborted prior to generation.')
 
     // Validation finishes before credential resolution or any provider I/O.
-    const messages = validateQoderRequest(options, model)
+    const messages = await validateQoderRequest(options, model, this.attachments)
     const pat = await this.requirePat(options.signal)
     const credentials = await this.auth.getCredentials(pat, options.signal)
     yield* streamQoderChat(options, model, credentials, messages, {

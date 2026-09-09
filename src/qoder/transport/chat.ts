@@ -35,7 +35,7 @@ export async function* streamQoderChat(
   messages: QoderWireMessage[],
   dependencies: QoderChatDependencies,
 ): AsyncGenerator<StreamChunk> {
-  const request = buildQoderRequestBody(options, credentials.userID, messages, model)
+  const request = await buildQoderRequestBody(options, credentials.userID, messages, model)
   const encodedBody = qoderEncodeBody(JSON.stringify(request))
   const encodedBytes = Buffer.from(encodedBody, 'utf8')
   const chatUrl = getQoderChatUrl(dependencies.region)

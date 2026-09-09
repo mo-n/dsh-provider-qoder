@@ -22,9 +22,21 @@ export interface QoderWireTool {
   }
 }
 
+export interface QoderWireTextPart {
+  type: 'text'
+  text: string
+}
+
+export interface QoderWireImagePart {
+  type: 'image_url'
+  image_url: { url: string }
+}
+
+export type QoderWireContent = string | Array<QoderWireTextPart | QoderWireImagePart>
+
 export interface QoderWireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string | null
+  content: QoderWireContent | null
   tool_calls?: QoderWireToolCall[]
   tool_call_id?: string
 }

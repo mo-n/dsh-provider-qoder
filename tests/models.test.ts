@@ -20,6 +20,7 @@ const payload = {
       max_output_tokens: 16_384,
       source: 'premium',
       price_factor: 0.5,
+      is_vl: true,
       is_reasoning: true,
       thinking_config: {
         enabled: {
@@ -48,6 +49,7 @@ test('normalizeQoderModels keeps enabled unique models and their transport metad
     source: 'premium',
     isReasoning: true,
     supportsEffort: true,
+    supportsImages: true,
     reasoningEfforts: [
       { id: 'low', name: 'low', description: 'Fast reasoning' },
       { id: 'high', name: 'high', description: 'Deep reasoning' },
@@ -84,6 +86,7 @@ test('mergeQoderDiscoveryMetadata restores effort and rate data stripped by gene
     source: 'premium',
     isReasoning: true,
     supportsEffort: true,
+    supportsImages: true,
     reasoningEfforts: [
       { id: 'low', name: 'low', description: 'Fast reasoning' },
       { id: 'high', name: 'high', description: 'Deep reasoning' },

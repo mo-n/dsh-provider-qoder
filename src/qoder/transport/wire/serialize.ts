@@ -1,11 +1,12 @@
 /** Build the minimum qodercli request envelope for a validated DSH request. */
 
 import crypto from 'node:crypto'
-import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { contentHasImage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../../errors.ts'
 import { translateTools, validateAndTranslateMessages } from './translate.ts'
 import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './wire-types.ts'
 import type { QoderCatalogModel } from '../../catalog.ts'
+import type { QoderImageAttachments } from './translate.ts'
 
 function stableHash(prefix: string, ...inputs: string[]): string {
   const hash = crypto.createHash('sha256')
@@ -36,10 +37,11 @@ function stableChatRecordId(
   return hash.digest('hex').slice(0, 16)
 }
 
-export function validateQoderRequest(
+export async function validateQoderRequest(
   options: GenerateOptions,
   model?: QoderCatalogModel,
-): QoderWireMessage[] {
+  attachments?: QoderImageAttachments,
+): Promise<QoderWireMessage[]> {
   if (options.reasoningEffort !== undefined) {
     const effort = String(options.reasoningEffort)
     if (!model?.reasoningEfforts?.some(candidate => candidate.id === effort)) {
@@ -49,20 +51,27 @@ export function validateQoderRequest(
       )
     }
   }
-  return validateAndTranslateMessages(options.messages, options.system)
+  if (options.messages.some(message => contentHasImage(message.content)) && model?.supportsImages !== true) {
+    throw new QoderLlmError(
+      `Qoder model "${options.model}" does not advertise image input.`,
+      'UNSUPPORTED_CONTENT',
+    )
+  }
+  return validateAndTranslateMessages(options.messages, options.system, attachments, options.signal)
 }
 
-export function buildQoderRequestBody(
+export async function buildQoderRequestBody(
   options: GenerateOptions,
   userId: string,
   translatedMessages?: QoderWireMessage[],
   model?: QoderCatalogModel,
-): QoderWireRequest {
+  attachments?: QoderImageAttachments,
+): Promise<QoderWireRequest> {
   if (!userId) {
     throw new QoderLlmError('Qoder request identity is missing.', 'AUTH')
   }
   const modelKey = options.model || 'cmodel'
-  const messages = translatedMessages ?? validateQoderRequest(options, model)
+  const messages = translatedMessages ?? await validateQoderRequest(options, model, attachments)
   const modelMaxTokens = model?.maxTokens ?? 32_768
   const maxTokens = Math.min(options.maxTokens ?? modelMaxTokens, modelMaxTokens)
   const isReasoning = model?.isReasoning ?? false
@@ -76,7 +85,12 @@ export function buildQoderRequestBody(
   let lastUserText = ''
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index].role === 'user') {
-      lastUserText = messages[index].content ?? ''
+      const content = messages[index].content
+      lastUserText = typeof content === 'string'
+        ? content
+        : Array.isArray(content)
+          ? content.filter(part => part.type === 'text').map(part => part.text).join('')
+          : ''
       break
     }
   }
