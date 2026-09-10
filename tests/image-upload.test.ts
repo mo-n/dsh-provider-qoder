@@ -56,7 +56,7 @@ test('publishes an image and returns the center object URL', async () => {
   const url = await uploader.resolveImageUrl(requestImage(), credentials)
   assert.equal(url, 'https://oss.qoder.sh/a.png')
   assert.equal(seen?.init?.method, 'PUT')
-  assert.match(seen?.url ?? '', /^https:\/\/center\.qoder\.sh\/api\/v2\/image\/upload\?request_id=/u)
+  assert.match(seen?.url ?? '', /^https:\/\/center\.qoder\.sh\/algo\/api\/v2\/image\/upload\?request_id=/u)
 })
 
 test('signs the multipart body length rather than the raw bytes', async () => {
@@ -339,13 +339,13 @@ test('bounds how many publications run at once', async () => {
   assert.equal(peak, 2)
 })
 
-test('targets the China center endpoint without an /algo signing prefix', () => {
+test('targets center endpoints with /algo in the HTTP URL but not the signature path', () => {
   const url = getQoderImageUploadUrl('china', 'req-1')
-  assert.equal(url, 'https://gateway.qoder.com.cn/api/v2/image/upload?request_id=req-1')
+  assert.equal(url, 'https://gateway.qoder.com.cn/algo/api/v2/image/upload?request_id=req-1')
   assert.equal(computeSigPath(url), '/api/v2/image/upload')
   assert.equal(
     getQoderImageUploadUrl('global', 'req-1'),
-    'https://center.qoder.sh/api/v2/image/upload?request_id=req-1',
+    'https://center.qoder.sh/algo/api/v2/image/upload?request_id=req-1',
   )
   assert.equal(computeSigPath(getQoderImageUploadUrl('global')), '/api/v2/image/upload')
 })

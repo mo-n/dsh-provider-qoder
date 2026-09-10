@@ -5,7 +5,6 @@ import { buildAuthHeaders } from './wire/cosy.ts'
 import { getQoderModelListUrl, type QoderRegion } from './endpoints.ts'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
 import {
-  logParsedResponse,
   redactLogPayload,
   redactLogValue,
   type QoderLogger,
@@ -63,7 +62,6 @@ export async function fetchQoderModels(
     } catch {
       throw new QoderLlmError('Qoder model discovery returned invalid JSON.', 'MALFORMED_RESPONSE')
     }
-    logParsedResponse(options.logger, 'catalog.models', payload)
     const models = normalizeQoderModels(payload, conflict => {
       options.logger?.warn?.('[Qoder Models] Conflicting catalog defaults; using fallback', { conflict })
     })

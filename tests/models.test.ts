@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { fetchQoderModels } from '../src/qoder/transport/catalog-reader.ts'
-import { redactLogValue } from '../src/qoder/transport/logging.ts'
 import {
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
@@ -244,13 +243,6 @@ test('fetchQoderModels calls the encoded Global catalog with COSY authentication
     {
       message: '[Qoder Models] Catalog request completed',
       details: { url: 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1', status: 200 },
-    },
-    {
-      message: '[Qoder Response] Parsed',
-      details: redactLogValue({
-        operation: 'catalog.models',
-        result: payload,
-      }),
     },
   ])
 })

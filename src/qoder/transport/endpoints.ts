@@ -46,7 +46,8 @@ export function getQoderModelListUrl(region: QoderRegion = 'global'): string {
 
 export function getQoderImageUploadUrl(region: QoderRegion = 'global', requestId?: string): string {
   const { centerUrl } = resolveQoderEndpoints(region)
-  const base = `${centerUrl.replace(/\/+$/u, '')}${qoderImageUploadPath}`
+  // qodercli's WASM prepareRequest adds /algo to the HTTP URL, but not the signature path.
+  const base = `${centerUrl.replace(/\/+$/u, '')}/algo${qoderImageUploadPath}`
   return requestId === undefined ? base : `${base}?request_id=${encodeURIComponent(requestId)}`
 }
 

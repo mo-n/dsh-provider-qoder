@@ -175,6 +175,12 @@ export class QoderImageUploader {
         // Refresh recency so the bounded cache evicts genuinely cold entries.
         this.cache.delete(key)
         this.cache.set(key, cached)
+        this.logger?.debug?.('[image-upload] cache hit', {
+          url: cached.url,
+          region: this.region,
+          mediaType: image.mediaType,
+          bytes: image.data.byteLength,
+        })
         return cached.url
       }
       this.cache.delete(key)
@@ -233,6 +239,11 @@ export class QoderImageUploader {
   private async withSlot<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
     if (signal.aborted) throw aborted()
     if (this.active >= this.maxConcurrency) {
+      this.logger?.debug?.('[image-upload] queued', {
+        region: this.region,
+        active: this.active,
+        queued: this.queue.length + 1,
+      })
       await new Promise<void>((resolve, reject) => {
         const onAbort = (): void => {
           const index = this.queue.indexOf(release)
@@ -274,6 +285,10 @@ export class QoderImageUploader {
       }
 
       let refreshed: CosyCredentials
+      this.logger?.debug?.('[image-upload] refreshing credentials before retry', {
+        region: this.region,
+        reason: first.reason,
+      })
       try {
         refreshed = await this.refreshCredentials(signal)
       } catch (error) {
@@ -310,6 +325,15 @@ export class QoderImageUploader {
     const signedBody = Buffer.from(String(multipart.body.length), 'utf8')
     const timeout = AbortSignal.timeout(this.timeoutMs)
     const requestSignal = AbortSignal.any([signal, timeout])
+    const startedAt = this.now()
+    const details = {
+      requestId,
+      region: this.region,
+      mediaType: image.mediaType,
+      bytes: image.data.byteLength,
+      timeoutMs: this.timeoutMs,
+    }
+    this.logger?.debug?.('[image-upload] started', details)
 
     try {
       const response = await this.fetchImpl(url, {
@@ -323,6 +347,11 @@ export class QoderImageUploader {
         },
         body: new Uint8Array(multipart.body),
         signal: requestSignal,
+      })
+      this.logger?.debug?.('[image-upload] response received', {
+        requestId,
+        status: response.status,
+        elapsedMs: this.now() - startedAt,
       })
       const text = await readLimitedText(response, defaultMaxJsonBytes, 'Qoder image upload response')
       if (!response.ok) {
@@ -339,11 +368,24 @@ export class QoderImageUploader {
       }
       const resolved = readQoderImageUrl(payload)
       if (resolved === undefined) return { retryable: false, reason: 'response carried no image URL' }
+      this.logger?.debug?.('[image-upload] succeeded', {
+        ...details,
+        status: response.status,
+        elapsedMs: this.now() - startedAt,
+        url: resolved
+      })
       return { url: resolved, retryable: false, reason: '' }
     } catch (error) {
-      if (signal.aborted) throw aborted()
-      if (timeout.aborted) return { retryable: false, reason: 'upload timed out' }
-      this.logger?.debug?.('[image-upload] network failure', redactLogValue(error))
+      const failureDetails = { requestId, region: this.region, elapsedMs: this.now() - startedAt }
+      if (signal.aborted) {
+        this.logger?.debug?.('[image-upload] aborted', failureDetails)
+        throw aborted()
+      }
+      if (timeout.aborted) {
+        this.logger?.debug?.('[image-upload] timed out', failureDetails)
+        return { retryable: false, reason: 'upload timed out' }
+      }
+      this.logger?.debug?.('[image-upload] network failure', failureDetails, redactLogValue(error))
       return { retryable: false, reason: 'network failure' }
     }
   }
