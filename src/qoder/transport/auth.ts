@@ -2,22 +2,15 @@
 
 import type { CosyCredentials } from './wire/cosy.ts'
 import { getQoderExchangeUrl, getQoderUserInfoUrl, type QoderRegion } from './endpoints.ts'
-import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
-import {
-  logParsedResponse,
-  redactLogPayload,
-  type QoderLogger,
-} from './logging.ts'
+import { QoderLlmError } from '../errors.ts'
+import type { QoderLogger } from './logging.ts'
 import { getMachineId } from './machine-id.ts'
 import {
-  defaultMaxErrorBytes,
-  defaultMaxJsonBytes,
   opaqueCredentialKey,
-  readLimitedText,
+  openApiJsonRequest,
   retryMetadataRead,
 } from './request.ts'
 
-const userAgent = 'dsh-provider-qoder'
 const expiryBufferMs = 5 * 60 * 1000
 const defaultExpiryMs = 24 * 60 * 60 * 1000
 const defaultAuthTimeoutMs = 15_000
@@ -140,64 +133,27 @@ export class QoderAuthService {
     let jobToken: string
     let expiresAt = Date.now() + defaultExpiryMs
 
-    try {
-      const url = getQoderExchangeUrl(this.region)
-      const startedAt = performance.now()
-      this.logger?.debug?.('[Qoder Auth] Exchanging PAT for job token', { url, region: this.region })
-      const response = await this.fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'accept': 'application/json',
-          'user-agent': userAgent,
-          'cosy-version': '1.0.1',
-          'cosy-clienttype': '5',
-        },
-        body: JSON.stringify({ personal_token: pat }),
+    const data = await openApiJsonRequest<{ token?: string; expires_at?: string; expires_in?: number }>(
+      this.fetchImpl,
+      {
+        url: getQoderExchangeUrl(this.region),
+        body: { personal_token: pat },
         signal,
-      })
-      this.logger?.debug?.('[Qoder Auth] Exchange completed', {
-        status: response.status,
-        statusText: response.statusText,
-        durationMs: Math.round(performance.now() - startedAt),
-        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
-      })
-      const responseText = await readLimitedText(
-        response,
-        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
-        'Qoder PAT exchange response',
-      )
-      if (!response.ok) {
-        this.logger?.error?.('[Qoder Auth] Exchange failed', redactLogPayload(responseText))
-        throw qoderHttpError(
-          `Qoder PAT exchange failed with HTTP status ${response.status}.`,
-          response,
-        )
-      }
-
-      let data: { token?: string; expires_at?: string; expires_in?: number }
-      try {
-        data = JSON.parse(responseText) as typeof data
-      } catch {
-        throw new QoderLlmError('Qoder PAT exchange returned invalid JSON.', 'MALFORMED_RESPONSE')
-      }
-      logParsedResponse(this.logger, 'auth.exchange', data)
-      if (!data.token) {
-        throw new QoderLlmError('Qoder PAT exchange returned no job token.', 'AUTH')
-      }
-      jobToken = data.token
-      if (data.expires_at) {
-        const parsed = Date.parse(data.expires_at)
-        if (!Number.isNaN(parsed)) expiresAt = parsed
-      } else if (typeof data.expires_in === 'number' && data.expires_in > 0) {
-        expiresAt = Date.now() + data.expires_in
-      }
-    } catch (error: unknown) {
-      if (error instanceof QoderLlmError) throw error
-      if (signal.aborted) {
-        throw new QoderLlmError('Qoder authentication request timed out or was cancelled.', 'TIMEOUT')
-      }
-      throw new QoderLlmError('Qoder PAT exchange network request failed.', 'TRANSPORT', { cause: error })
+        timeoutMs: this.timeoutMs,
+        logger: this.logger,
+        operation: 'Auth',
+        logCategory: 'auth.exchange',
+      },
+    )
+    if (!data.token) {
+      throw new QoderLlmError('Qoder PAT exchange returned no job token.', 'AUTH')
+    }
+    jobToken = data.token
+    if (data.expires_at) {
+      const parsed = Date.parse(data.expires_at)
+      if (!Number.isNaN(parsed)) expiresAt = parsed
+    } else if (typeof data.expires_in === 'number' && data.expires_in > 0) {
+      expiresAt = Date.now() + data.expires_in
     }
 
     const userInfo = await retryMetadataRead(signal, () => this.fetchUserInfo(jobToken, signal))
@@ -217,65 +173,27 @@ export class QoderAuthService {
     jobToken: string,
     signal: AbortSignal,
   ): Promise<{ userID: string; email: string; name: string }> {
-    const url = getQoderUserInfoUrl(this.region)
-    const startedAt = performance.now()
-    this.logger?.debug?.('[Qoder UserInfo] Requesting subscriber profile', { url })
-    try {
-      const response = await this.fetchImpl(url, {
-        headers: {
-          'authorization': `Bearer ${jobToken}`,
-          'accept': 'application/json',
-          'user-agent': userAgent,
-          'cosy-version': '1.0.1',
-          'cosy-clienttype': '5',
-        },
-        signal,
-      })
-      this.logger?.debug?.('[Qoder UserInfo] Request completed', {
-        status: response.status,
-        statusText: response.statusText,
-        durationMs: Math.round(performance.now() - startedAt),
-        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
-      })
-      const text = await readLimitedText(
-        response,
-        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
-        'Qoder identity lookup response',
-      )
-      if (!response.ok) {
-        this.logger?.error?.('[Qoder UserInfo] Request failed', redactLogPayload(text))
-        throw qoderHttpError(
-          `Qoder identity lookup failed with HTTP status ${response.status}.`,
-          response,
-        )
-      }
-      let info: {
-        id?: string
-        email?: string
-        name?: string
-        username?: string
-      }
-      try {
-        info = JSON.parse(text)
-      } catch {
-        this.logger?.error?.('[Qoder UserInfo] Invalid JSON response', redactLogPayload(text))
-        throw new QoderLlmError('Qoder identity lookup returned invalid JSON.', 'AUTH')
-      }
-      logParsedResponse(this.logger, 'auth.user-info', info)
-      if (!info.id) {
-        throw new QoderLlmError('Qoder identity lookup returned no user id.', 'AUTH')
-      }
-      return {
-        userID: info.id,
-        email: info.email ?? '',
-        name: info.name ?? info.username ?? '',
-      }
-    } catch (error: unknown) {
-      if (error instanceof QoderLlmError) throw error
-      if (signal.aborted) {
-        throw new QoderLlmError('Qoder identity lookup timed out or was cancelled.', 'TIMEOUT')
-      }
-      throw new QoderLlmError('Qoder identity lookup network request failed.', 'TRANSPORT', { cause: error })
+    const info = await openApiJsonRequest<{
+      id?: string
+      email?: string
+      name?: string
+      username?: string
+    }>(this.fetchImpl, {
+      url: getQoderUserInfoUrl(this.region),
+      token: jobToken,
+      signal,
+      timeoutMs: this.timeoutMs,
+      logger: this.logger,
+      operation: 'UserInfo',
+      logCategory: 'auth.user-info',
+    })
+    if (!info.id) {
+      throw new QoderLlmError('Qoder identity lookup returned no user id.', 'AUTH')
+    }
+    return {
+      userID: info.id,
+      email: info.email ?? '',
+      name: info.name ?? info.username ?? '',
     }
   }
 }

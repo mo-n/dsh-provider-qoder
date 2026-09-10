@@ -1,7 +1,9 @@
 /** Internal request lifecycle primitives for the Qoder transport. */
 
 import { createHash } from 'node:crypto'
-import { QoderLlmError } from '../errors.ts'
+import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
+import { logParsedResponse, redactLogPayload, type QoderLogger } from './logging.ts'
+import { defaultUserAgent, qoderClientType } from './wire/cosy.ts'
 
 export const defaultMetadataTimeoutMs = 15_000
 export const defaultResponseHeaderTimeoutMs = 30_000
@@ -149,5 +151,108 @@ export class SingleFlight<T> {
         error => finish(() => reject(error)),
       )
     })
+  }
+}
+
+export interface OpenApiJsonRequestOptions {
+  url: string
+  method?: 'GET' | 'POST'
+  token?: string
+  machineId?: string
+  body?: unknown
+  headers?: Record<string, string>
+  signal?: AbortSignal
+  timeoutMs?: number
+  logger?: QoderLogger
+  operation: string
+  logCategory?: string
+  userAgent?: string
+}
+
+export async function openApiJsonRequest<T>(
+  fetchImpl: typeof fetch,
+  options: OpenApiJsonRequestOptions,
+): Promise<T> {
+  const method = options.method ?? (options.body !== undefined ? 'POST' : 'GET')
+  const timeoutMs = options.timeoutMs ?? defaultMetadataTimeoutMs
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  const requestSignal = options.signal === undefined
+    ? timeoutSignal
+    : AbortSignal.any([options.signal, timeoutSignal])
+  const startedAt = performance.now()
+
+  options.logger?.debug?.(`[Qoder ${options.operation}] Requesting`, { url: options.url, method })
+
+  try {
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      'user-agent': options.userAgent ?? defaultUserAgent,
+      'cosy-version': '1.0.1',
+      'cosy-clienttype': qoderClientType,
+      ...options.headers,
+    }
+    if (options.token) {
+      headers.authorization = `Bearer ${options.token}`
+    }
+    if (options.machineId) {
+      headers['Cosy-MachineToken'] = options.machineId
+      headers['Cosy-MachineType'] = 'host'
+    }
+    let bodyText: string | undefined
+    if (options.body !== undefined) {
+      headers['content-type'] = 'application/json'
+      bodyText = typeof options.body === 'string' ? options.body : JSON.stringify(options.body)
+    }
+
+    const response = await fetchImpl(options.url, {
+      method,
+      headers,
+      body: bodyText,
+      signal: requestSignal,
+    })
+
+    options.logger?.debug?.(`[Qoder ${options.operation}] Request completed`, {
+      status: response.status,
+      statusText: response.statusText,
+      durationMs: Math.round(performance.now() - startedAt),
+      ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
+    })
+
+    const text = await readLimitedText(
+      response,
+      response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
+      `Qoder ${options.operation} response`,
+    )
+
+    if (!response.ok) {
+      options.logger?.error?.(`[Qoder ${options.operation}] Request failed`, redactLogPayload(text))
+      throw qoderHttpError(
+        `Failed to execute Qoder ${options.operation} with status ${response.status}.`,
+        response,
+      )
+    }
+
+    let data: unknown
+    try {
+      data = JSON.parse(text)
+    } catch {
+      options.logger?.error?.(`[Qoder ${options.operation}] Invalid JSON response`, redactLogPayload(text))
+      throw new QoderLlmError(`Failed to parse Qoder ${options.operation} JSON response`, 'MALFORMED_RESPONSE')
+    }
+
+    if (options.logCategory) {
+      logParsedResponse(options.logger, options.logCategory, data)
+    }
+
+    return data as T
+  } catch (error: unknown) {
+    if (error instanceof QoderLlmError) throw error
+    if (options.signal?.aborted) {
+      throw new QoderLlmError(`Qoder ${options.operation} request was aborted.`, 'ABORTED')
+    }
+    if (timeoutSignal.aborted) {
+      throw new QoderLlmError(`Qoder ${options.operation} request timed out.`, 'TIMEOUT')
+    }
+    throw new QoderLlmError(`Qoder ${options.operation} network request failed.`, 'TRANSPORT', { cause: error })
   }
 }

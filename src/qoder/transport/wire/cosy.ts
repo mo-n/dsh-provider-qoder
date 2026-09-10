@@ -17,8 +17,9 @@ MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`
 
-const qoderIdeVersion = '1.1.47'
-const qoderClientType = '5'
+export const qoderIdeVersion = '1.1.47'
+export const qoderClientType = '5'
+export const defaultUserAgent = `qoder/${qoderIdeVersion}`
 const qoderDataPolicy = 'disagree'
 const qoderLoginVersion = 'v2'
 const qoderMachineOs = process.platform === 'win32'

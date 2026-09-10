@@ -17,22 +17,15 @@ import type {
   QoderSubscriberProfile,
   QoderSubscriberStatus,
 } from '../account.ts'
-import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
+import { QoderLlmError } from '../errors.ts'
+import type { QoderLogger } from './logging.ts'
 import {
-  logParsedResponse,
-  redactLogPayload,
-  type QoderLogger,
-} from './logging.ts'
-import {
-  defaultMaxErrorBytes,
-  defaultMaxJsonBytes,
   opaqueCredentialKey,
-  readLimitedText,
+  openApiJsonRequest,
   retryMetadataRead,
   SingleFlight,
 } from './request.ts'
 
-const userAgent = 'dsh-provider-qoder'
 const defaultUsageTtlMs = 60_000
 const defaultUsageTimeoutMs = 15_000
 
@@ -288,125 +281,37 @@ export class QoderUsageReader {
   }
 
   private async fetchUsage(jobToken: string, signal?: AbortSignal): Promise<QoderQuotaUsage> {
-    const url = getQoderUsageUrl(this.region)
-    const timeoutSignal = AbortSignal.timeout(this.timeoutMs)
-    const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
-    const startedAt = performance.now()
-    this.logger?.debug?.('[Qoder Usage] Requesting quota usage', { url })
-    try {
-      const response = await this.fetchImpl(url, {
-        method: 'GET',
-        headers: {
-          authorization: `Bearer ${jobToken}`,
-          accept: 'application/json',
-          'user-agent': userAgent,
-          'cosy-version': '1.0.1',
-          'cosy-clienttype': '5',
-        },
-        signal: requestSignal,
-      })
+    const data = await openApiJsonRequest<RawUsageInfo>(this.fetchImpl, {
+      url: getQoderUsageUrl(this.region),
+      token: jobToken,
+      signal,
+      timeoutMs: this.timeoutMs,
+      logger: this.logger,
+      operation: 'Usage',
+      logCategory: 'account.usage',
+    })
 
-      this.logger?.debug?.('[Qoder Usage] Request completed', {
-        status: response.status,
-        statusText: response.statusText,
-        durationMs: Math.round(performance.now() - startedAt),
-        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
-      })
-      const text = await readLimitedText(
-        response,
-        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
-        'Qoder quota usage response',
-      )
-
-      if (!response.ok) {
-        this.logger?.error?.('[Qoder Usage] Request failed', redactLogPayload(text))
-        throw qoderHttpError(
-          `Failed to fetch Qoder quota usage with status ${response.status}.`,
-          response,
-        )
-      }
-
-      let data: RawUsageInfo
-      try {
-        data = JSON.parse(text) as RawUsageInfo
-      } catch {
-        this.logger?.error?.('[Qoder Usage] Invalid JSON response', redactLogPayload(text))
-        throw new QoderLlmError('Failed to parse Qoder quota JSON response', 'USAGE_FETCH_FAILED')
-      }
-      logParsedResponse(this.logger, 'account.usage', data)
-
-      return {
-        userQuota: normalizeQuota(data.userQuota),
-        orgResourcePackage: normalizeQuota(data.orgResourcePackage),
-        totalUsagePercentage: typeof data.totalUsagePercentage === 'number' ? data.totalUsagePercentage : undefined,
-        isQuotaExceeded: typeof data.isQuotaExceeded === 'boolean' ? data.isQuotaExceeded : false,
-        expiresAt: normalizeExpiresAt(data.expiresAt),
-        raw: data,
-      }
-    } catch (error: unknown) {
-      if (error instanceof QoderLlmError) throw error
-      if (signal?.aborted) {
-        throw new QoderLlmError('Qoder quota usage request was aborted.', 'ABORTED')
-      }
-      if (timeoutSignal.aborted) {
-        throw new QoderLlmError('Qoder quota usage request timed out.', 'TIMEOUT')
-      }
-      throw new QoderLlmError('Qoder quota usage network request failed.', 'TRANSPORT', { cause: error })
+    return {
+      userQuota: normalizeQuota(data.userQuota),
+      orgResourcePackage: normalizeQuota(data.orgResourcePackage),
+      totalUsagePercentage: typeof data.totalUsagePercentage === 'number' ? data.totalUsagePercentage : undefined,
+      isQuotaExceeded: typeof data.isQuotaExceeded === 'boolean' ? data.isQuotaExceeded : false,
+      expiresAt: normalizeExpiresAt(data.expiresAt),
+      raw: data,
     }
   }
 
   private async fetchPlan(jobToken: string, signal?: AbortSignal): Promise<QoderSubscriberPlan | undefined> {
-    const url = getQoderUserPlanUrl(this.region)
-    const timeoutSignal = AbortSignal.timeout(this.timeoutMs)
-    const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
-    const startedAt = performance.now()
-    this.logger?.debug?.('[Qoder Plan] Requesting user plan', { url })
-    try {
-      const response = await this.fetchImpl(url, {
-        method: 'GET',
-        headers: {
-          authorization: `Bearer ${jobToken}`,
-          accept: 'application/json',
-          'user-agent': userAgent,
-          'cosy-version': '1.0.1',
-          'cosy-clienttype': '5',
-        },
-        signal: requestSignal,
-      })
-      this.logger?.debug?.('[Qoder Plan] Request completed', {
-        status: response.status,
-        statusText: response.statusText,
-        durationMs: Math.round(performance.now() - startedAt),
-        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
-      })
-      const text = await readLimitedText(
-        response,
-        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
-        'Qoder user plan response',
-      )
-      if (!response.ok) {
-        this.logger?.error?.('[Qoder Plan] Request failed', redactLogPayload(text))
-        throw qoderHttpError(`Failed to fetch Qoder user plan with status ${response.status}.`, response)
-      }
-      let data: unknown
-      try {
-        data = JSON.parse(text)
-      } catch {
-        this.logger?.error?.('[Qoder Plan] Invalid JSON response', redactLogPayload(text))
-        throw new QoderLlmError('Failed to parse Qoder user plan JSON response', 'PLAN_FETCH_FAILED')
-      }
-      logParsedResponse(this.logger, 'account.plan', data)
-      return normalizePlan(data)
-    } catch (error: unknown) {
-      if (error instanceof QoderLlmError) throw error
-      if (signal?.aborted) {
-        throw new QoderLlmError('Qoder user plan request was aborted.', 'ABORTED')
-      }
-      if (timeoutSignal.aborted) {
-        throw new QoderLlmError('Qoder user plan request timed out.', 'TIMEOUT')
-      }
-      throw new QoderLlmError('Qoder user plan network request failed.', 'TRANSPORT', { cause: error })
-    }
+    const data = await openApiJsonRequest<unknown>(this.fetchImpl, {
+      url: getQoderUserPlanUrl(this.region),
+      token: jobToken,
+      signal,
+      timeoutMs: this.timeoutMs,
+      logger: this.logger,
+      operation: 'Plan',
+      logCategory: 'account.plan',
+    })
+    return normalizePlan(data)
   }
 
   private async safeFetchPlan(jobToken: string, signal: AbortSignal): Promise<QoderSubscriberPlan | undefined> {
@@ -424,62 +329,17 @@ export class QoderUsageReader {
     machineId?: string,
     signal?: AbortSignal,
   ): Promise<QoderSubscriberStatus | undefined> {
-    const url = getQoderUserStatusUrl(this.region)
-    const timeoutSignal = AbortSignal.timeout(this.timeoutMs)
-    const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
-    const startedAt = performance.now()
-    this.logger?.debug?.('[Qoder Status] Requesting user status', { url })
-    try {
-      const headers: Record<string, string> = {
-        authorization: `Bearer ${jobToken}`,
-        accept: 'application/json',
-        'user-agent': userAgent,
-        'cosy-version': '1.0.1',
-        'cosy-clienttype': '5',
-      }
-      if (machineId) {
-        headers['Cosy-MachineToken'] = machineId
-        headers['Cosy-MachineType'] = 'host'
-      }
-      const response = await this.fetchImpl(url, {
-        method: 'GET',
-        headers,
-        signal: requestSignal,
-      })
-      this.logger?.debug?.('[Qoder Status] Request completed', {
-        status: response.status,
-        statusText: response.statusText,
-        durationMs: Math.round(performance.now() - startedAt),
-        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
-      })
-      const text = await readLimitedText(
-        response,
-        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
-        'Qoder user status response',
-      )
-      if (!response.ok) {
-        this.logger?.error?.('[Qoder Status] Request failed', redactLogPayload(text))
-        throw qoderHttpError(`Failed to fetch Qoder user status with status ${response.status}.`, response)
-      }
-      let data: unknown
-      try {
-        data = JSON.parse(text)
-      } catch {
-        this.logger?.error?.('[Qoder Status] Invalid JSON response', redactLogPayload(text))
-        throw new QoderLlmError('Failed to parse Qoder user status JSON response', 'STATUS_FETCH_FAILED')
-      }
-      logParsedResponse(this.logger, 'account.status', data)
-      return normalizeStatus(data)
-    } catch (error: unknown) {
-      if (error instanceof QoderLlmError) throw error
-      if (signal?.aborted) {
-        throw new QoderLlmError('Qoder user status request was aborted.', 'ABORTED')
-      }
-      if (timeoutSignal.aborted) {
-        throw new QoderLlmError('Qoder user status request timed out.', 'TIMEOUT')
-      }
-      throw new QoderLlmError('Qoder user status network request failed.', 'TRANSPORT', { cause: error })
-    }
+    const data = await openApiJsonRequest<unknown>(this.fetchImpl, {
+      url: getQoderUserStatusUrl(this.region),
+      token: jobToken,
+      machineId,
+      signal,
+      timeoutMs: this.timeoutMs,
+      logger: this.logger,
+      operation: 'Status',
+      logCategory: 'account.status',
+    })
+    return normalizeStatus(data)
   }
 
   private async safeFetchStatus(

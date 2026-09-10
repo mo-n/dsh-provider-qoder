@@ -6,15 +6,19 @@ import { QoderLlmError } from '../src/qoder/errors.ts'
 test('QoderAuthService exchanges once, resolves identity, and caches credentials', async () => {
   let exchangeCalls = 0
   let userInfoCalls = 0
+  let exchangeHeaders: Record<string, string> | undefined
+  let userInfoHeaders: Record<string, string> | undefined
   const fetchMock = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input)
     if (url.includes('/jobToken/exchange')) {
       exchangeCalls++
+      exchangeHeaders = init?.headers as Record<string, string>
       assert.deepEqual(JSON.parse(String(init?.body)), { personal_token: 'pt-test-token' })
       return new Response(JSON.stringify({ token: 'jt-token', expires_in: 3_600_000 }), { status: 200 })
     }
     if (url.includes('/userinfo')) {
       userInfoCalls++
+      userInfoHeaders = init?.headers as Record<string, string>
       return new Response(JSON.stringify({ id: 'user-999', email: 'user@qoder.sh', name: 'Subscriber' }))
     }
     throw new Error(`unexpected URL: ${url}`)
@@ -31,6 +35,10 @@ test('QoderAuthService exchanges once, resolves identity, and caches credentials
   assert.equal(second, first)
   assert.equal(exchangeCalls, 1)
   assert.equal(userInfoCalls, 1)
+  assert.equal(exchangeHeaders?.['user-agent'], 'qoder/1.1.47')
+  assert.equal(exchangeHeaders?.['cosy-clienttype'], '5')
+  assert.equal(userInfoHeaders?.['user-agent'], 'qoder/1.1.47')
+  assert.equal(userInfoHeaders?.['cosy-clienttype'], '5')
 })
 
 test('QoderAuthService shares one exchange between concurrent callers', async () => {

@@ -230,6 +230,7 @@ test('QoderUsageReader shares a concurrent quota cache miss', async () => {
 test('QoderUsageReader reads subscriber plan and user status with machine fingerprint headers', async () => {
   let statusHeaders: Record<string, string> | undefined
   let planHeaders: Record<string, string> | undefined
+  let quotaHeaders: Record<string, string> | undefined
   const fetchMock = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input)
     if (url.includes('/jobToken/exchange')) {
@@ -239,6 +240,7 @@ test('QoderUsageReader reads subscriber plan and user status with machine finger
       return new Response(JSON.stringify({ id: 'user-plan-1', email: 'pro@qoder.sh', name: 'Pro Dev' }))
     }
     if (url.includes('/quota/usage')) {
+      quotaHeaders = init?.headers as Record<string, string>
       return new Response(JSON.stringify({ userQuota: { total: 100, used: 20, remaining: 80, unit: 'credits' } }))
     }
     if (url.includes('/user/plan')) {
@@ -307,6 +309,12 @@ test('QoderUsageReader reads subscriber plan and user status with machine finger
   assert.equal(statusHeaders?.authorization, 'Bearer jt-plan-test')
   assert.equal(statusHeaders?.['Cosy-MachineToken'], 'umid-fingerprint-test')
   assert.equal(statusHeaders?.['Cosy-MachineType'], 'host')
+  assert.equal(planHeaders?.['user-agent'], 'qoder/1.1.47')
+  assert.equal(statusHeaders?.['user-agent'], 'qoder/1.1.47')
+  assert.equal(quotaHeaders?.['user-agent'], 'qoder/1.1.47')
+  assert.equal(planHeaders?.['cosy-clienttype'], '5')
+  assert.equal(statusHeaders?.['cosy-clienttype'], '5')
+  assert.equal(quotaHeaders?.['cosy-clienttype'], '5')
 })
 
 test('QoderUsageReader degrades gracefully when plan or status endpoint returns error', async () => {
