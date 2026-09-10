@@ -267,3 +267,39 @@ test('QoderTransport still streams when center image publication fails', async (
   for await (const _chunk of transport.stream(imageRequest(), visionModel)) continue
   assert.equal(chatCalls, 1)
 })
+
+test('QoderTransport signs chat with the job token refreshed during image publication', async () => {
+  let exchanges = 0
+  let uploads = 0
+  let chatUser = ''
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: async () => 'pt-refresh',
+    resolveMachineId: () => 'machine-test',
+    attachments: transportAttachments(),
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) {
+        exchanges++
+        return new Response(JSON.stringify({ token: `jt-${exchanges}` }))
+      }
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: `user-${exchanges}` }))
+      if (url.includes('/image/upload')) {
+        uploads++
+        return uploads === 1
+          ? new Response('', { status: 401 })
+          : new Response(JSON.stringify({ url: 'https://oss.qoder.sh/x.png' }))
+      }
+      if (url.includes('/agent_chat_generation')) {
+        chatUser = new Headers(init?.headers).get('Cosy-User')!
+        return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+
+  for await (const _chunk of transport.stream(imageRequest(), visionModel)) continue
+  assert.equal(exchanges, 2)
+  assert.equal(uploads, 2)
+  assert.equal(chatUser, 'user-2')
+})

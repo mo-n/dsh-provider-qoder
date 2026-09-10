@@ -139,7 +139,9 @@ export class DefaultQoderTransport implements QoderTransport {
       uploader: this.imageUploader,
       credentials,
     })
-    yield* streamQoderChat(options, model, credentials, messages, {
+    // Image publication may have refreshed a rejected job token.
+    const chatCredentials = await this.auth.getCredentials(pat, options.signal)
+    yield* streamQoderChat(options, model, chatCredentials, messages, {
       fetch: this.fetchImpl,
       logger: this.logger,
       region: this.region,
