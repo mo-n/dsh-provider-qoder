@@ -200,11 +200,13 @@ test('QoderAdapter rejects unsupported content before provider I/O', async () =>
   assert.equal(fetchCalls, 0)
 })
 
-test('QoderAdapter prepares image attachments before resolving credentials or provider I/O', async () => {
-  let resolvePatCalls = 0
-  let fetchCalls = 0
+test('QoderAdapter surfaces an unreadable image attachment without starting a model request', async () => {
+  // Image publication must be able to sign with credentials, so attachment
+  // reads now follow authentication (ADR-0004). An unreadable attachment still
+  // fails the turn, and no chat request is ever issued.
+  let chatCalls = 0
   const adapter = testAdapter({
-    resolvePat: () => { resolvePatCalls++; return Promise.resolve('pt-token') },
+    resolvePat: () => Promise.resolve('pt-token'),
     attachments: {
       imageLimits: {
         maxImageBytes: 5 * 1024 * 1024,
@@ -216,7 +218,13 @@ test('QoderAdapter prepares image attachments before resolving credentials or pr
       },
       readImageRequest: async () => { throw new Error('missing attachment') },
     },
-    fetch: (async () => { fetchCalls++; throw new Error('must not fetch') }) as typeof fetch,
+    fetch: (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-token' }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-42' }))
+      chatCalls++
+      throw new Error('must not reach the model')
+    }) as typeof fetch,
   })
   const options = request()
   options.messages = [createUserMessage({
@@ -236,8 +244,7 @@ test('QoderAdapter prepares image attachments before resolving credentials or pr
   await assert.rejects(async () => {
     for await (const _chunk of adapter.stream(options)) continue
   }, (error: Error) => error instanceof QoderLlmError && error.code === 'ATTACHMENT')
-  assert.equal(resolvePatCalls, 0)
-  assert.equal(fetchCalls, 0)
+  assert.equal(chatCalls, 0)
 })
 
 test('QoderAdapter aborts an idle provider stream', async () => {

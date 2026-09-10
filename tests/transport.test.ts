@@ -132,3 +132,138 @@ test('QoderTransport separates response-header timeout from stream idle timeout'
     && /response header/u.test(error.message)
   ))
 })
+
+const visionModel = {
+  id: 'cmodel',
+  name: 'Cantus Vision',
+  supportsImages: true,
+}
+
+const imageRef = {
+  attachmentId: 'sha256:image-1' as never,
+  mediaType: 'image/png' as const,
+  bytes: 3,
+  width: 1,
+  height: 1,
+}
+
+function transportAttachments() {
+  return {
+    imageLimits: {
+      maxImageBytes: 5 * 1024 * 1024,
+      maxImagesPerMessage: 20,
+      maxMessageImageBytes: 100 * 1024 * 1024,
+      maxImagePixels: 40_000_000,
+      maxImageDimension: 2_000,
+      mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const,
+    },
+    async readImageRequest(attachment: unknown) {
+      return {
+        variantId: 'sha256:variant-1',
+        attachment,
+        data: new Uint8Array([1, 2, 3]),
+        mediaType: 'image/png',
+        bytes: 3,
+        width: 1,
+        height: 1,
+        depth: 'uchar',
+        space: 'srgb',
+        hasAlpha: true,
+      }
+    },
+  } as never
+}
+
+function imageRequest(): GenerateOptions {
+  return {
+    provider: 'qoder-official',
+    model: 'cmodel',
+    messages: [createUserMessage({
+      content: [{ type: 'text', text: 'Look' }, { type: 'image', attachment: imageRef }],
+      source: { kind: 'user' },
+    })],
+  } as GenerateOptions
+}
+
+test('QoderTransport publishes images to the center service before streaming', async () => {
+  let uploads = 0
+  let chatBody = ''
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: () => Promise.resolve('pt-image'),
+    resolveMachineId: () => 'machine-test',
+    attachments: transportAttachments(),
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-image' }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-image' }))
+      if (url.includes('/image/upload')) {
+        uploads++
+        return new Response(JSON.stringify({ result: { oss_url: 'https://oss.qoder.sh/x.png' } }))
+      }
+      if (url.includes('/agent_chat_generation')) {
+        chatBody = String(init?.body ?? '')
+        return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+
+  for await (const _chunk of transport.stream(imageRequest(), visionModel)) continue
+  assert.equal(uploads, 1)
+  // The chat body is WAF-encoded, so assert on size: an inlined base64 image
+  // would make it far larger than a short published URL.
+  assert.ok(chatBody.length > 0)
+  assert.ok(chatBody.length < 4_000, `chat body unexpectedly large: ${chatBody.length}`)
+})
+
+test('QoderTransport rejects images for a non-vision model before authenticating', async () => {
+  let patCalls = 0
+  let fetchCalls = 0
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: () => {
+      patCalls++
+      return Promise.resolve('pt-none')
+    },
+    resolveMachineId: () => 'machine-test',
+    attachments: transportAttachments(),
+    fetch: (async (): Promise<Response> => {
+      fetchCalls++
+      return new Response('{}')
+    }) as typeof fetch,
+  })
+
+  await assert.rejects(async () => {
+    for await (const _chunk of transport.stream(imageRequest(), { id: 'cmodel', name: 'Text only' })) continue
+  }, (error: Error) => (
+    error instanceof QoderLlmError && error.code === 'UNSUPPORTED_CONTENT'
+  ))
+  assert.equal(patCalls, 0)
+  assert.equal(fetchCalls, 0)
+})
+
+test('QoderTransport still streams when center image publication fails', async () => {
+  let chatCalls = 0
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: () => Promise.resolve('pt-degrade'),
+    resolveMachineId: () => 'machine-test',
+    attachments: transportAttachments(),
+    logger: { warn: () => {} },
+    fetch: (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-degrade' }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-degrade' }))
+      if (url.includes('/image/upload')) return new Response('', { status: 500 })
+      if (url.includes('/agent_chat_generation')) {
+        chatCalls++
+        return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+
+  for await (const _chunk of transport.stream(imageRequest(), visionModel)) continue
+  assert.equal(chatCalls, 1)
+})

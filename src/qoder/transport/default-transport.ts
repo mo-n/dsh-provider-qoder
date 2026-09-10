@@ -14,7 +14,8 @@ import {
   retryMetadataRead,
   SingleFlight,
 } from './request.ts'
-import { validateQoderRequest } from './wire/serialize.ts'
+import { translateQoderMessages, validateQoderRequestShape } from './wire/serialize.ts'
+import { QoderImageUploader } from './image-upload.ts'
 import { QoderUsageReader } from './account-reader.ts'
 import type { QoderAccountInfo } from '../account.ts'
 import type { QoderTransport, QoderTransportOptions } from './index.ts'
@@ -38,6 +39,7 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly usage: QoderUsageReader
   private readonly modelFlights = new SingleFlight<readonly QoderCatalogModel[]>()
   private readonly attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
+  private readonly imageUploader: QoderImageUploader
 
   constructor(options: QoderTransportOptions) {
     this.region = options.region
@@ -60,6 +62,18 @@ export class DefaultQoderTransport implements QoderTransport {
       logger: this.logger,
       region: this.region,
       timeoutMs: this.metadataTimeoutMs,
+    })
+    this.imageUploader = new QoderImageUploader({
+      fetch: this.fetchImpl,
+      logger: this.logger,
+      region: this.region,
+      ...options.imageUploadTimeoutMs === undefined ? {} : { timeoutMs: options.imageUploadTimeoutMs },
+      ...options.imageUrlCacheTtlMs === undefined ? {} : { cacheTtlMs: options.imageUrlCacheTtlMs },
+      refreshCredentials: async (signal) => {
+        const pat = await this.requirePat(signal)
+        this.auth.clear(pat)
+        return this.auth.getCredentials(pat, signal)
+      },
     })
   }
 
@@ -114,10 +128,17 @@ export class DefaultQoderTransport implements QoderTransport {
   ): AsyncGenerator<StreamChunk> {
     if (options.signal?.aborted) throw aborted('Request was aborted prior to generation.')
 
-    // Validation finishes before credential resolution or any provider I/O.
-    const messages = await validateQoderRequest(options, model, this.attachments)
+    // Phase 1: static validation finishes before credential resolution or any
+    // provider I/O, so an unusable request never consumes a subscription.
+    validateQoderRequestShape(options, model)
+    // Phase 2: credentials, which the center image exchange must be able to sign with.
     const pat = await this.requirePat(options.signal)
     const credentials = await this.auth.getCredentials(pat, options.signal)
+    // Phase 3: read attachments, publish images, and assemble wire messages.
+    const messages = await translateQoderMessages(options, this.attachments, {
+      uploader: this.imageUploader,
+      credentials,
+    })
     yield* streamQoderChat(options, model, credentials, messages, {
       fetch: this.fetchImpl,
       logger: this.logger,

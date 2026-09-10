@@ -26,6 +26,10 @@ export interface QoderTransportOptions {
   metadataTimeoutMs?: number
   resolveMachineId?: () => string
   attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
+  /** Deadline for one center image publication attempt. */
+  imageUploadTimeoutMs?: number
+  /** Lifetime of a remembered center image URL. */
+  imageUrlCacheTtlMs?: number
 }
 
 export function createQoderTransport(options: QoderTransportOptions): QoderTransport {

@@ -12,7 +12,7 @@ This project is a community adapter plugin.
 - Configure subscription access via Qoder Personal Access Token (PAT).
 - Supports both Global (`global`) and China (`china`) services.
 - Discovers available models for your account, allows selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
-- Sends DSH image attachments to models advertised by Qoder as vision-language models, including images returned by tools.
+- Sends DSH image attachments to models advertised by Qoder as vision-language models, including images returned by tools. Images are published to the Qoder center service and referenced by URL to keep requests small; if publication fails, the image is sent inline instead so the turn still completes.
 - Supports streaming responses, reasoning content, tool calls, and multi-turn interactions.
 - View account information, personal quota, organization resource packs, and reset dates in Settings.
 

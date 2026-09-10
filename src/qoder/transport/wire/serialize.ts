@@ -3,10 +3,11 @@
 import crypto from 'node:crypto'
 import { contentHasImage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../../errors.ts'
-import { translateTools, validateAndTranslateMessages } from './translate.ts'
+import { translateTools, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
 import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './wire-types.ts'
 import type { QoderCatalogModel } from '../../catalog.ts'
-import type { QoderImageAttachments } from './translate.ts'
+import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
+import type { CosyCredentials } from './cosy.ts'
 
 function stableHash(prefix: string, ...inputs: string[]): string {
   const hash = crypto.createHash('sha256')
@@ -35,6 +36,50 @@ function stableChatRecordId(
   hash.update('\0')
   hash.update(`mt=${maxTokens}`)
   return hash.digest('hex').slice(0, 16)
+}
+
+/**
+ * Reject an unusable request before any credential resolution or provider I/O.
+ *
+ * Image publication needs credentials, so message translation now runs after
+ * authentication. This static pass preserves the guarantee that a request the
+ * provider cannot serve never reaches the network.
+ */
+export function validateQoderRequestShape(
+  options: GenerateOptions,
+  model?: QoderCatalogModel,
+): void {
+  if (options.reasoningEffort !== undefined) {
+    const effort = String(options.reasoningEffort)
+    if (!model?.reasoningEfforts?.some(candidate => candidate.id === effort)) {
+      throw new QoderLlmError(
+        `Qoder model "${options.model}" does not advertise reasoning effort "${effort}".`,
+        'UNSUPPORTED_REASONING_EFFORT',
+      )
+    }
+  }
+  if (options.messages.some(message => contentHasImage(message.content)) && model?.supportsImages !== true) {
+    throw new QoderLlmError(
+      `Qoder model "${options.model}" does not advertise image input.`,
+      'UNSUPPORTED_CONTENT',
+    )
+  }
+  validateMessageShapes(options.messages)
+}
+
+/** Translate a request whose shape has already been validated. */
+export function translateQoderMessages(
+  options: GenerateOptions,
+  attachments?: QoderImageAttachments,
+  pipeline?: { uploader?: QoderImageResolver; credentials?: CosyCredentials },
+): Promise<QoderWireMessage[]> {
+  return validateAndTranslateMessages(
+    options.messages,
+    options.system,
+    attachments,
+    options.signal,
+    pipeline,
+  )
 }
 
 export async function validateQoderRequest(

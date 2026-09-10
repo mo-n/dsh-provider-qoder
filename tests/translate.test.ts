@@ -11,10 +11,11 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { normalizeQoderModels } from '../src/qoder/catalog.ts'
-import { buildQoderRequestBody } from '../src/qoder/transport/wire/serialize.ts'
+import { buildQoderRequestBody, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
 import {
   validateAndTranslateMessages,
   type QoderImageAttachments,
+  type QoderImageResolver,
 } from '../src/qoder/transport/wire/translate.ts'
 
 const imageRef = {
@@ -309,4 +310,159 @@ test('buildQoderRequestBody accepts only advertised reasoning efforts', async ()
     () => buildQoderRequestBody(options, 'user-42', undefined, model),
     (error: Error) => error instanceof QoderLlmError && error.code === 'UNSUPPORTED_REASONING_EFFORT',
   )
+})
+
+function stubUploader(url = 'https://oss.qoder.sh/published.png'): {
+  uploader: QoderImageResolver
+  calls: number
+} {
+  const state = { calls: 0 }
+  return {
+    get calls() { return state.calls },
+    uploader: {
+      resolveImageUrl: async () => {
+        state.calls++
+        return url
+      },
+    },
+  }
+}
+
+const stubCredentials = {
+  userID: 'user-1',
+  authToken: 'jt-token',
+  name: 'User',
+  email: 'user@example.com',
+}
+
+test('validateAndTranslateMessages carries published image URLs instead of base64', async () => {
+  const stub = stubUploader()
+  const message = createUserMessage({
+    content: [
+      { type: 'text', text: 'before' },
+      { type: 'image', attachment: imageRef },
+      { type: 'text', text: 'after' },
+    ],
+    source: { kind: 'user' },
+  })
+
+  assert.deepEqual(
+    await validateAndTranslateMessages([message], undefined, imageAttachments(), undefined, {
+      uploader: stub.uploader,
+      credentials: stubCredentials,
+    }),
+    [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'before' },
+        { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/published.png' } },
+        { type: 'text', text: 'after' },
+      ],
+    }],
+  )
+  assert.equal(stub.calls, 1)
+})
+
+test('validateAndTranslateMessages preserves order across many published images', async () => {
+  const message = createUserMessage({
+    content: [
+      { type: 'image', attachment: imageRef },
+      { type: 'text', text: 'middle' },
+      { type: 'image', attachment: imageRef },
+      { type: 'image', attachment: imageRef },
+    ],
+    source: { kind: 'user' },
+  })
+  let index = 0
+  const uploader: QoderImageResolver = {
+    resolveImageUrl: async () => {
+      const current = index++
+      // Resolve out of order to prove slots are reserved, not appended.
+      await new Promise(resolve => setTimeout(resolve, current === 0 ? 8 : 1))
+      return `https://oss.qoder.sh/${current}.png`
+    },
+  }
+
+  const [translated] = await validateAndTranslateMessages(
+    [message], undefined, imageAttachments(), undefined, { uploader, credentials: stubCredentials },
+  )
+  assert.deepEqual(translated.content, [
+    { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/0.png' } },
+    { type: 'text', text: 'middle' },
+    { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/1.png' } },
+    { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/2.png' } },
+  ])
+})
+
+test('validateAndTranslateMessages publishes tool-result images in the following user message', async () => {
+  const stub = stubUploader()
+  const result = createToolResultMessage({
+    callId: ToolCallId('call-image'),
+    content: [{ type: 'text', text: 'captured' }, { type: 'image', attachment: imageRef }],
+    isError: false,
+  })
+
+  assert.deepEqual(
+    await validateAndTranslateMessages([result], undefined, imageAttachments(), undefined, {
+      uploader: stub.uploader,
+      credentials: stubCredentials,
+    }),
+    [
+      { role: 'tool', tool_call_id: 'call-image', content: 'captured' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '[1 image returned by the previous tool call]' },
+          { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/published.png' } },
+        ],
+      },
+    ],
+  )
+  assert.equal(stub.calls, 1)
+})
+
+test('validateAndTranslateMessages rejects a batch that exceeds the image policy', async () => {
+  const attachments = imageAttachments()
+  const limited: QoderImageAttachments = {
+    ...attachments,
+    imageLimits: { ...attachments.imageLimits, maxImagesPerMessage: 2 },
+  }
+  const message = createUserMessage({
+    content: [
+      { type: 'image', attachment: imageRef },
+      { type: 'image', attachment: imageRef },
+      { type: 'image', attachment: imageRef },
+    ],
+    source: { kind: 'user' },
+  })
+
+  await assert.rejects(
+    () => validateAndTranslateMessages([message], undefined, limited),
+    (error: Error) => {
+      assert.equal((error as QoderLlmError).code, 'UNSUPPORTED_CONTENT')
+      return true
+    },
+  )
+})
+
+test('validateQoderRequestShape rejects images for a non-vision model with no I/O', () => {
+  let reads = 0
+  const options = {
+    provider: 'qoder-official',
+    model: 'text-only',
+    messages: [createUserMessage({
+      content: [{ type: 'image', attachment: imageRef }],
+      source: { kind: 'user' },
+    })],
+  } as GenerateOptions
+
+  assert.throws(
+    () => validateQoderRequestShape(options, { id: 'text-only', name: 'Text', supportsImages: false }),
+    (error: Error) => {
+      assert.ok(error instanceof QoderLlmError)
+      assert.equal((error as QoderLlmError).code, 'UNSUPPORTED_CONTENT')
+      return true
+    },
+  )
+  assert.equal(reads, 0)
 })

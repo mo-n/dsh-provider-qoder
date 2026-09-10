@@ -36,6 +36,14 @@ _Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK
 Text and durable raster-image content accepted together by a Qoder vision-language model; it does not include arbitrary binary files such as PDFs, audio, video, or archives.
 _Avoid_: Qoder image upload, arbitrary file upload
 
+**Qoder image publication**:
+The exchange that places one request image on the Qoder center service and yields the durable object URL a model request carries in place of inline bytes. It is per subscriber and per Qoder service region, and it degrades to inline content rather than failing the model turn.
+_Avoid_: Qoder image upload, attachment sync, CDN push
+
+**Qoder center service**:
+The region-scoped Qoder service that owns durable image objects, distinct from the model transport and Open API hosts.
+_Avoid_: OSS bucket, image CDN, upload gateway
+
 **Qoder tool exchange**:
 The provider-level representation of DSH tool definitions, model-requested tool calls, and correlated tool results transported across Qoder model turns. DSH remains responsible for executing tools.
 _Avoid_: Qoder tool execution, Qoder agent loop
