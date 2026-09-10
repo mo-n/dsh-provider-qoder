@@ -23,8 +23,46 @@ export interface QoderQuotaUsage {
   raw?: unknown
 }
 
+export interface QoderSubscriberOrganization {
+  orgId: string
+  orgName: string
+  roleName?: string
+  isSuspended?: boolean
+  canManageSubscriptions?: boolean
+  resourcePackageFeatureEnabled?: boolean
+}
+
+export interface QoderSubscriberFeatureAllowed {
+  quest?: boolean
+  wiki?: boolean
+  codeReview?: boolean
+}
+
+export interface QoderSubscriberPlan {
+  userType: string
+  planTierName: string
+  planTier?: string
+  isPersonalVersion: boolean
+  isHighestTier?: boolean
+  isRenewed?: boolean
+  startDate?: string
+  endDate?: string
+  organization?: QoderSubscriberOrganization
+  featureAllowed?: QoderSubscriberFeatureAllowed
+  raw?: unknown
+}
+
+export interface QoderSubscriberStatus {
+  allowByok: number
+  teamAllowByok?: number
+  isPrivacyPolicyModifiable?: boolean
+  raw?: unknown
+}
+
 export interface QoderAccountInfo {
   profile: QoderSubscriberProfile
   usage?: QoderQuotaUsage
+  plan?: QoderSubscriberPlan
+  status?: QoderSubscriberStatus
   updatedAt: string
 }

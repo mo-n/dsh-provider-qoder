@@ -142,19 +142,41 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
     }
     if (accountState.status !== 'ready') return null
 
-    const { profile, usage } = accountState.account
+    const { profile, usage, plan } = accountState.account
     const userQuota = usage?.userQuota
     const orgPackage = usage?.orgResourcePackage
     const avatarInitial = (profile.name || profile.email || 'Q').charAt(0).toUpperCase()
     const resetDate = formatResetDate(usage?.expiresAt)
+    const planExpiry = plan?.endDate ? formatResetDate(plan.endDate) : undefined
+    const isSuspended = plan?.organization?.isSuspended === true
     return (
       <div className={css.accountSection}>
+        {isSuspended ? (
+          <div className={css.suspendedBanner} role="alert">
+            <span>{t('accountSuspended')}</span>
+          </div>
+        ) : null}
         <div className={css.accountHead}>
           <div className={css.userInfo}>
             <div className={css.avatar} aria-hidden="true">{avatarInitial}</div>
             <div className={css.userDetails}>
-              <span className={css.userName}>{profile.name || 'Qoder Subscriber'}</span>
+              <div className={css.userNameRow}>
+                <span className={css.userName}>{profile.name || 'Qoder Subscriber'}</span>
+                {plan?.planTierName ? (
+                  <span
+                    className={css.planBadge}
+                    title={planExpiry ? t('planExpiresAt', { value: planExpiry }) : undefined}
+                  >
+                    {plan.planTierName}
+                  </span>
+                ) : null}
+              </div>
               {profile.email ? <span className={css.userEmail}>{profile.email}</span> : null}
+              {plan?.organization?.orgName ? (
+                <span className={css.orgTag}>
+                  {t('organization', { name: plan.organization.orgName })}
+                </span>
+              ) : null}
             </div>
           </div>
           <button

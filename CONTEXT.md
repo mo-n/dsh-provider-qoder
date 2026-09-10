@@ -83,3 +83,11 @@ _Avoid_: international endpoint, global cluster
 **China Qoder service**:
 The Qoder service associated with `qoder.com.cn` accounts and mainland China endpoints.
 _Avoid_: domestic service, CN endpoint
+
+**Qoder subscriber plan**:
+The subscription tier, term validity, and organization entitlement associated with the authenticated Qoder account.
+_Avoid_: subscription level, billing plan
+
+**Qoder subscriber status**:
+The operational account standing, security fingerprint linkage, and client feature switches evaluated by Qoder.
+_Avoid_: account state, auth flags

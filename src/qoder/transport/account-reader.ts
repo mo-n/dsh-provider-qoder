@@ -1,12 +1,21 @@
 /** Qoder subscriber profile and quota usage querying. */
 
 import type { QoderAuthService } from './auth.ts'
-import { getQoderUsageUrl, type QoderRegion } from './endpoints.ts'
+import {
+  getQoderUsageUrl,
+  getQoderUserPlanUrl,
+  getQoderUserStatusUrl,
+  type QoderRegion,
+} from './endpoints.ts'
 import type {
   QoderAccountInfo,
   QoderQuota,
   QoderQuotaUsage,
+  QoderSubscriberFeatureAllowed,
+  QoderSubscriberOrganization,
+  QoderSubscriberPlan,
   QoderSubscriberProfile,
+  QoderSubscriberStatus,
 } from '../account.ts'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
 import {
@@ -96,6 +105,99 @@ function normalizeExpiresAt(rawExpires?: number | string): string | undefined {
   return undefined
 }
 
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function asNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const num = Number(value)
+    if (Number.isFinite(num)) return num
+  }
+  return undefined
+}
+
+function normalizeOrganization(raw: unknown): QoderSubscriberOrganization | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const orgId = asString(obj.org_id) ?? asString(obj.orgId) ?? asString(obj.id)
+  const orgName = asString(obj.org_name) ?? asString(obj.orgName) ?? asString(obj.name)
+  if (!orgId || !orgName) return undefined
+  return {
+    orgId,
+    orgName,
+    ...asString(obj.role_name) ?? asString(obj.roleName) !== undefined
+      ? { roleName: asString(obj.role_name) ?? asString(obj.roleName) }
+      : {},
+    isSuspended: asBoolean(obj.is_suspended) ?? asBoolean(obj.isSuspended) ?? false,
+    canManageSubscriptions: asBoolean(obj.can_manage_subscriptions) ?? asBoolean(obj.canManageSubscriptions) ?? false,
+    resourcePackageFeatureEnabled: asBoolean(obj.resource_package_feature_enabled) ?? asBoolean(obj.resourcePackageFeatureEnabled) ?? false,
+  }
+}
+
+function normalizeFeatureAllowed(raw: unknown): QoderSubscriberFeatureAllowed | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  return {
+    quest: asBoolean(obj.quest) ?? false,
+    wiki: asBoolean(obj.wiki) ?? false,
+    codeReview: asBoolean(obj.code_review) ?? asBoolean(obj.codeReview) ?? false,
+  }
+}
+
+function normalizePlan(raw: unknown): QoderSubscriberPlan | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const userType = asString(obj.user_type) ?? asString(obj.userType)
+  const planTierName = asString(obj.plan_tier_name) ?? asString(obj.planTierName) ?? asString(obj.plan_name) ?? asString(obj.planName)
+  if (!userType || !planTierName) return undefined
+
+  const organization = normalizeOrganization(obj.organization)
+  const isPersonalVersion = asBoolean(obj.is_personal_version) ?? asBoolean(obj.isPersonalVersion) ?? (organization === undefined)
+  const startDate = normalizeExpiresAt(obj.start_date as number | string ?? obj.startDate as number | string)
+  const endDate = normalizeExpiresAt(obj.end_date as number | string ?? obj.endDate as number | string)
+  const planTier = asString(obj.plan_tier) ?? asString(obj.planTier)
+  const isHighestTier = asBoolean(obj.is_highest_tier) ?? asBoolean(obj.isHighestTier)
+  const isRenewed = asBoolean(obj.is_renewed) ?? asBoolean(obj.isRenewed)
+  const featureAllowed = normalizeFeatureAllowed(obj.feature_allowed ?? obj.featureAllowed)
+
+  return {
+    userType,
+    planTierName,
+    ...planTier !== undefined ? { planTier } : {},
+    isPersonalVersion,
+    ...isHighestTier !== undefined ? { isHighestTier } : {},
+    ...isRenewed !== undefined ? { isRenewed } : {},
+    ...startDate !== undefined ? { startDate } : {},
+    ...endDate !== undefined ? { endDate } : {},
+    ...organization !== undefined ? { organization } : {},
+    ...featureAllowed !== undefined ? { featureAllowed } : {},
+    raw,
+  }
+}
+
+function normalizeStatus(raw: unknown): QoderSubscriberStatus | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const featureSwitches = (obj.featureSwitches ?? obj.feature_switches) as Record<string, unknown> | undefined
+  const teamSwitches = (obj.teamSwitches ?? obj.team_switches) as Record<string, unknown> | undefined
+  const allowByok = asNumber(featureSwitches?.allow_byok ?? featureSwitches?.allowByok) ?? 0
+  const teamAllowByok = asNumber(teamSwitches?.allow_byok ?? teamSwitches?.allowByok)
+  const isPrivacyPolicyModifiable = asBoolean(obj.isPrivacyPolicyModifiable ?? obj.is_data_policy_modifiable)
+
+  return {
+    allowByok,
+    ...teamAllowByok !== undefined ? { teamAllowByok } : {},
+    ...isPrivacyPolicyModifiable !== undefined ? { isPrivacyPolicyModifiable } : {},
+    raw,
+  }
+}
+
 export class QoderUsageReader {
   private readonly authService: QoderAuthService
   private readonly fetchImpl: typeof fetch
@@ -155,11 +257,17 @@ export class QoderUsageReader {
       email: creds.email || '',
     }
 
-    const usage = await retryMetadataRead(signal, () => this.fetchUsage(creds.authToken, signal))
+    const [usage, plan, status] = await Promise.all([
+      retryMetadataRead(signal, () => this.fetchUsage(creds.authToken, signal)),
+      this.safeFetchPlan(creds.authToken, signal),
+      this.safeFetchStatus(creds.authToken, creds.machineID, signal),
+    ])
 
     const accountInfo: QoderAccountInfo = {
       profile,
       usage,
+      ...plan !== undefined ? { plan } : {},
+      ...status !== undefined ? { status } : {},
       updatedAt: new Date().toISOString(),
     }
 
@@ -244,6 +352,147 @@ export class QoderUsageReader {
         throw new QoderLlmError('Qoder quota usage request timed out.', 'TIMEOUT')
       }
       throw new QoderLlmError('Qoder quota usage network request failed.', 'TRANSPORT', { cause: error })
+    }
+  }
+
+  private async fetchPlan(jobToken: string, signal?: AbortSignal): Promise<QoderSubscriberPlan | undefined> {
+    const url = getQoderUserPlanUrl(this.region)
+    const timeoutSignal = AbortSignal.timeout(this.timeoutMs)
+    const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
+    const startedAt = performance.now()
+    this.logger?.debug?.('[Qoder Plan] Requesting user plan', { url })
+    try {
+      const response = await this.fetchImpl(url, {
+        method: 'GET',
+        headers: {
+          authorization: `Bearer ${jobToken}`,
+          accept: 'application/json',
+          'user-agent': userAgent,
+          'cosy-version': '1.0.1',
+          'cosy-clienttype': '5',
+        },
+        signal: requestSignal,
+      })
+      this.logger?.debug?.('[Qoder Plan] Request completed', {
+        status: response.status,
+        statusText: response.statusText,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
+      })
+      const text = await readLimitedText(
+        response,
+        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
+        'Qoder user plan response',
+      )
+      if (!response.ok) {
+        this.logger?.error?.('[Qoder Plan] Request failed', redactLogPayload(text))
+        throw qoderHttpError(`Failed to fetch Qoder user plan with status ${response.status}.`, response)
+      }
+      let data: unknown
+      try {
+        data = JSON.parse(text)
+      } catch {
+        this.logger?.error?.('[Qoder Plan] Invalid JSON response', redactLogPayload(text))
+        throw new QoderLlmError('Failed to parse Qoder user plan JSON response', 'PLAN_FETCH_FAILED')
+      }
+      logParsedResponse(this.logger, 'account.plan', data)
+      return normalizePlan(data)
+    } catch (error: unknown) {
+      if (error instanceof QoderLlmError) throw error
+      if (signal?.aborted) {
+        throw new QoderLlmError('Qoder user plan request was aborted.', 'ABORTED')
+      }
+      if (timeoutSignal.aborted) {
+        throw new QoderLlmError('Qoder user plan request timed out.', 'TIMEOUT')
+      }
+      throw new QoderLlmError('Qoder user plan network request failed.', 'TRANSPORT', { cause: error })
+    }
+  }
+
+  private async safeFetchPlan(jobToken: string, signal: AbortSignal): Promise<QoderSubscriberPlan | undefined> {
+    try {
+      return await this.fetchPlan(jobToken, signal)
+    } catch (error) {
+      if (signal.aborted) throw error
+      this.logger?.warn?.('[Qoder Plan] Failed to load user plan (degraded)', error instanceof Error ? error.message : error)
+      return undefined
+    }
+  }
+
+  private async fetchStatus(
+    jobToken: string,
+    machineId?: string,
+    signal?: AbortSignal,
+  ): Promise<QoderSubscriberStatus | undefined> {
+    const url = getQoderUserStatusUrl(this.region)
+    const timeoutSignal = AbortSignal.timeout(this.timeoutMs)
+    const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
+    const startedAt = performance.now()
+    this.logger?.debug?.('[Qoder Status] Requesting user status', { url })
+    try {
+      const headers: Record<string, string> = {
+        authorization: `Bearer ${jobToken}`,
+        accept: 'application/json',
+        'user-agent': userAgent,
+        'cosy-version': '1.0.1',
+        'cosy-clienttype': '5',
+      }
+      if (machineId) {
+        headers['Cosy-MachineToken'] = machineId
+        headers['Cosy-MachineType'] = 'host'
+      }
+      const response = await this.fetchImpl(url, {
+        method: 'GET',
+        headers,
+        signal: requestSignal,
+      })
+      this.logger?.debug?.('[Qoder Status] Request completed', {
+        status: response.status,
+        statusText: response.statusText,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
+      })
+      const text = await readLimitedText(
+        response,
+        response.ok ? defaultMaxJsonBytes : defaultMaxErrorBytes,
+        'Qoder user status response',
+      )
+      if (!response.ok) {
+        this.logger?.error?.('[Qoder Status] Request failed', redactLogPayload(text))
+        throw qoderHttpError(`Failed to fetch Qoder user status with status ${response.status}.`, response)
+      }
+      let data: unknown
+      try {
+        data = JSON.parse(text)
+      } catch {
+        this.logger?.error?.('[Qoder Status] Invalid JSON response', redactLogPayload(text))
+        throw new QoderLlmError('Failed to parse Qoder user status JSON response', 'STATUS_FETCH_FAILED')
+      }
+      logParsedResponse(this.logger, 'account.status', data)
+      return normalizeStatus(data)
+    } catch (error: unknown) {
+      if (error instanceof QoderLlmError) throw error
+      if (signal?.aborted) {
+        throw new QoderLlmError('Qoder user status request was aborted.', 'ABORTED')
+      }
+      if (timeoutSignal.aborted) {
+        throw new QoderLlmError('Qoder user status request timed out.', 'TIMEOUT')
+      }
+      throw new QoderLlmError('Qoder user status network request failed.', 'TRANSPORT', { cause: error })
+    }
+  }
+
+  private async safeFetchStatus(
+    jobToken: string,
+    machineId?: string,
+    signal?: AbortSignal,
+  ): Promise<QoderSubscriberStatus | undefined> {
+    try {
+      return await this.fetchStatus(jobToken, machineId, signal)
+    } catch (error) {
+      if (signal?.aborted) throw error
+      this.logger?.warn?.('[Qoder Status] Failed to load user status (degraded)', error instanceof Error ? error.message : error)
+      return undefined
     }
   }
 }

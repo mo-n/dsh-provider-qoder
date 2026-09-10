@@ -49,6 +49,10 @@ export const zh = {
   resetsAt: '重置时间：{value}',
   noQuota: '暂无可用额度信息',
   quotaExceeded: '当前订阅额度已用尽。',
+  plan: '套餐计划',
+  planExpiresAt: '有效期至：{value}',
+  organization: '组织：{name}',
+  accountSuspended: '当前账号或组织已被暂停/冻结。',
 }
 
 export const en: typeof zh = {
@@ -102,6 +106,10 @@ export const en: typeof zh = {
   resetsAt: 'Resets: {value}',
   noQuota: 'No quota metrics available',
   quotaExceeded: 'The current subscription quota is exhausted.',
+  plan: 'Plan',
+  planExpiresAt: 'Expires at: {value}',
+  organization: 'Org: {name}',
+  accountSuspended: 'Account or organization is currently suspended.',
 }
 
 

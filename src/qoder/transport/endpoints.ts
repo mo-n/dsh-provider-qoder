@@ -64,3 +64,13 @@ export function getQoderUsageUrl(region: QoderRegion = 'global'): string {
   const { openApiUrl } = resolveQoderEndpoints(region)
   return `${openApiUrl}/api/v2/quota/usage`
 }
+
+export function getQoderUserPlanUrl(region: QoderRegion = 'global'): string {
+  const { openApiUrl } = resolveQoderEndpoints(region)
+  return `${openApiUrl}/api/v2/user/plan`
+}
+
+export function getQoderUserStatusUrl(region: QoderRegion = 'global'): string {
+  const { openApiUrl } = resolveQoderEndpoints(region)
+  return `${openApiUrl}/api/v3/user/status`
+}

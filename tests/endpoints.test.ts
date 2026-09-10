@@ -6,6 +6,8 @@ import {
   getQoderModelListUrl,
   getQoderUsageUrl,
   getQoderUserInfoUrl,
+  getQoderUserPlanUrl,
+  getQoderUserStatusUrl,
   resolveQoderEndpoints,
 } from '../src/qoder/transport/endpoints.ts'
 import { computeSigPath } from '../src/qoder/transport/wire/cosy.ts'
@@ -86,4 +88,28 @@ test('getQoderUsageUrl builds quota usage URLs for global and china', () => {
 test('computeSigPath strips the /algo prefix from China gateway chat URL', () => {
   const cnChatUrl = getQoderChatUrl('china')
   assert.equal(computeSigPath(cnChatUrl), '/api/v2/service/pro/sse/agent_chat_generation')
+})
+
+test('getQoderUserPlanUrl builds user plan URLs for global and china', () => {
+  assert.equal(
+    getQoderUserPlanUrl('global'),
+    'https://openapi.qoder.sh/api/v2/user/plan',
+  )
+  assert.equal(
+    getQoderUserPlanUrl('china'),
+    'https://openapi.qoder.com.cn/api/v2/user/plan',
+  )
+  assert.equal(getQoderUserPlanUrl(), getQoderUserPlanUrl('global'))
+})
+
+test('getQoderUserStatusUrl builds user status URLs for global and china', () => {
+  assert.equal(
+    getQoderUserStatusUrl('global'),
+    'https://openapi.qoder.sh/api/v3/user/status',
+  )
+  assert.equal(
+    getQoderUserStatusUrl('china'),
+    'https://openapi.qoder.com.cn/api/v3/user/status',
+  )
+  assert.equal(getQoderUserStatusUrl(), getQoderUserStatusUrl('global'))
 })
