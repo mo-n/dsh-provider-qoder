@@ -349,3 +349,35 @@ test('targets the China center endpoint without an /algo signing prefix', () => 
   )
   assert.equal(computeSigPath(getQoderImageUploadUrl('global')), '/api/v2/image/upload')
 })
+
+test('cancelled queued uploads do not block later publications', async () => {
+  const releases: Array<() => void> = []
+  const uploader = new QoderImageUploader({
+    maxConcurrency: 1,
+    fetch: (async () => {
+      await new Promise<void>(resolve => releases.push(resolve))
+      return okUpload()
+    }) as typeof fetch,
+  })
+  const cancelled = new AbortController()
+  const remaining = new AbortController()
+  const first = uploader.resolveImageUrl(requestImage(), credentials)
+  const second = uploader.resolveImageUrl(requestImage({ variantId: 'cancelled' as never }), credentials, cancelled.signal)
+  const third = uploader.resolveImageUrl(requestImage({ variantId: 'remaining' as never }), credentials, remaining.signal)
+  const rejected = assert.rejects(second, { code: 'ABORTED' })
+  cancelled.abort()
+  await rejected
+  releases.shift()!()
+  await first
+  await new Promise<void>(resolve => setImmediate(resolve))
+  const started = releases.length
+  if (started === 0) {
+    const cleanup = assert.rejects(third, { code: 'ABORTED' })
+    remaining.abort()
+    await cleanup
+  } else {
+    releases.shift()!()
+    await third
+  }
+  assert.equal(started, 1, 'the live queued upload must receive the released slot')
+})

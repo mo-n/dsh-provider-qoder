@@ -87,21 +87,7 @@ export async function validateQoderRequest(
   model?: QoderCatalogModel,
   attachments?: QoderImageAttachments,
 ): Promise<QoderWireMessage[]> {
-  if (options.reasoningEffort !== undefined) {
-    const effort = String(options.reasoningEffort)
-    if (!model?.reasoningEfforts?.some(candidate => candidate.id === effort)) {
-      throw new QoderLlmError(
-        `Qoder model "${options.model}" does not advertise reasoning effort "${effort}".`,
-        'UNSUPPORTED_REASONING_EFFORT',
-      )
-    }
-  }
-  if (options.messages.some(message => contentHasImage(message.content)) && model?.supportsImages !== true) {
-    throw new QoderLlmError(
-      `Qoder model "${options.model}" does not advertise image input.`,
-      'UNSUPPORTED_CONTENT',
-    )
-  }
+  validateQoderRequestShape(options, model)
   return validateAndTranslateMessages(options.messages, options.system, attachments, options.signal)
 }
 

@@ -231,9 +231,14 @@ export class QoderImageUploader {
   }
 
   private async withSlot<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    if (signal.aborted) throw aborted()
     if (this.active >= this.maxConcurrency) {
       await new Promise<void>((resolve, reject) => {
-        const onAbort = (): void => reject(aborted())
+        const onAbort = (): void => {
+          const index = this.queue.indexOf(release)
+          if (index !== -1) this.queue.splice(index, 1)
+          reject(aborted())
+        }
         const release = (): void => {
           signal.removeEventListener('abort', onAbort)
           resolve()
@@ -241,13 +246,16 @@ export class QoderImageUploader {
         signal.addEventListener('abort', onAbort, { once: true })
         this.queue.push(release)
       })
+    } else {
+      this.active++
     }
-    this.active++
     try {
+      if (signal.aborted) throw aborted()
       return await operation()
     } finally {
-      this.active--
-      this.queue.shift()?.()
+      const next = this.queue.shift()
+      if (next !== undefined) next()
+      else this.active--
     }
   }
 
