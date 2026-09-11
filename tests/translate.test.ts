@@ -101,11 +101,11 @@ test('validateAndTranslateMessages processes DSH text history', async () => {
   ])
 })
 
-test('validateAndTranslateMessages projects tool history and omits assistant reasoning', async () => {
+test('validateAndTranslateMessages preserves assistant reasoning across turns by default', async () => {
   const callId = ToolCallId('call-1')
   const assistant = createAssistantMessage({
     content: [
-      { type: 'reasoning', text: 'The prior scratch work is not replayed.' },
+      { type: 'reasoning', text: 'The prior scratch work is retained.' },
       { type: 'text', text: 'I will add the values.' },
       { type: 'tool-call', id: callId, name: 'add', arguments: '{"a":2,"b":3}' },
     ],
@@ -125,26 +125,84 @@ test('validateAndTranslateMessages projects tool history and omits assistant rea
         type: 'function',
         function: { name: 'add', arguments: '{"a":2,"b":3}' },
       }],
+      reasoning_content: 'The prior scratch work is retained.',
     },
     { role: 'tool', tool_call_id: 'call-1', content: '5 total' },
   ])
 })
 
-test('validateAndTranslateMessages keeps tool-only assistant messages and drops reasoning-only history', async () => {
+test('validateAndTranslateMessages preserves pure-reasoning assistant messages by default', async () => {
   const callId = ToolCallId('call-2')
   const toolOnly = createAssistantMessage({
     content: [{ type: 'tool-call', id: callId, name: 'ping', arguments: '{}' }],
     source: { provider: 'qoder-official', model: 'cmodel' },
   })
   const reasoningOnly = createAssistantMessage({
+    content: [{ type: 'reasoning', text: 'deep thinking' }],
+    source: { provider: 'qoder-official', model: 'cmodel' },
+  })
+  assert.deepEqual(await validateAndTranslateMessages([toolOnly, reasoningOnly]), [
+    {
+      role: 'assistant',
+      content: ' ',
+      tool_calls: [{ id: 'call-2', type: 'function', function: { name: 'ping', arguments: '{}' } }],
+    },
+    {
+      role: 'assistant',
+      content: ' ',
+      reasoning_content: 'deep thinking',
+    },
+  ])
+})
+
+test('validateAndTranslateMessages drops reasoning when preserveThinking is false', async () => {
+  const callId = ToolCallId('call-1')
+  const assistant = createAssistantMessage({
+    content: [
+      { type: 'reasoning', text: 'The prior scratch work is not replayed.' },
+      { type: 'text', text: 'I will add the values.' },
+      { type: 'tool-call', id: callId, name: 'add', arguments: '{"a":2,"b":3}' },
+    ],
+    source: { provider: 'qoder-official', model: 'cmodel' },
+  })
+  const reasoningOnly = createAssistantMessage({
     content: [{ type: 'reasoning', text: 'transient' }],
     source: { provider: 'qoder-official', model: 'cmodel' },
   })
-  assert.deepEqual(await validateAndTranslateMessages([toolOnly, reasoningOnly]), [{
-    role: 'assistant',
-    content: ' ',
-    tool_calls: [{ id: 'call-2', type: 'function', function: { name: 'ping', arguments: '{}' } }],
-  }])
+  const result = createToolResultMessage({
+    callId,
+    content: [{ type: 'text', text: '5' }],
+    isError: false,
+  })
+  assert.deepEqual(await validateAndTranslateMessages([assistant, reasoningOnly, result], undefined, undefined, undefined, { preserveThinking: false }), [
+    {
+      role: 'assistant',
+      content: 'I will add the values.',
+      tool_calls: [{
+        id: 'call-1',
+        type: 'function',
+        function: { name: 'add', arguments: '{"a":2,"b":3}' },
+      }],
+    },
+    { role: 'tool', tool_call_id: 'call-1', content: '5' },
+  ])
+})
+
+test('validateAndTranslateMessages tolerates reasoning blocks in user messages', async () => {
+  const userMsg = createUserMessage({
+    content: [
+      { type: 'text', text: 'Context from previous agent:' },
+      { type: 'reasoning', text: 'Injected reasoning block' },
+      { type: 'text', text: 'Please proceed.' },
+    ],
+    source: { kind: 'user' },
+  })
+  assert.deepEqual(await validateAndTranslateMessages([userMsg]), [
+    {
+      role: 'user',
+      content: 'Context from previous agent:Please proceed.',
+    },
+  ])
 })
 
 test('validateAndTranslateMessages inlines user images as ordered OpenAI data URLs', async () => {

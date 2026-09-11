@@ -243,9 +243,15 @@ export async function* parseQoderSse(
                 toolCalls.set(upstreamIndex, state)
               }
               if (rawCall.id !== undefined) {
-                if (typeof rawCall.id !== 'string' || !rawCall.id) throw malformed('Qoder tool call has an invalid id.')
-                if (state.id && state.id !== rawCall.id) throw malformed('Qoder changed a streamed tool-call id.')
-                state.id = rawCall.id
+                if (rawCall.id === '' || rawCall.id === null) {
+                  // Upstream models and gateways often emit empty or null IDs in parameter deltas.
+                  // Tolerate and ignore when an ID is already established, or wait for later chunks.
+                } else if (typeof rawCall.id !== 'string') {
+                  throw malformed('Qoder tool call has an invalid id.')
+                } else {
+                  if (state.id && state.id !== rawCall.id) throw malformed('Qoder changed a streamed tool-call id.')
+                  state.id = rawCall.id
+                }
               }
               if (rawCall.function?.name !== undefined) {
                 const name = rawCall.function.name

@@ -71,7 +71,7 @@ export function validateQoderRequestShape(
 export function translateQoderMessages(
   options: GenerateOptions,
   attachments?: QoderImageAttachments,
-  pipeline?: { uploader?: QoderImageResolver; credentials?: CosyCredentials },
+  pipeline?: { uploader?: QoderImageResolver; credentials?: CosyCredentials; preserveThinking?: boolean },
 ): Promise<QoderWireMessage[]> {
   return validateAndTranslateMessages(
     options.messages,

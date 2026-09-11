@@ -30,6 +30,8 @@ export interface QoderTransportOptions {
   imageUploadTimeoutMs?: number
   /** Lifetime of a remembered center image URL. */
   imageUrlCacheTtlMs?: number
+  /** Whether prior assistant reasoning content is preserved across turns. */
+  preserveThinking?: boolean
 }
 
 export function createQoderTransport(options: QoderTransportOptions): QoderTransport {

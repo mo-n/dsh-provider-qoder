@@ -16,6 +16,7 @@ export interface Config {
   /** @deprecated Migrated to modelsByRegion for the selected region. */
   models?: QoderCatalogModel[]
   streamIdleTimeoutMs?: number
+  preserveThinking?: boolean
 }
 
 const catalogModel: z<QoderCatalogModel> = z.object({
@@ -49,6 +50,7 @@ export const Config: z<Config> = z.object({
   modelsByRegion: modelsByRegionSchema.default({}),
   models: z.array(catalogModel),
   streamIdleTimeoutMs: z.number().step(1).min(1).default(defaultStreamIdleTimeoutMs),
+  preserveThinking: z.boolean().default(true),
 })
 
 export function resolveModels(models: readonly QoderCatalogModel[] | undefined): QoderCatalogModel[] {

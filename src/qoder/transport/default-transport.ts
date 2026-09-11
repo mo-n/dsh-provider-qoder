@@ -40,6 +40,7 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly modelFlights = new SingleFlight<readonly QoderCatalogModel[]>()
   private readonly attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
   private readonly imageUploader: QoderImageUploader
+  private readonly preserveThinking?: boolean
 
   constructor(options: QoderTransportOptions) {
     this.region = options.region
@@ -50,6 +51,7 @@ export class DefaultQoderTransport implements QoderTransport {
     this.responseHeaderTimeoutMs = options.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs
     this.metadataTimeoutMs = options.metadataTimeoutMs
     this.attachments = options.attachments
+    this.preserveThinking = options.preserveThinking
     this.auth = new QoderAuthService({
       fetch: this.fetchImpl,
       logger: this.logger,
@@ -138,6 +140,7 @@ export class DefaultQoderTransport implements QoderTransport {
     const messages = await translateQoderMessages(options, this.attachments, {
       uploader: this.imageUploader,
       credentials,
+      preserveThinking: this.preserveThinking,
     })
     // Image publication may have refreshed a rejected job token.
     const chatCredentials = await this.auth.getCredentials(pat, options.signal)

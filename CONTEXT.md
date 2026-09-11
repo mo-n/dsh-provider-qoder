@@ -91,3 +91,8 @@ _Avoid_: subscription level, billing plan
 **Qoder subscriber status**:
 The operational account standing, security fingerprint linkage, and client feature switches evaluated by Qoder.
 _Avoid_: account state, auth flags
+
+**Qoder reasoning preservation**:
+The provider-level mechanism that retains prior assistant reasoning content and carries it in the wire message `reasoning_content` across multi-turn exchanges.
+_Avoid_: thinking cache, scratchpad replay
+

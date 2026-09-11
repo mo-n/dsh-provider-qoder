@@ -76,9 +76,6 @@ export function validateMessageShapes(messages: readonly Message[]): void {
         continue
       }
       if (block.type === 'reasoning') {
-        if (message.role !== 'assistant') {
-          throw unsupported('Qoder historical reasoning is valid only in assistant messages.')
-        }
         continue
       }
       throw unsupported(`Qoder transport encountered unsupported block type: ${String((block as ContentBlock).type)}`)
@@ -153,7 +150,7 @@ export async function validateAndTranslateMessages(
   systemPrompt?: string,
   attachments?: QoderImageAttachments,
   signal?: AbortSignal,
-  pipeline?: Pick<QoderTranslateContext, 'uploader' | 'credentials'>,
+  pipeline?: Pick<QoderTranslateContext, 'uploader' | 'credentials'> & { preserveThinking?: boolean },
 ): Promise<QoderWireMessage[]> {
   validateMessageShapes(messages)
   const context: QoderTranslateContext = {
@@ -162,6 +159,7 @@ export async function validateAndTranslateMessages(
     uploader: pipeline?.uploader,
     credentials: pipeline?.credentials,
   }
+  const preserveThinking = pipeline?.preserveThinking ?? true
   const output: QoderWireMessage[] = []
 
   if (typeof systemPrompt === 'string' && systemPrompt.trim().length > 0) {
@@ -199,6 +197,7 @@ export async function validateAndTranslateMessages(
     }
 
     let text = ''
+    let reasoningText = ''
     const userContent: Array<QoderWireTextPart | QoderWireImagePart | undefined> = []
     const pendingImages: Array<{ slot: number; block: ImageBlock }> = []
     let hasImage = false
@@ -226,16 +225,19 @@ export async function validateAndTranslateMessages(
         continue
       }
       if (block.type === 'reasoning') {
+        if (message.role === 'assistant') reasoningText += block.text
         continue
       }
     }
 
     if (message.role === 'assistant') {
-      if (!text && toolCalls.length === 0) continue
+      const hasReasoning = preserveThinking && reasoningText.length > 0
+      if (!text && toolCalls.length === 0 && !hasReasoning) continue
       output.push({
         role: 'assistant',
         content: text || ' ',
         ...toolCalls.length === 0 ? {} : { tool_calls: toolCalls },
+        ...hasReasoning ? { reasoning_content: reasoningText } : {},
       })
       continue
     }

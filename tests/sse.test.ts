@@ -109,6 +109,21 @@ test('parseQoderSse normalizes absent tool arguments to an empty object', async 
   })
 })
 
+test('parseQoderSse tolerates subsequent tool-call deltas with empty string or null id', async () => {
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-tolerant', function: { name: 'calc', arguments: '{"x":' } }] } }] }),
+    data({ choices: [{ delta: { tool_calls: [{ index: 0, id: '', function: { arguments: '1' } }] } }] }),
+    data({ choices: [{ delta: { tool_calls: [{ index: 0, id: null, function: { arguments: '0}' } }] } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+    done,
+  ]))) chunks.push(chunk)
+  const blockEnd = chunks.find(chunk => chunk.type === 'block-end')
+  assert.deepEqual(blockEnd?.block, {
+    type: 'tool-call', id: 'call-tolerant', name: 'calc', arguments: '{"x":10}',
+  })
+})
+
 test('parseQoderSse accepts a reasoning-only response', async () => {
   const chunks = []
   for await (const chunk of parseQoderSse(streamOf([

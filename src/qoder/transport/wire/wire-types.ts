@@ -39,6 +39,7 @@ export interface QoderWireMessage {
   content: QoderWireContent | null
   tool_calls?: QoderWireToolCall[]
   tool_call_id?: string
+  reasoning_content?: string
 }
 
 export interface QoderModelConfig {

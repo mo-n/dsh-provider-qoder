@@ -58,6 +58,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     modelsByRegion: { ...config.modelsByRegion },
     ...hasConfiguredModels ? { models: resolveModels(config.models) } : {},
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
+    preserveThinking: config.preserveThinking ?? true,
   }
   let current = (): QoderConfig => baseConfig
   let legacyModelsRegion = initialRegion
@@ -70,6 +71,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
   const createTransport = (
     region: QoderRegion,
     streamIdleTimeoutMs: number,
+    preserveThinking: boolean,
     resolvePat: () => Promise<string> = () => resolveManagedQoderPat(ctx.credentials),
   ): QoderTransport => createQoderTransport({
     region,
@@ -77,6 +79,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     logger,
     streamIdleTimeoutMs,
     attachments: ctx.attachments,
+    preserveThinking,
   })
 
   const resolveConfig = () => {
@@ -89,14 +92,16 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
         discoveredCatalogs[region],
       ),
       streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
+      preserveThinking: value.preserveThinking ?? true,
     }
   }
 
   const initial = resolveConfig()
-  let activeTransport = createTransport(initial.region, initial.streamIdleTimeoutMs)
+  let activeTransport = createTransport(initial.region, initial.streamIdleTimeoutMs, initial.preserveThinking)
   let activeTransportConfig = {
     region: initial.region,
     streamIdleTimeoutMs: initial.streamIdleTimeoutMs,
+    preserveThinking: initial.preserveThinking,
   }
   const adapter = new QoderAdapter({
     resolveTransport: () => activeTransport,
@@ -109,11 +114,13 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
   const refreshAdapter = (): void => {
     const next = resolveConfig()
     if (next.region !== activeTransportConfig.region
-      || next.streamIdleTimeoutMs !== activeTransportConfig.streamIdleTimeoutMs) {
-      activeTransport = createTransport(next.region, next.streamIdleTimeoutMs)
+      || next.streamIdleTimeoutMs !== activeTransportConfig.streamIdleTimeoutMs
+      || next.preserveThinking !== activeTransportConfig.preserveThinking) {
+      activeTransport = createTransport(next.region, next.streamIdleTimeoutMs, next.preserveThinking)
       activeTransportConfig = {
         region: next.region,
         streamIdleTimeoutMs: next.streamIdleTimeoutMs,
+        preserveThinking: next.preserveThinking,
       }
     }
     adapter.replaceModels(next.models)
@@ -181,7 +188,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     const snapshot = resolveConfig()
     const normalizedPat = suppliedPat?.trim()
     const transport = normalizedPat
-      ? createTransport(snapshot.region, snapshot.streamIdleTimeoutMs, () => Promise.resolve(normalizedPat))
+      ? createTransport(snapshot.region, snapshot.streamIdleTimeoutMs, snapshot.preserveThinking, () => Promise.resolve(normalizedPat))
       : activeTransport
     const models = await transport.discoverModels(signal)
     discoveredCatalogs[snapshot.region] = models
