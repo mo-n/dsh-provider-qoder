@@ -253,11 +253,21 @@ export async function* parseQoderSse(
                   state.id = rawCall.id
                 }
               }
+              let hasNewName = false
               if (rawCall.function?.name !== undefined) {
                 const name = rawCall.function.name
-                if (typeof name !== 'string' || !name) throw malformed('Qoder tool call has an invalid name.')
-                if (state.name && state.name !== name) throw malformed('Qoder changed a streamed tool-call name.')
-                state.name = name
+                if (name === '' || name === null) {
+                  // Upstream models and gateways often emit empty or null names in parameter deltas.
+                  // Tolerate and ignore when a name is already established, or wait for later chunks.
+                } else if (typeof name !== 'string') {
+                  throw malformed('Qoder tool call has an invalid name.')
+                } else {
+                  if (state.name && state.name !== name) throw malformed('Qoder changed a streamed tool-call name.')
+                  if (state.name !== name) {
+                    state.name = name
+                    hasNewName = true
+                  }
+                }
               }
               if (rawCall.function?.arguments !== undefined) {
                 if (typeof rawCall.function.arguments !== 'string') {
@@ -278,7 +288,7 @@ export async function* parseQoderSse(
                   ...state.name ? { name: state.name } : {},
                   argumentsDelta,
                 }
-              } else if (wasOpen && state.blockIndex !== undefined && rawCall.function?.name !== undefined) {
+              } else if (wasOpen && state.blockIndex !== undefined && hasNewName) {
                 yield {
                   type: 'tool-call-delta',
                   index: state.blockIndex,

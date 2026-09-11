@@ -124,6 +124,21 @@ test('parseQoderSse tolerates subsequent tool-call deltas with empty string or n
   })
 })
 
+test('parseQoderSse tolerates subsequent tool-call deltas with empty string or null name', async () => {
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-tolerant-name', function: { name: 'calc', arguments: '{"x":' } }] } }] }),
+    data({ choices: [{ delta: { tool_calls: [{ index: 0, id: '', function: { name: '', arguments: '1' } }] } }] }),
+    data({ choices: [{ delta: { tool_calls: [{ index: 0, id: null, function: { name: null, arguments: '0}' } }] } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+    done,
+  ]))) chunks.push(chunk)
+  const blockEnd = chunks.find(chunk => chunk.type === 'block-end')
+  assert.deepEqual(blockEnd?.block, {
+    type: 'tool-call', id: 'call-tolerant-name', name: 'calc', arguments: '{"x":10}',
+  })
+})
+
 test('parseQoderSse accepts a reasoning-only response', async () => {
   const chunks = []
   for await (const chunk of parseQoderSse(streamOf([
