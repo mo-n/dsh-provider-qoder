@@ -2,3 +2,8 @@
 - insert:
     - id: qoder-subscription
       name: 'dsh-provider-qoder'
+
+- id: web
+  config:
+    searchProvider: qoder
+

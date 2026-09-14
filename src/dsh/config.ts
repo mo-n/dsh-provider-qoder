@@ -10,6 +10,8 @@ export interface QoderModelsByRegion {
   china?: QoderCatalogModel[]
 }
 
+export type QoderWebSearchMode = 'auto' | 'always' | 'disabled'
+
 export interface Config {
   region?: QoderRegion
   modelsByRegion?: QoderModelsByRegion
@@ -17,6 +19,7 @@ export interface Config {
   models?: QoderCatalogModel[]
   streamIdleTimeoutMs?: number
   preserveThinking?: boolean
+  webSearchMode?: QoderWebSearchMode
 }
 
 const catalogModel: z<QoderCatalogModel> = z.object({
@@ -51,6 +54,7 @@ export const Config: z<Config> = z.object({
   models: z.array(catalogModel),
   streamIdleTimeoutMs: z.number().step(1).min(1).default(defaultStreamIdleTimeoutMs),
   preserveThinking: z.boolean().default(true),
+  webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
 })
 
 export function resolveModels(models: readonly QoderCatalogModel[] | undefined): QoderCatalogModel[] {

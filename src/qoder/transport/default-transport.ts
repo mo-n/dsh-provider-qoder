@@ -17,6 +17,8 @@ import {
 import { translateQoderMessages, validateQoderRequestShape } from './wire/serialize.ts'
 import { QoderImageUploader } from './image-upload.ts'
 import { QoderUsageReader } from './account-reader.ts'
+import { QoderSearchClient } from './search.ts'
+import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 import type { QoderAccountInfo } from '../account.ts'
 import type { QoderTransport, QoderTransportOptions } from './index.ts'
 import { streamQoderChat } from './chat.ts'
@@ -40,6 +42,7 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly modelFlights = new SingleFlight<readonly QoderCatalogModel[]>()
   private readonly attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
   private readonly imageUploader: QoderImageUploader
+  private readonly searchClient: QoderSearchClient
   private readonly preserveThinking?: boolean
 
   constructor(options: QoderTransportOptions) {
@@ -71,6 +74,20 @@ export class DefaultQoderTransport implements QoderTransport {
       region: this.region,
       ...options.imageUploadTimeoutMs === undefined ? {} : { timeoutMs: options.imageUploadTimeoutMs },
       ...options.imageUrlCacheTtlMs === undefined ? {} : { cacheTtlMs: options.imageUrlCacheTtlMs },
+      refreshCredentials: async (signal) => {
+        const pat = await this.requirePat(signal)
+        this.auth.clear(pat)
+        return this.auth.getCredentials(pat, signal)
+      },
+    })
+    this.searchClient = new QoderSearchClient({
+      fetch: this.fetchImpl,
+      logger: this.logger,
+      region: this.region,
+      resolveCredentials: async (signal) => {
+        const pat = await this.requirePat(signal)
+        return this.auth.getCredentials(pat, signal)
+      },
       refreshCredentials: async (signal) => {
         const pat = await this.requirePat(signal)
         this.auth.clear(pat)
@@ -109,6 +126,10 @@ export class DefaultQoderTransport implements QoderTransport {
       force: options?.force,
       signal: options?.signal,
     })
+  }
+
+  async searchWeb(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
+    return this.searchClient.search(request, signal)
   }
 
   private async requirePat(signal?: AbortSignal): Promise<string> {

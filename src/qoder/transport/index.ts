@@ -8,12 +8,15 @@ import type { QoderRegion } from '../region.ts'
 import { DefaultQoderTransport, defaultStreamIdleTimeoutMs } from './default-transport.ts'
 import type { QoderLogger } from './logging.ts'
 
+import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
+
 export { defaultStreamIdleTimeoutMs }
 
 export interface QoderTransport {
   stream(options: GenerateOptions, model?: QoderCatalogModel): AsyncIterable<StreamChunk>
   discoverModels(signal?: AbortSignal): Promise<readonly QoderCatalogModel[]>
   readAccount(options?: { force?: boolean; signal?: AbortSignal }): Promise<QoderAccountInfo>
+  searchWeb(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>
 }
 
 export interface QoderTransportOptions {
@@ -37,3 +40,8 @@ export interface QoderTransportOptions {
 export function createQoderTransport(options: QoderTransportOptions): QoderTransport {
   return new DefaultQoderTransport(options)
 }
+
+export { QoderSearchClient, defaultSearchTimeoutMs } from './search.ts'
+export type { QoderSearchClientOptions } from './search.ts'
+export { getQoderWebSearchUrl, qoderWebSearchPath } from './endpoints.ts'
+

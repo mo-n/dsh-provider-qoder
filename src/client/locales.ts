@@ -53,6 +53,11 @@ export const zh = {
   planExpiresAt: '有效期至：{value}',
   organization: '组织：{name}',
   accountSuspended: '当前账号或组织已被暂停/冻结。',
+  searchModeLabel: '联网搜索模式',
+  searchModeAuto: '智能路由 (自动)',
+  searchModeAlways: '始终使用 Qoder',
+  searchModeDisabled: '禁用',
+  searchModeHint: '智能路由模式下，使用 Qoder 模型时走 Qoder 搜索，使用其他模型时自动回退给备用搜索。',
 }
 
 export const en: typeof zh = {
@@ -110,6 +115,11 @@ export const en: typeof zh = {
   planExpiresAt: 'Expires at: {value}',
   organization: 'Org: {name}',
   accountSuspended: 'Account or organization is currently suspended.',
+  searchModeLabel: 'Web Search Mode',
+  searchModeAuto: 'Smart Routing (Auto)',
+  searchModeAlways: 'Always use Qoder',
+  searchModeDisabled: 'Disabled',
+  searchModeHint: 'In auto mode, searches route to Qoder when using Qoder models, and fall back to ambient providers otherwise.',
 }
 
 

@@ -96,3 +96,15 @@ _Avoid_: account state, auth flags
 The provider-level mechanism that retains prior assistant reasoning content and carries it in the wire message `reasoning_content` across multi-turn exchanges.
 _Avoid_: thinking cache, scratchpad replay
 
+**Qoder web search**:
+The provider-side web discovery capability that executes queries against the Qoder center service's search route authorized by the subscriber's COSY credentials.
+_Avoid_: external search, Google search, crawler
+
+**Qoder search route**:
+The center-hosted API path (`/api/v1/webSearch/oneSearch`) that accepts query parameters and emits structured search results across service regions.
+_Avoid_: unifiedSearch, search proxy
+
+**Initiator-aware search routing**:
+The provider-level mechanism that inspects the initiating agent's active model provider and routes queries to Qoder when a Qoder model is active, delegating to an ambient search provider otherwise.
+_Avoid_: static search provider, fixed search binding
+

@@ -1,6 +1,7 @@
 import type { QoderAccountInfo } from '../qoder/account.ts'
 import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
+import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 
 export interface QoderCredentialOperations {
@@ -12,6 +13,7 @@ export interface QoderCredentialOperations {
   subscribeModels(listener: () => void): () => void
   storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<boolean>
   storeRegion(region: QoderRegion): Promise<boolean>
+  storeWebSearchMode(mode: QoderWebSearchMode): Promise<boolean>
   discoverModels(): Promise<QoderModelDiscoveryResult>
   subscribe(listener: () => void): () => void
 }
@@ -21,6 +23,7 @@ export interface QoderModelSettingsSection {
   modelsByRegion?: Partial<Record<QoderRegion, QoderCatalogModel[]>>
   /** @deprecated Migrated to modelsByRegion. */
   models?: QoderCatalogModel[]
+  webSearchMode?: QoderWebSearchMode
 }
 
 

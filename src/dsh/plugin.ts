@@ -3,9 +3,11 @@
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
+import type {} from '@deepseek-ai/dsh-web'
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
+import { QoderSearchProvider } from './search-provider.ts'
 import {
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
@@ -59,6 +61,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     ...hasConfiguredModels ? { models: resolveModels(config.models) } : {},
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
     preserveThinking: config.preserveThinking ?? true,
+    webSearchMode: config.webSearchMode ?? 'auto',
   }
   let current = (): QoderConfig => baseConfig
   let legacyModelsRegion = initialRegion
@@ -93,6 +96,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
       ),
       streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
       preserveThinking: value.preserveThinking ?? true,
+      webSearchMode: value.webSearchMode ?? 'auto',
     }
   }
 
@@ -245,4 +249,44 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
       )
     })
   }
+
+  ctx.inject(['web'], (webCtx) => {
+    const searchProvider = new QoderSearchProvider({
+      ctx,
+      resolveTransport: () => activeTransport,
+      getWebSearchMode: () => resolveConfig().webSearchMode ?? 'auto',
+    })
+    webCtx.web.registerSearchProvider(searchProvider)
+
+    // Transparent interceptor: ensure that when a Qoder model is active,
+    // ctx.web.search always routes to Qoder even if the host profile configured
+    // a different fixed searchProvider (e.g. deepseek-official).
+    if (typeof webCtx.web.search === 'function') {
+      const originalSearch = webCtx.web.search.bind(webCtx.web)
+      webCtx.effect(() => {
+        webCtx.web.search = async (request, signal) => {
+          const mode = resolveConfig().webSearchMode ?? 'auto'
+          if (mode === 'disabled') {
+            return originalSearch(request, signal)
+          }
+
+          const agentsService = ctx.get('agents')
+            ?? (ctx as unknown as { agents?: { currentInitiator?: () => { options?: { provider?: string } } } }).agents
+          const agent = agentsService?.currentInitiator?.()
+          const defaultModelService = ctx.get('agentDefaultModel') as unknown as { get?: () => { provider?: string } }
+          const providerRoute = agent?.options?.provider ?? defaultModelService?.get?.()?.provider
+          const isQoderActive = providerRoute === providerQoder
+
+          if (mode === 'always' || isQoderActive) {
+            return searchProvider.search(request, signal)
+          }
+
+          return originalSearch(request, signal)
+        }
+        return () => {
+          webCtx.web.search = originalSearch
+        }
+      }, 'provider-qoder: transparent web search router')
+    }
+  })
 }

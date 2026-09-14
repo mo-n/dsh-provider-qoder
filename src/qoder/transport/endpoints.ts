@@ -75,3 +75,12 @@ export function getQoderUserStatusUrl(region: QoderRegion = 'global'): string {
   const { openApiUrl } = resolveQoderEndpoints(region)
   return `${openApiUrl}/api/v3/user/status`
 }
+
+/** Path of the center web search route. */
+export const qoderWebSearchPath = '/api/v1/webSearch/oneSearch'
+
+export function getQoderWebSearchUrl(region: QoderRegion = 'global'): string {
+  const { centerUrl } = resolveQoderEndpoints(region)
+  return `${centerUrl.replace(/\/+$/u, '')}/algo${qoderWebSearchPath}?Encode=1`
+}
+

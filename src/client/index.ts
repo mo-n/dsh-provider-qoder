@@ -137,6 +137,14 @@ export function apply(ctx: ClientContext): void {
         return false
       }
     },
+    storeWebSearchMode: async (mode) => {
+      try {
+        await modelScope.set('webSearchMode', mode)
+        return true
+      } catch {
+        return false
+      }
+    },
     discoverModels: async () => {
       try {
         const response = await connection.rpc.call(qoderChannel, 'models', {})

@@ -242,3 +242,66 @@ test('apply safely handles connection RPC when webServer is absent or present', 
   await ctx.fiber.await()
   assert.equal(registeredChannel, '/qoder-subscription')
 })
+
+test('apply registers QoderSearchProvider with ctx.web when web service is provided', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  ctx.provide('connection', { rpc: { handle: () => () => {} } } as any)
+  ctx.provide('attachments', {} as any)
+
+  let registeredSearchProvider: { id: string } | undefined
+  const fakeWeb = {
+    registerSearchProvider: (provider: { id: string }) => {
+      registeredSearchProvider = provider
+      return () => {}
+    },
+  }
+  ctx.provide('web', fakeWeb as any)
+
+  plugin.apply(ctx, { webSearchMode: 'auto' })
+  await ctx.fiber.await()
+
+  assert.ok(registeredSearchProvider)
+  assert.equal(registeredSearchProvider.id, 'qoder')
+})
+
+test('apply transparently routes web.search to Qoder when Qoder model is active', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  ctx.provide('connection', { rpc: { handle: () => () => {} } } as any)
+  ctx.provide('attachments', {} as any)
+
+  let originalSearchCalled = false
+  const fakeWeb = {
+    searchProviders: new Map(),
+    registerSearchProvider: () => () => {},
+    search: async () => {
+      originalSearchCalled = true
+      return { sources: [{ url: 'https://fallback.com' }], truncated: false }
+    },
+  }
+  ctx.provide('web', fakeWeb as any)
+
+  ;(ctx as unknown as Record<string, unknown>).agents = {
+    currentInitiator: () => ({
+      options: { provider: 'qoder-official' },
+    }),
+  }
+
+  plugin.apply(ctx, { webSearchMode: 'auto' })
+  await ctx.fiber.await()
+
+  await assert.rejects(
+    () => ctx.web.search({ query: 'hello' }),
+    (err: unknown) => {
+      assert.equal(originalSearchCalled, false)
+      return true
+    },
+  )
+})
+
+

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
 import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
+import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderCredentialInjected, QoderCredentialStatus } from './credential-operations.ts'
 import css from './QoderCredentialCard.module.css'
 
@@ -36,6 +37,11 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
   const [refreshing, setRefreshing] = useState(false)
   const [credentialRevision, setCredentialRevision] = useState(0)
   const latestAccountRequest = useRef(0)
+  const modelSnapshot = useSyncExternalStore(
+    operations.subscribeModels,
+    operations.getModelSnapshot,
+    operations.getModelSnapshot,
+  )
 
   const loadCredential = useCallback(async () => {
     const info = await operations.describe()
@@ -198,6 +204,57 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
     )
   }
 
+  const webSearchMode: QoderWebSearchMode = modelSnapshot.value?.webSearchMode ?? 'auto'
+  const canModifySearchMode = modelSnapshot.status === 'ready' && modelSnapshot.writable
+
+  const handleSearchModeChange = async (mode: QoderWebSearchMode) => {
+    if (!canModifySearchMode || mode === webSearchMode) return
+    await operations.storeWebSearchMode(mode)
+  }
+
+  const renderWebSearchSection = () => {
+    return (
+      <div className={css.searchModeSection}>
+        <div className={css.quotaHeader}>
+          <span className={css.quotaLabel}>{t('searchModeLabel')}</span>
+        </div>
+        <div className={css.regionGroup} role="radiogroup" aria-label={t('searchModeLabel')}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={webSearchMode === 'auto'}
+            className={`${css.regionOption} ${webSearchMode === 'auto' ? css.regionOptionActive : ''}`}
+            disabled={!canModifySearchMode}
+            onClick={() => { void handleSearchModeChange('auto') }}
+          >
+            {t('searchModeAuto')}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={webSearchMode === 'always'}
+            className={`${css.regionOption} ${webSearchMode === 'always' ? css.regionOptionActive : ''}`}
+            disabled={!canModifySearchMode}
+            onClick={() => { void handleSearchModeChange('always') }}
+          >
+            {t('searchModeAlways')}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={webSearchMode === 'disabled'}
+            className={`${css.regionOption} ${webSearchMode === 'disabled' ? css.regionOptionActive : ''}`}
+            disabled={!canModifySearchMode}
+            onClick={() => { void handleSearchModeChange('disabled') }}
+          >
+            {t('searchModeDisabled')}
+          </button>
+        </div>
+        <p className={css.searchModeHintText}>{t('searchModeHint')}</p>
+      </div>
+    )
+  }
+
   return (
     <section className={css.credential} aria-label={t('accountTitle')}>
       <div className={css.head}>
@@ -207,6 +264,7 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
         </span>
       </div>
       {renderAccount()}
+      {renderWebSearchSection()}
     </section>
   )
 }
