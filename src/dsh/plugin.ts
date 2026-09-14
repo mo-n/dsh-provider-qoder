@@ -238,9 +238,11 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
       }
     }
 
-    ctx.effect(
-      () => ctx.connection.rpc.handle(qoderChannel, handler),
-      'provider-qoder: loopback account RPC',
-    )
+    ctx.inject(['webServer'], (webCtx) => {
+      webCtx.effect(
+        () => webCtx.connection.rpc.handle(qoderChannel, handler),
+        'provider-qoder: loopback account RPC',
+      )
+    })
   }
 }

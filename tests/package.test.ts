@@ -205,3 +205,40 @@ test('apply succeeds with default Config schema and empty models array', async (
   assert.ok(fallbackModels.length > 0)
   assert.ok(fallbackModels.some(model => model.id === 'cmodel'))
 })
+
+test('apply safely handles connection RPC when webServer is absent or present', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+
+  let registeredChannel: string | undefined
+  const fakeConnection = {
+    rpc: {
+      handle: (channel: string) => {
+        registeredChannel = channel
+        return () => {}
+      },
+    },
+  }
+  ctx.provide('connection', fakeConnection)
+  ctx.provide('attachments', {} as any)
+
+  const fiber = ctx.plugin({
+    name: plugin.name,
+    inject: plugin.inject,
+    apply: plugin.apply,
+  }, {})
+  await fiber.await()
+
+  // Without webServer provided, plugin loads cleanly without injecting webServer
+  assert.equal(registeredChannel, undefined)
+
+  // Once webServer is provided, the webServer-injected effect runs and registers the RPC
+  const fakeWebServer = {
+    register: () => () => {},
+  }
+  ctx.provide('webServer', fakeWebServer)
+  await ctx.fiber.await()
+  assert.equal(registeredChannel, '/qoder-subscription')
+})
