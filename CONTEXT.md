@@ -4,6 +4,14 @@ This context describes how a Qoder subscription is made available to users throu
 
 ## Language
 
+**Qoder provider identity**:
+The identity by which DSH selects this third-party integration with a Qoder subscription; it does not imply that Qoder publishes or endorses the plugin.
+_Avoid_: official Qoder plugin identity
+
+**Legacy Qoder provider alias**:
+A previously published Qoder provider identity accepted for compatibility with existing model selections and callers, without being offered for new selections.
+_Avoid_: second Qoder provider, official provider
+
 **Qoder subscription**:
 A user's existing Qoder entitlement that permits access to Qoder-hosted language models.
 _Avoid_: Qoder API key, generic model subscription
@@ -115,4 +123,3 @@ _Avoid_: remote API client, quota webhook, HTTP proxy
 **Qoder settings RPC error code**:
 A standardized diagnostic identifier (`NO_CREDENTIALS`, `UNAUTHENTICATED`, `UPSTREAM_ERROR`, `TIMEOUT`, `ABORTED`, `UNKNOWN_ENDPOINT`, or `INTERNAL`) carried in a settings RPC failure envelope to drive UI state without inspecting free-form message strings.
 _Avoid_: HTTP status mapping, ad-hoc string matching
-

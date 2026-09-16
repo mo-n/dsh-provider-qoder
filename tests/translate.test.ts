@@ -38,7 +38,7 @@ test('request preserves the discovered default tier and does not send ambiguous 
       thinking_config: { disabled: { is_default: true } },
     }] })
     const body = await buildQoderRequestBody({
-      provider: 'qoder-official', model: 'model',
+      provider: 'dsh-provider-qoder', model: 'model',
       messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
     }, 'user-test', undefined, model)
     assert.equal(body.model_config.is_reasoning, false)
@@ -89,7 +89,7 @@ test('validateAndTranslateMessages processes DSH text history', async () => {
     createAssistantMessage({
       content: [{ type: 'text', text: 'Hi there!' }],
       source: {
-        provider: 'qoder-official',
+        provider: 'dsh-provider-qoder',
         model: 'cmodel',
       },
     }),
@@ -109,7 +109,7 @@ test('validateAndTranslateMessages preserves assistant reasoning across turns by
       { type: 'text', text: 'I will add the values.' },
       { type: 'tool-call', id: callId, name: 'add', arguments: '{"a":2,"b":3}' },
     ],
-    source: { provider: 'qoder-official', model: 'cmodel' },
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
   })
   const result = createToolResultMessage({
     callId,
@@ -135,11 +135,11 @@ test('validateAndTranslateMessages preserves pure-reasoning assistant messages b
   const callId = ToolCallId('call-2')
   const toolOnly = createAssistantMessage({
     content: [{ type: 'tool-call', id: callId, name: 'ping', arguments: '{}' }],
-    source: { provider: 'qoder-official', model: 'cmodel' },
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
   })
   const reasoningOnly = createAssistantMessage({
     content: [{ type: 'reasoning', text: 'deep thinking' }],
-    source: { provider: 'qoder-official', model: 'cmodel' },
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
   })
   assert.deepEqual(await validateAndTranslateMessages([toolOnly, reasoningOnly]), [
     {
@@ -163,11 +163,11 @@ test('validateAndTranslateMessages drops reasoning when preserveThinking is fals
       { type: 'text', text: 'I will add the values.' },
       { type: 'tool-call', id: callId, name: 'add', arguments: '{"a":2,"b":3}' },
     ],
-    source: { provider: 'qoder-official', model: 'cmodel' },
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
   })
   const reasoningOnly = createAssistantMessage({
     content: [{ type: 'reasoning', text: 'transient' }],
-    source: { provider: 'qoder-official', model: 'cmodel' },
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
   })
   const result = createToolResultMessage({
     callId,
@@ -248,7 +248,7 @@ test('validateAndTranslateMessages rejects assistant images and non-image tool-r
   const invalidMessages = [
     createAssistantMessage({
       content: [{ type: 'image' } as never],
-      source: { provider: 'qoder-official', model: 'cmodel' },
+      source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
     }),
     createToolResultMessage({ callId: ToolCallId('call-invalid'), content: [{ type: 'reasoning', text: 'no' }], isError: false }),
   ]
@@ -263,7 +263,7 @@ test('validateAndTranslateMessages rejects assistant images and non-image tool-r
 
 test('buildQoderRequestBody uses the resolved identity and configured model', async () => {
   const options = {
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'custom-model',
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Ping' }], source: { kind: 'user' } })],
     maxTokens: 4096,
@@ -278,7 +278,7 @@ test('buildQoderRequestBody uses the resolved identity and configured model', as
 
 test('buildQoderRequestBody applies discovered Qoder transport metadata', async () => {
   const options = {
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'reasoner',
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Think' }], source: { kind: 'user' } })],
     maxTokens: 32_000,
@@ -303,7 +303,7 @@ test('buildQoderRequestBody applies discovered Qoder transport metadata', async 
 test('buildQoderRequestBody sends DSH tool declarations', async () => {
   const messages: Message[] = [createUserMessage({ content: [{ type: 'text', text: 'Hi' }], source: { kind: 'user' } })]
   const body = await buildQoderRequestBody({
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'cmodel',
     messages,
     tools: [{ name: 'tool', description: 'tool', parameters: {} }],
@@ -317,7 +317,7 @@ test('buildQoderRequestBody sends DSH tool declarations', async () => {
 
 test('buildQoderRequestBody preserves text metadata while inlining image content', async () => {
   const options = {
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'vision',
     messages: [createUserMessage({
       content: [{ type: 'text', text: 'Inspect this' }, { type: 'image', attachment: imageRef }],
@@ -347,7 +347,7 @@ test('buildQoderRequestBody preserves text metadata while inlining image content
 
 test('buildQoderRequestBody accepts only advertised reasoning efforts', async () => {
   const options = {
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'reasoner',
     reasoningEffort: ReasoningEffortId('high'),
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Think' }], source: { kind: 'user' } })],
@@ -506,7 +506,7 @@ test('validateAndTranslateMessages rejects a batch that exceeds the image policy
 test('validateQoderRequestShape rejects images for a non-vision model with no I/O', () => {
   let reads = 0
   const options = {
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'text-only',
     messages: [createUserMessage({
       content: [{ type: 'image', attachment: imageRef }],

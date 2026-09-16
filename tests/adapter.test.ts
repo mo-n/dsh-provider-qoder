@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUserMessage, LlmAdapter, LlmError, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
+import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { createQoderTransport, type QoderTransportOptions } from '../src/qoder/transport/index.ts'
@@ -25,7 +26,7 @@ function testAdapter(options: TestAdapterOptions): QoderAdapter {
 
 function request(signal?: AbortSignal): GenerateOptions {
   return {
-    provider: 'qoder-official',
+    provider: QODER_PROVIDER_ID,
     model: 'cmodel',
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
     signal,
@@ -52,9 +53,9 @@ function successfulFetch(assertChat?: (init?: RequestInit) => void): typeof fetc
 test('QoderAdapter implements the real DSH adapter and model contracts', async () => {
   const adapter = testAdapter({ resolvePat: () => Promise.resolve('pt-token'), fetch: successfulFetch() })
   assert.ok(adapter instanceof LlmAdapter)
-  assert.equal(adapter.providerRetryPolicy('qoder-official'), undefined)
-  assert.equal(adapter.providerInfo('qoder-official').id, 'qoder-official')
-  const models = await adapter.listModels('qoder-official')
+  assert.equal(adapter.providerRetryPolicy(QODER_PROVIDER_ID), undefined)
+  assert.equal(adapter.providerInfo(QODER_PROVIDER_ID).id, QODER_PROVIDER_ID)
+  const models = await adapter.listModels(QODER_PROVIDER_ID)
   const modelIds = models.map(model => model.id)
   assert.ok(modelIds.length > 1)
   assert.ok(modelIds.includes('cmodel'))
@@ -62,7 +63,7 @@ test('QoderAdapter implements the real DSH adapter and model contracts', async (
   assert.ok(modelIds.includes('ultimate'))
   assert.deepEqual(models.find(model => model.id === 'cmodel')?.inputModalities, ['text', 'image'])
   assert.deepEqual(models.find(model => model.id === 'lite')?.inputModalities, ['text'])
-  assert.equal((await adapter.resolveModel('qoder-official', 'custom')).id, 'custom')
+  assert.equal((await adapter.resolveModel(QODER_PROVIDER_ID, 'custom')).id, 'custom')
 })
 
 test('QoderAdapter resolves the PAT through its configured credential boundary', async () => {
@@ -118,7 +119,7 @@ test('QoderAdapter replaces its live model catalog and transport source', async 
     fetch: successfulFetch((init) => { source = (init?.headers as Record<string, string>)['x-model-source'] }),
   })
   adapter.replaceModels([{ id: 'live', name: 'Live', source: 'subscriber', maxTokens: 2048 }])
-  assert.deepEqual((await adapter.listModels('qoder-official')).map(model => model.id), ['live'])
+  assert.deepEqual((await adapter.listModels(QODER_PROVIDER_ID)).map(model => model.id), ['live'])
   const options = request()
   options.model = 'live'
   for await (const _chunk of adapter.stream(options)) continue
@@ -139,7 +140,7 @@ test('QoderAdapter resolves only explicitly advertised reasoning efforts', async
     }],
     fetch: successfulFetch(),
   })
-  const resolved = await adapter.resolveModel('qoder-official', 'reasoner')
+  const resolved = await adapter.resolveModel(QODER_PROVIDER_ID, 'reasoner')
   assert.deepEqual(resolved.reasoning, {
     efforts: [
       { id: 'low', name: 'low' },
@@ -160,12 +161,12 @@ test('QoderAdapter appends the advertised price factor to model display names', 
     fetch: successfulFetch(),
   })
 
-  assert.deepEqual((await adapter.listModels('qoder-official')).map(model => model.name), [
+  assert.deepEqual((await adapter.listModels(QODER_PROVIDER_ID)).map(model => model.name), [
     'Priced （1.6x）',
     'Free （0x）',
     'Plain',
   ])
-  assert.equal((await adapter.resolveModel('qoder-official', 'priced')).name, 'Priced （1.6x）')
+  assert.equal((await adapter.resolveModel(QODER_PROVIDER_ID, 'priced')).name, 'Priced （1.6x）')
 })
 
 test('disabled reasoning does not expose an effort default that DSH would automatically select', async () => {
@@ -177,7 +178,7 @@ test('disabled reasoning does not expose an effort default that DSH would automa
     }],
     fetch: successfulFetch(),
   })
-  const resolved = await adapter.resolveModel('qoder-official', 'reasoner')
+  const resolved = await adapter.resolveModel(QODER_PROVIDER_ID, 'reasoner')
   assert.deepEqual(resolved.reasoning, { efforts: [{ id: 'high', name: 'high' }] })
 })
 

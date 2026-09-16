@@ -10,6 +10,7 @@ import {
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 
@@ -45,7 +46,7 @@ export class QoderAdapter extends LlmAdapter {
     super()
     this.resolveTransport = options.resolveTransport
     this.catalogModels = options.models && options.models.length > 0 ? options.models : defaultModels
-    this.providerId = options.providerId ?? 'qoder-official'
+    this.providerId = options.providerId ?? QODER_PROVIDER_ID
     this.providerName = options.providerName ?? 'Qoder'
   }
 

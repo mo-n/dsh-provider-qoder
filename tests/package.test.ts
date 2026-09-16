@@ -14,6 +14,7 @@ import type {
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
+import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 
 class MemorySettings extends SettingsProvider {
   readonly writable = true
@@ -89,14 +90,14 @@ test('apply registers a valid adapter with the real DSH runtime', async () => {
   await ctx.plugin(MemorySettings).await()
   plugin.apply(ctx, {})
   assert.equal(
-    ctx.llm.listConfigurableProviders().some(provider => provider.provider === 'qoder-official'),
+    ctx.llm.listConfigurableProviders().some(provider => provider.provider === QODER_PROVIDER_ID),
     false,
   )
-  const models = await ctx.llm.listModels('qoder-official')
+  const models = await ctx.llm.listModels(QODER_PROVIDER_ID)
   assert.ok(models.length > 1)
   assert.ok(models.some(model => model.id === 'cmodel'))
   assert.ok(models.some(model => model.id === 'auto'))
-  assert.deepEqual(ctx.llm.providerRetryPolicy('qoder-official'), {
+  assert.deepEqual(ctx.llm.providerRetryPolicy(QODER_PROVIDER_ID), {
     mode: 'normal',
     maxRetries: 5,
     retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
@@ -108,24 +109,26 @@ test('apply registers a valid adapter with the real DSH runtime', async () => {
     modelsByRegion: { global: [{ id: 'custom-qoder', name: 'Custom Qoder' }] },
   })
   assert.deepEqual(
-    (await ctx.llm.listModels('qoder-official')).map(model => model.id),
+    (await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id),
     ['custom-qoder'],
   )
   await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'china' })
-  assert.ok((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'cmodel'))
-  assert.equal((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'custom-qoder'), false)
+  assert.ok((await ctx.llm.listModels(QODER_PROVIDER_ID)).some(model => model.id === 'cmodel'))
+  assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID)).some(model => model.id === 'custom-qoder'), false)
   await ctx.settings.update('provider-qoder' as SettingsNamespace, {
     modelsByRegion: {
       global: [{ id: 'custom-qoder', name: 'Custom Qoder' }],
       china: [{ id: 'china-qoder', name: 'China Qoder' }],
     },
   })
-  assert.deepEqual((await ctx.llm.listModels('qoder-official')).map(model => model.id), ['china-qoder'])
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), ['china-qoder'])
   await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'global' })
-  assert.deepEqual((await ctx.llm.listModels('qoder-official')).map(model => model.id), ['custom-qoder'])
-  const prepared = await ctx.llm.prepareCall({ provider: 'qoder-official', model: 'cmodel' })
-  assert.equal(prepared.config.provider, 'qoder-official')
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), ['custom-qoder'])
+  const prepared = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'cmodel' })
+  assert.equal(prepared.config.provider, QODER_PROVIDER_ID)
   assert.equal(prepared.config.model, 'cmodel')
+  assert.deepEqual(ctx.llm.listProviders().map(provider => provider.id), [QODER_PROVIDER_ID])
+
 })
 
 test('legacy model configuration is scoped to its selected region', async () => {
@@ -138,21 +141,22 @@ test('legacy model configuration is scoped to its selected region', async () => 
     models: [{ id: 'legacy-china', name: 'Legacy China' }],
   })
 
-  assert.deepEqual((await ctx.llm.listModels('qoder-official')).map(model => model.id), ['legacy-china'])
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), ['legacy-china'])
   await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'global' })
-  assert.ok((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'cmodel'))
-  assert.equal((await ctx.llm.listModels('qoder-official')).some(model => model.id === 'legacy-china'), false)
+  assert.ok((await ctx.llm.listModels(QODER_PROVIDER_ID)).some(model => model.id === 'cmodel'))
+  assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID)).some(model => model.id === 'legacy-china'), false)
 })
 
 test('discovery reconciles runtime and stored budgets and a failed discovery preserves them', async (t) => {
   let empty = false
+  let supportsImages = false
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-test', expires_in: 3_600_000 }))
     if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-test' }))
     assert.ok(url.includes('/model/list'))
     return new Response(JSON.stringify({ assistant: empty ? [] : ['large', 'small'].map(key => ({
-      key, enable: true, is_reasoning: true,
+      key, enable: true, is_reasoning: true, is_vl: supportsImages,
       context_config: { small: { token_count: 200_000, is_default: true }, large: { token_count: 1_000_000 } },
       thinking_config: {
         disabled: { is_default: true },
@@ -169,10 +173,13 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
     { id: 'small', name: 'Small', contextWindow: 100_000 },
   ] } })
   const ns = 'provider-qoder' as SettingsNamespace
-  const discover = () => ctx.llm.discoverModels(ns, { provider: 'qoder-official', apiKey: 'pt-test' })
+  const discover = () => ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID, apiKey: 'pt-test' })
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].inputModalities, ['text'])
+  supportsImages = true
   await discover()
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].inputModalities, ['text', 'image'])
   for (const [id, expected] of [['large', 200_000], ['small', 100_000]] as const) {
-    const prepared = await ctx.llm.prepareCall({ provider: 'qoder-official', model: id })
+    const prepared = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: id })
     assert.equal(prepared.context?.contextWindow, expected)
     assert.equal(prepared.config.reasoningEffort, undefined)
   }
@@ -181,7 +188,7 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
   empty = true
   await assert.rejects(discover, /no enabled models/u)
   assert.deepEqual(ctx.settings.get(ns), stored)
-  assert.equal((await ctx.llm.prepareCall({ provider: 'qoder-official', model: 'large' })).context?.contextWindow, 200_000)
+  assert.equal((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'large' })).context?.contextWindow, 200_000)
 })
 
 test('apply succeeds with default Config schema and empty models array', async () => {
@@ -192,7 +199,7 @@ test('apply succeeds with default Config schema and empty models array', async (
   const normalizedConfig = plugin.Config({})
   assert.deepEqual(normalizedConfig.models, [])
   plugin.apply(ctx, normalizedConfig)
-  const models = await ctx.llm.listModels('qoder-official')
+  const models = await ctx.llm.listModels(QODER_PROVIDER_ID)
   assert.ok(models.length > 0)
   assert.ok(models.some(model => model.id === 'cmodel'))
 
@@ -201,7 +208,7 @@ test('apply succeeds with default Config schema and empty models array', async (
   await ctxEmptyModels.plugin(TestCredentials)
   await ctxEmptyModels.plugin(MemorySettings).await()
   plugin.apply(ctxEmptyModels, { models: [] })
-  const fallbackModels = await ctxEmptyModels.llm.listModels('qoder-official')
+  const fallbackModels = await ctxEmptyModels.llm.listModels(QODER_PROVIDER_ID)
   assert.ok(fallbackModels.length > 0)
   assert.ok(fallbackModels.some(model => model.id === 'cmodel'))
 })
@@ -255,7 +262,7 @@ test('apply survives a connection service without a Fetch registry', async () =>
   await fiber.await()
 
   // The model catalog stays registered even though the settings RPC is gone.
-  const models = await ctx.llm.listModels('qoder-official')
+  const models = await ctx.llm.listModels(QODER_PROVIDER_ID)
   assert.ok(models.some(model => model.id === 'cmodel'))
 })
 
@@ -304,7 +311,7 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
 
   ;(ctx as unknown as Record<string, unknown>).agents = {
     currentInitiator: () => ({
-      options: { provider: 'qoder-official' },
+      options: { provider: QODER_PROVIDER_ID },
     }),
   }
 
@@ -318,6 +325,6 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
       return true
     },
   )
-})
 
+})
 

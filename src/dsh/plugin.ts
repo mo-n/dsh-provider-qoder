@@ -7,6 +7,7 @@ import type {} from '@deepseek-ai/dsh-web'
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
+import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderSearchProvider } from './search-provider.ts'
 import {
   hasSameQoderDiscoveryMetadata,
@@ -30,7 +31,7 @@ import { registerQoderRpc } from './rpc.ts'
 export const name = 'provider-qoder'
 export const inject = ['llm', 'credentials', 'connection', 'attachments']
 
-const providerQoder = 'qoder-official'
+const providerQoder = QODER_PROVIDER_ID
 const settingsNamespace = 'provider-qoder' as SettingsNamespace
 const fiberDisposed: FiberState = 4
 const fiberUnloading: FiberState = 5

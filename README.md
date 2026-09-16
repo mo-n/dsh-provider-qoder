@@ -12,8 +12,7 @@ This project is a community adapter plugin.
 - Configure subscription access via Qoder Personal Access Token (PAT).
 - Supports both Global (`global`) and China (`china`) services.
 - Discovers available models for your account, allows selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
-- Sends DSH image attachments to models advertised by Qoder as vision-language models, including images returned by tools. Images are published to the Qoder center service and referenced by URL to keep requests small; if publication fails, the image is sent inline instead so the turn still completes.
-- Supports streaming responses, reasoning content, tool calls, and multi-turn interactions.
+- Supports streaming responses, reasoning content, multimodality, search, tool calls, and multi-turn interactions.
 - View account information, personal quota, organization resource packs, and reset dates in Settings.
 
 ## Installation
@@ -22,11 +21,11 @@ This project is a community adapter plugin.
 
 You will need a running DSH Web environment, an active Qoder subscription, and a PAT matching the selected service region. The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
 
-This package declares peer/dependency ranges of DSH packages `>=0.1.2-rc.1 <0.2`, Cordis `>=4.0.2 <5`, and React `^18.2.0`. The settings UI also depends on the host providing remote credential endpoints and settings slots—please use a DSH version equipped with these interfaces; the ranges above do not imply that every version has been tested.
+This package's dependency ranges are DSH packages `>=0.1.2-rc.1 <0.2`, Cordis `>=4.0.2 <5`, and React `^18.2.0`. The settings UI also depends on the host providing remote credential endpoints and settings slots—please use a DSH version equipped with these interfaces; the ranges above do not imply that every version has been tested.
 
 ### Install from npm
 
-Once published to npm, run the following in your terminal:
+Run in your terminal:
 
 ```sh
 dsh plugin --profile web add dsh-provider-qoder
@@ -43,7 +42,7 @@ Open DSH Web, navigate to **Settings → Models**, locate the **Qoder Credential
 | Global (default) | `qoder.com` |
 | China (CN) | `qoder.com.cn` |
 
-Select the region matching your account, enter your Qoder PAT into the input box labeled **API Key**, and click **Save**. Note that a Qoder PAT is required here, not an API key from other model providers.
+Select the region matching your account, enter your Qoder PAT into the input box labeled **API Key**, and click **Save**.
 
 ### 2. Fetch and Select Models
 
@@ -52,11 +51,11 @@ Select the region matching your account, enter your Qoder PAT into the input box
 3. Select the models you want to enable (keep at least one), then click **Save**.
 4. Select a Qoder model in the DSH model picker to start chatting.
 
-Fetching models uses the **saved PAT and service region**. If you switch accounts or regions, save your changes first before fetching models again. The initial model catalog is only a candidate reference; actual available models are subject to account query results. Model multipliers, reasoning effort options, and image-input capability are provided by Qoder and may not be available for all models.
+Fetching models uses the **saved PAT and service region**. If you switch accounts or regions, you need to fetch models again. The initial model catalog is only a candidate reference; actual available models are subject to account query results. Model multipliers, reasoning effort options, and image-input capability are provided by Qoder and may not be available for all models.
 
 ### 3. View Account & Quota
 
-Open **Settings → Qoder** to view account and quota details, and click **Refresh** to query again. The absence of quota information does not mean zero quota; displayed content depends on data currently returned by Qoder.
+Open **Settings → Qoder** to view account and quota details.
 
 ## FAQ
 
@@ -71,10 +70,6 @@ Verify that the PAT is valid and matches the saved service region. If modified, 
 ### Models remain unavailable after switching regions
 
 Global and China model catalogs are stored separately. Switching regions does not automatically update your PAT or refetch that region's models; after saving the matching PAT, fetch and save the models for the selected region.
-
-### Quota or model fetching fails with `HTTP 405`
-
-The settings cards read account and model data from the host over Connection's shared `/api` channel. A message such as `transport failure for /api/qoder-subscription/account: HTTP 405` means that route was not mounted: DSH 0.1.5-rc.2 stopped resolving the web server inside `connection.rpc.handle`, which older plugin builds relied on. Rebuild the plugin and restart its profile so `lib/` matches the running DSH version.
 
 ### Are requests automatically retried?
 

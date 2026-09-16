@@ -119,7 +119,7 @@ test('QoderTransport separates response-header timeout from stream idle timeout'
     }) as typeof fetch,
   })
   const request: GenerateOptions = {
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'cmodel',
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
   }
@@ -176,7 +176,7 @@ function transportAttachments() {
 
 function imageRequest(): GenerateOptions {
   return {
-    provider: 'qoder-official',
+    provider: 'dsh-provider-qoder',
     model: 'cmodel',
     messages: [createUserMessage({
       content: [{ type: 'text', text: 'Look' }, { type: 'image', attachment: imageRef }],

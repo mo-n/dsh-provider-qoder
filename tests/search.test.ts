@@ -5,6 +5,7 @@ import { WebError, type WebSearchProvider, type WebSearchResult } from '@deepsee
 import { getQoderWebSearchUrl, qoderWebSearchPath } from '../src/qoder/transport/endpoints.ts'
 import { QoderSearchClient } from '../src/qoder/transport/search.ts'
 import { QoderSearchProvider, QODER_SEARCH_PROVIDER_ID } from '../src/dsh/search-provider.ts'
+import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { CosyCredentials } from '../src/qoder/transport/wire/cosy.ts'
 
 import { qoderEncodeBody } from '../src/qoder/transport/wire/encoding.ts'
@@ -160,7 +161,7 @@ test('QoderSearchClient honors cancellation signal with WEB_ABORTED', async () =
 
 test('QoderSearchProvider routes based on initiator agent provider and mode', async () => {
   const ctx = new Context()
-  let currentAgentProvider: string | undefined = 'qoder-official'
+  let currentAgentProvider: string | undefined = QODER_PROVIDER_ID
 
   // Mock ctx.agents.currentInitiator()
   ;(ctx as unknown as Record<string, unknown>).agents = {
@@ -201,8 +202,8 @@ test('QoderSearchProvider routes based on initiator agent provider and mode', as
   assert.equal(provider.id, QODER_SEARCH_PROVIDER_ID)
   assert.equal(provider.available(), true)
 
-  // Case 1: mode='auto', agent is qoder-official -> routes to Qoder
-  currentAgentProvider = 'qoder-official'
+  // Case 1: mode='auto', agent is dsh-provider-qoder -> routes to Qoder
+  currentAgentProvider = QODER_PROVIDER_ID
   qoderSearchCalled = false
   fallbackSearchCalled = false
   const res1 = await provider.search({ query: 'hello' })
@@ -243,7 +244,7 @@ test('QoderSearchProvider delegates to resolveTransport when configured', async 
   ;(ctx as unknown as Record<string, unknown>).agents = {
     currentInitiator: () => ({
       options: {
-        provider: 'qoder-official',
+        provider: QODER_PROVIDER_ID,
       },
     }),
   }
@@ -273,7 +274,7 @@ test('QoderSearchProvider falls back to agentDefaultModel when currentInitiator 
     currentInitiator: () => undefined,
   }
   ctx.provide('agentDefaultModel', {
-    get: () => ({ provider: 'qoder-official', model: 'gfmodel' }),
+    get: () => ({ provider: QODER_PROVIDER_ID, model: 'gfmodel' }),
   } as any)
 
   let qoderSearchCalled = false

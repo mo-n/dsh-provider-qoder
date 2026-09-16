@@ -2,12 +2,13 @@
  * DSH WebSearchProvider implementation with initiator-aware dynamic routing.
  *
  * Implements the `@deepseek-ai/dsh-web` capability seam, routing search queries
- * to Qoder Center when an agent runs with a Qoder model (`qoder-official`),
+ * to Qoder Center when an agent runs with a Qoder model (`dsh-provider-qoder`),
  * or delegating to a fallback search provider when another model is active.
  *
  * @module dsh-provider-qoder/dsh/search-provider
  */
 
+import { QODER_PROVIDER_ID } from './provider.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import {
@@ -21,7 +22,7 @@ import type { QoderSearchClient } from '../qoder/transport/search.ts'
 import type { QoderWebSearchMode } from './config.ts'
 
 export const QODER_SEARCH_PROVIDER_ID = 'qoder'
-export const QODER_MODEL_PROVIDER_ROUTE = 'qoder-official'
+export const QODER_MODEL_PROVIDER_ROUTE = QODER_PROVIDER_ID
 
 export interface QoderSearchProviderOptions {
   ctx: Context
