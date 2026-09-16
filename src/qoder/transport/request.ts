@@ -6,7 +6,7 @@ import { logParsedResponse, redactLogPayload, type QoderLogger } from './logging
 import { defaultUserAgent, qoderClientType } from './wire/cosy.ts'
 
 export const defaultMetadataTimeoutMs = 15_000
-export const defaultResponseHeaderTimeoutMs = 30_000
+export const defaultResponseHeaderTimeoutMs = 60_000
 export const defaultMaxJsonBytes = 2 * 1024 * 1024
 export const defaultMaxErrorBytes = 16 * 1024
 const metadataRetryBaseDelayMs = 200

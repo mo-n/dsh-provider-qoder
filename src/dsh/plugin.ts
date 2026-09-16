@@ -18,6 +18,7 @@ import type { QoderRegion } from '../qoder/region.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import {
   createQoderTransport,
+  defaultResponseHeaderTimeoutMs,
   defaultStreamIdleTimeoutMs,
   type QoderTransport,
   type QoderTransportOptions,
@@ -60,6 +61,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     modelsByRegion: { ...config.modelsByRegion },
     ...hasConfiguredModels ? { models: resolveModels(config.models) } : {},
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
+    responseHeaderTimeoutMs: config.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
     preserveThinking: config.preserveThinking ?? true,
     webSearchMode: config.webSearchMode ?? 'auto',
   }
@@ -74,6 +76,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
   const createTransport = (
     region: QoderRegion,
     streamIdleTimeoutMs: number,
+    responseHeaderTimeoutMs: number,
     preserveThinking: boolean,
     resolvePat: () => Promise<string> = () => resolveManagedQoderPat(ctx.credentials),
   ): QoderTransport => createQoderTransport({
@@ -81,6 +84,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     resolvePat,
     logger,
     streamIdleTimeoutMs,
+    responseHeaderTimeoutMs,
     attachments: ctx.attachments,
     preserveThinking,
   })
@@ -95,16 +99,23 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
         discoveredCatalogs[region],
       ),
       streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
+      responseHeaderTimeoutMs: value.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
       preserveThinking: value.preserveThinking ?? true,
       webSearchMode: value.webSearchMode ?? 'auto',
     }
   }
 
   const initial = resolveConfig()
-  let activeTransport = createTransport(initial.region, initial.streamIdleTimeoutMs, initial.preserveThinking)
+  let activeTransport = createTransport(
+    initial.region,
+    initial.streamIdleTimeoutMs,
+    initial.responseHeaderTimeoutMs,
+    initial.preserveThinking,
+  )
   let activeTransportConfig = {
     region: initial.region,
     streamIdleTimeoutMs: initial.streamIdleTimeoutMs,
+    responseHeaderTimeoutMs: initial.responseHeaderTimeoutMs,
     preserveThinking: initial.preserveThinking,
   }
   const adapter = new QoderAdapter({
@@ -119,11 +130,18 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     const next = resolveConfig()
     if (next.region !== activeTransportConfig.region
       || next.streamIdleTimeoutMs !== activeTransportConfig.streamIdleTimeoutMs
+      || next.responseHeaderTimeoutMs !== activeTransportConfig.responseHeaderTimeoutMs
       || next.preserveThinking !== activeTransportConfig.preserveThinking) {
-      activeTransport = createTransport(next.region, next.streamIdleTimeoutMs, next.preserveThinking)
+      activeTransport = createTransport(
+        next.region,
+        next.streamIdleTimeoutMs,
+        next.responseHeaderTimeoutMs,
+        next.preserveThinking,
+      )
       activeTransportConfig = {
         region: next.region,
         streamIdleTimeoutMs: next.streamIdleTimeoutMs,
+        responseHeaderTimeoutMs: next.responseHeaderTimeoutMs,
         preserveThinking: next.preserveThinking,
       }
     }
@@ -192,7 +210,13 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     const snapshot = resolveConfig()
     const normalizedPat = suppliedPat?.trim()
     const transport = normalizedPat
-      ? createTransport(snapshot.region, snapshot.streamIdleTimeoutMs, snapshot.preserveThinking, () => Promise.resolve(normalizedPat))
+      ? createTransport(
+          snapshot.region,
+          snapshot.streamIdleTimeoutMs,
+          snapshot.responseHeaderTimeoutMs,
+          snapshot.preserveThinking,
+          () => Promise.resolve(normalizedPat),
+        )
       : activeTransport
     const models = await transport.discoverModels(signal)
     discoveredCatalogs[snapshot.region] = models

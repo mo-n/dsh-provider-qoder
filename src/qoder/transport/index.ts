@@ -6,11 +6,12 @@ import type { QoderAccountInfo } from '../account.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from '../region.ts'
 import { DefaultQoderTransport, defaultStreamIdleTimeoutMs } from './default-transport.ts'
+import { defaultResponseHeaderTimeoutMs } from './request.ts'
 import type { QoderLogger } from './logging.ts'
 
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 
-export { defaultStreamIdleTimeoutMs }
+export { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs }
 
 export interface QoderTransport {
   stream(options: GenerateOptions, model?: QoderCatalogModel): AsyncIterable<StreamChunk>

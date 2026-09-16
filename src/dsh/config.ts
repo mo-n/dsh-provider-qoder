@@ -3,7 +3,7 @@
 import z from '@deepseek-ai/schemastery'
 import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
-import { defaultStreamIdleTimeoutMs } from '../qoder/transport/index.ts'
+import { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs } from '../qoder/transport/index.ts'
 
 export interface QoderModelsByRegion {
   global?: QoderCatalogModel[]
@@ -18,6 +18,7 @@ export interface Config {
   /** @deprecated Migrated to modelsByRegion for the selected region. */
   models?: QoderCatalogModel[]
   streamIdleTimeoutMs?: number
+  responseHeaderTimeoutMs?: number
   preserveThinking?: boolean
   webSearchMode?: QoderWebSearchMode
 }
@@ -53,6 +54,7 @@ export const Config: z<Config> = z.object({
   modelsByRegion: modelsByRegionSchema.default({}),
   models: z.array(catalogModel),
   streamIdleTimeoutMs: z.number().step(1).min(1).default(defaultStreamIdleTimeoutMs),
+  responseHeaderTimeoutMs: z.number().step(1).min(1).default(defaultResponseHeaderTimeoutMs),
   preserveThinking: z.boolean().default(true),
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
 })

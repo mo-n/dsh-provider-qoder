@@ -303,6 +303,32 @@ test('QoderAdapter logs stream failures through the host logger', async () => {
   assert.match(JSON.stringify(entries[0]?.[1]), /SERVER/u)
 })
 
+test('QoderAdapter logs stream lifecycle metrics and diagnostics', async () => {
+  const fetchMock = successfulFetch()
+  const debugEntries: unknown[][] = []
+  const adapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    logger: {
+      debug(message, ...details) {
+        debugEntries.push([message, ...details])
+      },
+    },
+    fetch: fetchMock,
+  })
+
+  for await (const _chunk of adapter.stream(request())) continue
+
+  const messages = debugEntries.map(entry => entry[0])
+  assert.ok(messages.includes('[Qoder Stream] Response headers received'))
+  assert.ok(messages.includes('[Qoder Stream] First chunk received'))
+  assert.ok(messages.includes('[Qoder Stream] Stream completed'))
+
+  const completed = debugEntries.find(entry => entry[0] === '[Qoder Stream] Stream completed') as Record<string, unknown>[]
+  const payload = completed?.[1]
+  assert.ok(typeof payload?.durationMs === 'number')
+  assert.ok(typeof payload?.chunkCount === 'number' && payload.chunkCount > 0)
+})
+
 test('QoderAdapter maps rate limits and network failures to retryable DSH errors', async () => {
   const fetchMock = successfulFetch()
   const limited = testAdapter({

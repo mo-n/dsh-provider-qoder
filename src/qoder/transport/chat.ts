@@ -4,6 +4,7 @@ import {
   attributionHeaders,
   type GenerateOptions,
   type StreamChunk,
+  type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import type { QoderCatalogModel } from '../catalog.ts'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
@@ -43,7 +44,10 @@ export async function* streamQoderChat(
   let headerTimedOut = false
   let idleTimedOut = false
   let idleTimer: ReturnType<typeof setTimeout> | undefined
+  let chunkCount = 0
+  let reqId: ReturnType<typeof qoderRequestId> | undefined
   const startedAt = performance.now()
+  let lastActivityAt = startedAt
   const onCallerAbort = (): void => requestController.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', onCallerAbort, { once: true })
   const headerTimer = setTimeout(() => {
@@ -51,6 +55,7 @@ export async function* streamQoderChat(
     requestController.abort('response header timeout')
   }, dependencies.responseHeaderTimeoutMs)
   const resetIdleTimer = (): void => {
+    lastActivityAt = performance.now()
     if (idleTimer !== undefined) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
       idleTimedOut = true
@@ -75,11 +80,12 @@ export async function* streamQoderChat(
       signal: requestController.signal,
     })
     clearTimeout(headerTimer)
+    reqId = qoderRequestId(response.headers)
     dependencies.logger?.debug?.('[Qoder Stream] Response headers received', {
       region: dependencies.region,
       status: response.status,
       durationMs: Math.round(performance.now() - startedAt),
-      ...qoderRequestId(response.headers) === undefined ? {} : { requestId: qoderRequestId(response.headers) },
+      ...reqId === undefined ? {} : { requestId: reqId },
     })
     resetIdleTimer()
     if (!response.ok) {
@@ -88,25 +94,74 @@ export async function* streamQoderChat(
     if (!response.body) {
       throw new QoderLlmError('Qoder response contains no readable body stream.', 'EMPTY_RESPONSE')
     }
-    yield* parseQoderSse(response.body, { onActivity: resetIdleTimer })
+
+    let firstChunkDurationMs: number | undefined
+    let tokenUsage: TokenUsage | undefined
+    let finishReason: string | undefined
+    const streamStartedAt = performance.now()
+
+    for await (const chunk of parseQoderSse(response.body, { onActivity: resetIdleTimer })) {
+      chunkCount++
+      if (firstChunkDurationMs === undefined) {
+        firstChunkDurationMs = Math.round(performance.now() - startedAt)
+        dependencies.logger?.debug?.('[Qoder Stream] First chunk received', {
+          durationMs: firstChunkDurationMs,
+          ...reqId === undefined ? {} : { requestId: reqId },
+        })
+      }
+      if (chunk.type === 'usage') {
+        tokenUsage = chunk.usage
+      }
+      if (chunk.type === 'finish') {
+        finishReason = chunk.reason.kind
+      }
+      yield chunk
+    }
+
+    dependencies.logger?.debug?.('[Qoder Stream] Stream completed', {
+      durationMs: Math.round(performance.now() - startedAt),
+      streamDurationMs: Math.round(performance.now() - streamStartedAt),
+      chunkCount,
+      ...finishReason === undefined ? {} : { finishReason },
+      ...tokenUsage === undefined ? {} : { usage: tokenUsage },
+      ...reqId === undefined ? {} : { requestId: reqId },
+    })
   } catch (error: unknown) {
     if (options.signal?.aborted) throw aborted('Request was aborted.')
+    const elapsedMs = Math.round(performance.now() - startedAt)
     if (headerTimedOut) {
       const failure = new QoderLlmError('Qoder model request exceeded its response header timeout.', 'TIMEOUT')
-      dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(failure))
+      dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(failure), {
+        phase: 'header',
+        elapsedMs,
+        timeoutMs: dependencies.responseHeaderTimeoutMs,
+      })
       throw failure
     }
     if (idleTimedOut) {
       const failure = new QoderLlmError('Qoder model stream exceeded its idle timeout.', 'TIMEOUT')
-      dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(failure))
+      dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(failure), {
+        phase: 'stream-idle',
+        chunkCount,
+        idleDurationMs: Math.round(performance.now() - lastActivityAt),
+        elapsedMs,
+        ...reqId === undefined ? {} : { requestId: reqId },
+      })
       throw failure
     }
     if (error instanceof QoderLlmError) {
-      dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(error))
+      dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(error), {
+        chunkCount,
+        elapsedMs,
+        ...reqId === undefined ? {} : { requestId: reqId },
+      })
       throw error
     }
     const failure = new QoderLlmError('Qoder transport request failed.', 'TRANSPORT', { cause: error })
     dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(failure), {
+      chunkCount,
+      elapsedMs,
+      ...reqId === undefined ? {} : { requestId: reqId },
       cause: redactLogValue(error),
     })
     throw failure
