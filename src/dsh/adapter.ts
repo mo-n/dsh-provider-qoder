@@ -9,7 +9,7 @@ import {
   type LlmResolvedModelInfo,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { defaultModels, effectiveContextWindow, type QoderCatalogModel } from '../qoder/catalog.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 
@@ -73,11 +73,12 @@ export class QoderAdapter extends LlmAdapter {
     if (configured === undefined) {
       return Promise.resolve({ provider, id: modelId, name: modelId, inputModalities: ['text'] })
     }
+    const contextWindow = effectiveContextWindow(configured)
     return Promise.resolve({
       ...modelInfo(provider, configured),
-      ...configured.contextWindow === undefined
+      ...contextWindow === undefined
         ? {}
-        : { context: { contextWindow: configured.contextWindow } },
+        : { context: { contextWindow } },
       ...configured.maxTokens === undefined
         ? {}
         : { defaultMaxTokens: configured.maxTokens },

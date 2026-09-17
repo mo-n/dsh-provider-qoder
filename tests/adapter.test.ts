@@ -427,3 +427,20 @@ test('QoderAdapter routes chat streaming to the configured region endpoint', asy
   for await (const _chunk of globalAdapter.stream(request())) continue
   assert.ok(targetUrl.startsWith('https://api3.qoder.sh/'))
 })
+
+test('QoderAdapter reports the selected context tier capacity', async () => {
+  const contextOptions = {
+    small: { tokenCount: 200_000, isDefault: true },
+    large: { tokenCount: 1_000_000 },
+  }
+  const adapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    models: [
+      { id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextOptions },
+      { id: 'chosen', name: 'Chosen', contextWindow: 200_000, contextTier: 'large', contextOptions },
+    ],
+  })
+
+  assert.equal((await adapter.resolveModel('qoder-official', 'tiered')).context?.contextWindow, 200_000)
+  assert.equal((await adapter.resolveModel('qoder-official', 'chosen')).context?.contextWindow, 1_000_000)
+})

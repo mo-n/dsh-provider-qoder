@@ -28,6 +28,10 @@ _Avoid_: display name, DSH provider route
 A provider-advertised input-context capacity option for a Qoder model. The provider's default tier and the largest available tier may differ.
 _Avoid_: output token limit, maximum context as default
 
+**Qoder context tier selection**:
+The subscriber's explicit choice of one advertised tier for a model, carried by the catalog entry's tier key. It decides both the capacity reported to DSH and the tier a model request asks the provider for, and it outranks the provider default.
+_Avoid_: synthetic context size, per-conversation token budget
+
 **Qoder transport**:
 The provider-side capability that owns all communication with Qoder: authenticating a subscriber, discovering models, reading subscriber profile and quota, translating model requests, and returning model stream events. It does not own agent tools or workspace operations.
 _Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK

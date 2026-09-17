@@ -29,6 +29,7 @@ const catalogModel: z<QoderCatalogModel> = z.object({
   description: z.string(),
   contextWindow: z.number().step(1).min(1),
   maxContextWindow: z.number().step(1).min(1),
+  contextTier: z.string(),
   maxTokens: z.number().step(1).min(1),
   source: z.string(),
   isReasoning: z.boolean(),

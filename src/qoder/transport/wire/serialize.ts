@@ -5,7 +5,7 @@ import { contentHasImage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../../errors.ts'
 import { translateTools, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
 import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './wire-types.ts'
-import type { QoderCatalogModel } from '../../catalog.ts'
+import { selectedContextTier, type QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
 import type { CosyCredentials } from './cosy.ts'
 
@@ -107,15 +107,21 @@ export async function buildQoderRequestBody(
   const maxTokens = Math.min(options.maxTokens ?? modelMaxTokens, modelMaxTokens)
   const isReasoning = options.reasoningEffort !== undefined || (model?.isReasoning ?? false)
   const tools = translateTools(options.tools)
-  // Ambiguous defaults stay in discovery metadata, but must not select a request tier.
+  // Ambiguous defaults stay in discovery metadata, but must not select a request
+  // tier. An explicit subscriber selection is unambiguous by construction, so it
+  // decides the marker instead.
+  const selectedTier = model === undefined ? undefined : selectedContextTier(model)
   const defaultContexts = Object.values(model?.contextOptions ?? {}).filter(option =>
     option.isDefault === true && typeof option.tokenCount === 'number'
     && Number.isFinite(option.tokenCount) && option.tokenCount > 0)
-  const contextConfig = model?.contextOptions === undefined || defaultContexts.length !== 1
+  const contextConfig = model?.contextOptions === undefined
+    || (selectedTier === undefined && defaultContexts.length !== 1)
     ? undefined
     : Object.fromEntries(Object.entries(model.contextOptions).map(([key, value]) => [key, {
       ...value.tokenCount === undefined ? {} : { token_count: value.tokenCount },
-      ...value.isDefault === undefined ? {} : { is_default: value.isDefault },
+      ...selectedTier === undefined
+        ? value.isDefault === undefined ? {} : { is_default: value.isDefault }
+        : { is_default: key === selectedTier.key },
     }]))
   let lastUserText = ''
   for (let index = messages.length - 1; index >= 0; index--) {
