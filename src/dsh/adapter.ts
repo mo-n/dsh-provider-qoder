@@ -9,7 +9,7 @@ import {
   type LlmResolvedModelInfo,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { defaultModels, mergeQoderDiscoveryMetadata, type QoderCatalogModel } from '../qoder/catalog.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
@@ -41,6 +41,11 @@ export class QoderAdapter extends LlmAdapter {
   private catalogModels: readonly QoderCatalogModel[]
   private readonly providerId: string
   private readonly providerName: string
+  private readonly discoveries = new WeakMap<QoderTransport, {
+    models?: readonly QoderCatalogModel[]
+    expiresAt: number
+    inflight?: Promise<void>
+  }>()
 
   constructor(options: QoderAdapterOptions) {
     super()
@@ -54,12 +59,45 @@ export class QoderAdapter extends LlmAdapter {
     return { id: provider, name: this.providerName }
   }
 
-  override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    return Promise.resolve(this.catalogModels.map(model => modelInfo(provider, model)))
+  /** Refresh advertised metadata on catalog reads, sharing a five-minute transport-local cache. */
+  override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    const transport = this.resolveTransport()
+    let cached = this.discoveries.get(transport)
+    if (cached === undefined) {
+      cached = { expiresAt: 0 }
+      this.discoveries.set(transport, cached)
+    }
+    const entry = cached
+    if (entry.inflight === undefined && Date.now() >= entry.expiresAt) {
+      entry.inflight = Promise.resolve().then(() => transport.discoverModels()).then(models => {
+        entry.models = models
+        entry.expiresAt = Date.now() + 5 * 60 * 1000
+      }).catch(() => {
+        // Discovery is advisory: retain the configured or last advertised models on failure.
+      }).finally(() => { entry.inflight = undefined })
+    }
+    await entry.inflight
+    if (this.resolveTransport() !== transport) return this.listModels(provider)
+    return this.effectiveModels().map(model => modelInfo(provider, model))
+  }
+
+  private effectiveModels(): readonly QoderCatalogModel[] {
+    return mergeQoderDiscoveryMetadata(
+      this.catalogModels,
+      this.discoveries.get(this.resolveTransport())?.models ?? [],
+    )
   }
 
   replaceModels(models: readonly QoderCatalogModel[]): void {
     this.catalogModels = models
+  }
+
+  /** Publish an explicit discovery without letting older in-flight reads overwrite it. */
+  updateDiscoveredModels(transport: QoderTransport, models: readonly QoderCatalogModel[]): void {
+    this.discoveries.set(transport, {
+      models,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    })
   }
 
   override resolveModel(
@@ -70,7 +108,7 @@ export class QoderAdapter extends LlmAdapter {
     if (signal?.aborted) {
       return Promise.reject(new QoderLlmError('Qoder model resolution was aborted.', 'ABORTED'))
     }
-    const configured = this.catalogModels.find(model => model.id === modelId)
+    const configured = this.effectiveModels().find(model => model.id === modelId)
     if (configured === undefined) {
       return Promise.resolve({ provider, id: modelId, name: modelId, inputModalities: ['text'] })
     }
@@ -103,7 +141,7 @@ export class QoderAdapter extends LlmAdapter {
     if (options.provider !== this.providerId) {
       throw new QoderLlmError(`Qoder adapter does not own provider "${options.provider}".`, 'INVALID_PROVIDER')
     }
-    const model = this.catalogModels.find(candidate => candidate.id === (options.model || 'cmodel'))
+    const model = this.effectiveModels().find(candidate => candidate.id === (options.model || 'cmodel'))
     return this.resolveTransport().stream(options, model)
   }
 }

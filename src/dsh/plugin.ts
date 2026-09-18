@@ -214,6 +214,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
 
   const discoverModels = async (signal?: AbortSignal, suppliedPat?: string): Promise<readonly QoderCatalogModel[]> => {
     const snapshot = resolveConfig()
+    const snapshotTransport = activeTransport
     const normalizedPat = suppliedPat?.trim()
     const transport = normalizedPat
       ? createTransport(
@@ -223,8 +224,9 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
           snapshot.preserveThinking,
           () => Promise.resolve(normalizedPat),
         )
-      : activeTransport
+      : snapshotTransport
     const models = await transport.discoverModels(signal)
+    adapter.updateDiscoveredModels(snapshotTransport, models)
     discoveredCatalogs[snapshot.region] = models
     refreshAdapter()
     await persistDiscoveredModels(snapshot.region)
