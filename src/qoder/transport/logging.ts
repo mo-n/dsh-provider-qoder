@@ -41,6 +41,8 @@ export function redactLogValue(value: unknown, depth = 0): unknown {
       name: value.name,
       message: redactString(value.message),
       ...('code' in value ? { code: redactLogValue(value.code, depth + 1) } : {}),
+      ...('cause' in value ? { cause: redactLogValue(value.cause, depth + 1) } : {}),
+      ...(value instanceof AggregateError ? { errors: redactLogValue(value.errors, depth + 1) } : {}),
     }
   }
   if (Array.isArray(value)) {
