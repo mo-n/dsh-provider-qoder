@@ -72,6 +72,10 @@ dsh plugin --profile web add dsh-provider-qoder
 
 Global 与 China 的模型目录会分别保存。切换区域不会自动替换 PAT，也不会自动重新获取该区域的模型；请先保存匹配区域的 PAT，再获取并保存所选区域的模型。
 
+### 额度或模型获取报 `HTTP 405`
+
+设置卡片通过 Connection 共享的 `/api` 通道向宿主读取账号与模型数据。出现 `transport failure for /api/qoder-subscription/account: HTTP 405` 表示该路由没有挂载：DSH 0.1.5-rc.2 起 `connection.rpc.handle` 不再解析 web server，旧版插件构建依赖了这一行为。请重新构建插件并重启对应 profile，使 `lib/` 与运行中的 DSH 版本匹配。
+
 ### 请求是否会自动重试？
 
 模型生成重试由 DSH 管理。需要启用时，运行中的 profile 应包含 `@deepseek-ai/dsh-llm-retry`。插件使用 DSH 默认重试策略报告空响应、限流、服务端、超时和传输错误；认证、无效请求、取消、额度及协议格式错误默认不重试。Qoder transport 可以独立重试一次幂等的模型目录、订阅者资料或配额读取，但绝不会在内部重试模型生成 POST。

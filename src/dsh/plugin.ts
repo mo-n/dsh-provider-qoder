@@ -24,13 +24,13 @@ import {
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
 import { Config, modelsFor, resolveModels, type Config as QoderConfig } from './config.ts'
+import { registerQoderRpc } from './rpc.ts'
 
 export const name = 'provider-qoder'
 export const inject = ['llm', 'credentials', 'connection', 'attachments']
 
 const providerQoder = 'qoder-official'
 const settingsNamespace = 'provider-qoder' as SettingsNamespace
-const qoderChannel = '/qoder-subscription'
 const fiberDisposed: FiberState = 4
 const fiberUnloading: FiberState = 5
 
@@ -237,41 +237,40 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     }))
   })
 
-  if (ctx.connection?.rpc) {
-    const handler: ConnectionRpcHandler = async (endpoint, payload, signal) => {
-      if (endpoint !== 'account' && endpoint !== 'models') return publicError(`Unknown endpoint: ${endpoint}`)
-      signal.throwIfAborted()
-      if (endpoint === 'models') {
-        try {
-          return { ok: true, value: await discoverModels(signal) }
-        } catch (error) {
-          if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) throw error
-          logger?.error?.('[Qoder RPC] Failed to discover models', logError(error))
-          return publicError(error instanceof Error ? error.message : 'Failed to discover Qoder models')
-        }
-      }
-
-      const force = typeof payload === 'object' && payload !== null && 'force' in payload
-        ? payload.force === true
-        : false
-      logger?.debug?.('[Qoder RPC] Reading subscriber account', { force })
+  const handler: ConnectionRpcHandler = async (endpoint, payload, signal) => {
+    if (endpoint !== 'account' && endpoint !== 'models') return publicError(`Unknown endpoint: ${endpoint}`)
+    signal.throwIfAborted()
+    if (endpoint === 'models') {
       try {
-        const account = await activeTransport.readAccount({ force, signal })
-        logger?.debug?.('[Qoder RPC] Subscriber account resolved')
-        return { ok: true, value: account }
+        return { ok: true, value: await discoverModels(signal) }
       } catch (error) {
         if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) throw error
-        logger?.error?.('[Qoder RPC] Failed to read subscriber account', logError(error))
-        return publicError(error instanceof Error ? error.message : 'Failed to load Qoder account')
+        logger?.error?.('[Qoder RPC] Failed to discover models', logError(error))
+        return publicError(error instanceof Error ? error.message : 'Failed to discover Qoder models')
       }
     }
 
-    ctx.inject(['webServer'], (webCtx) => {
-      webCtx.effect(
-        () => webCtx.connection.rpc.handle(qoderChannel, handler),
-        'provider-qoder: loopback account RPC',
-      )
-    })
+    const force = typeof payload === 'object' && payload !== null && 'force' in payload
+      ? payload.force === true
+      : false
+    logger?.debug?.('[Qoder RPC] Reading subscriber account', { force })
+    try {
+      const account = await activeTransport.readAccount({ force, signal })
+      logger?.debug?.('[Qoder RPC] Subscriber account resolved')
+      return { ok: true, value: account }
+    } catch (error) {
+      if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) throw error
+      logger?.error?.('[Qoder RPC] Failed to read subscriber account', logError(error))
+      return publicError(error instanceof Error ? error.message : 'Failed to load Qoder account')
+    }
+  }
+
+  try {
+    ctx.effect(() => registerQoderRpc(ctx, handler), 'provider-qoder: settings RPC routes')
+  } catch (error) {
+    // The settings RPC is an optional surface: a registration failure must not
+    // take the model adapter or the web-search router down with it.
+    logger?.error?.('[Qoder RPC] Failed to register the settings RPC routes', logError(error))
   }
 
   ctx.inject(['web'], (webCtx) => {

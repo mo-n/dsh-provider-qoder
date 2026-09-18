@@ -72,6 +72,10 @@ Verify that the PAT is valid and matches the saved service region. If modified, 
 
 Global and China model catalogs are stored separately. Switching regions does not automatically update your PAT or refetch that region's models; after saving the matching PAT, fetch and save the models for the selected region.
 
+### Quota or model fetching fails with `HTTP 405`
+
+The settings cards read account and model data from the host over Connection's shared `/api` channel. A message such as `transport failure for /api/qoder-subscription/account: HTTP 405` means that route was not mounted: DSH 0.1.5-rc.2 stopped resolving the web server inside `connection.rpc.handle`, which older plugin builds relied on. Rebuild the plugin and restart its profile so `lib/` matches the running DSH version.
+
 ### Are requests automatically retried?
 
 Model-generation retries are managed by DSH. To enable them, the running profile should include `@deepseek-ai/dsh-llm-retry`. The plugin reports empty responses, rate limits, server errors, timeouts, and transport errors using DSH's default retry policy; authentication, invalid requests, cancellations, quota issues, and protocol formatting errors are not retried by default. The Qoder transport may independently retry an idempotent model-catalog, subscriber-profile, or quota read once, but never retries a model-generation POST internally.
