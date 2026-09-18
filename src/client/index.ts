@@ -2,7 +2,6 @@
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
@@ -18,9 +17,9 @@ import type {
   QoderModelSettingsSnapshot,
 } from './credential-operations.ts'
 import { en, zh, type QoderCredentialCopy } from './locales.ts'
+import { createQoderRpcCaller } from './rpc-client.ts'
 
 const localeNamespace = 'settings.qoderCredential'
-const qoderChannel = '/qoder-subscription'
 const settingsNamespace = 'provider-qoder'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -46,7 +45,7 @@ interface QoderModelsFooterOwnerProps {
   children?: never
 }
 
-export const inject = ['slots', 'locale', 'remote', 'remote.credentials', 'connection', 'settingsScope']
+export const inject = ['slots', 'locale', 'remote', 'remote.credentials', 'settingsScope']
 
 type CredentialRemoteResponse<T> =
   | { ok: true; value: T }
@@ -76,7 +75,7 @@ export function apply(ctx: ClientContext): void {
   // The released rc.2 declarations predate this generated Remote namespace;
   // the current DSH client exposes it through the same runtime assembly.
   const credentials = (ctx.remote as unknown as { credentials: QoderCredentialsRemote }).credentials
-  const connection = (ctx as ClientContext & { connection: ConnectionHandle }).connection
+  const rpc = createQoderRpcCaller()
   const modelScope = ctx.settingsScope.bind<QoderModelSettingsSection>({ namespace: settingsNamespace })
 
   const operations: QoderCredentialOperations = {
@@ -104,17 +103,7 @@ export function apply(ctx: ClientContext): void {
         return false
       }
     },
-    getAccount: async (force) => {
-      try {
-        const response = await connection.rpc.call(qoderChannel, 'account', { force })
-        if (response.ok) {
-          return { ok: true, data: response.value as QoderAccountInfo }
-        }
-        return { ok: false, error: response.error?.message || 'RPC returned error' }
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
-      }
-    },
+    getAccount: async (force) => await rpc.call<QoderAccountInfo>('account', { force }),
     getModelSnapshot: () => modelScope.getSnapshot() as QoderModelSettingsSnapshot,
     subscribeModels: listener => modelScope.subscribe(listener),
     storeModels: async (region, models) => {
@@ -145,15 +134,7 @@ export function apply(ctx: ClientContext): void {
         return false
       }
     },
-    discoverModels: async () => {
-      try {
-        const response = await connection.rpc.call(qoderChannel, 'models', {})
-        if (response.ok) return { ok: true, data: response.value as QoderCatalogModel[] }
-        return { ok: false, error: response.error?.message || 'RPC returned error' }
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
-      }
-    },
+    discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
 
     subscribe: (listener) => ctx.remote.$on('credentials/reference-updated', (ref: string) => {
       if (ref === qoderCredentialRef) listener()

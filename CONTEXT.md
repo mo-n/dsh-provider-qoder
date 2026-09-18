@@ -112,3 +112,7 @@ _Avoid_: unifiedSearch, search proxy
 The provider-level mechanism that inspects the initiating agent's active model provider and routes queries to Qoder when a Qoder model is active, delegating to an ambient search provider otherwise.
 _Avoid_: static search provider, fixed search binding
 
+**Qoder settings RPC**:
+The loopback exchange that answers the Qoder cards' model-catalog and subscriber-account reads from the host, carried as Connection exact Fetch routes on the shared `/api` channel rather than as a dedicated RPC channel.
+_Avoid_: remote API client, quota webhook, HTTP proxy
+
