@@ -9,8 +9,10 @@ import {
 } from './endpoints.ts'
 import type {
   QoderAccountInfo,
+  QoderLocalizedText,
   QoderQuota,
   QoderQuotaUsage,
+  QoderResourcePackage,
   QoderSubscriberFeatureAllowed,
   QoderSubscriberOrganization,
   QoderSubscriberPlan,
@@ -52,6 +54,7 @@ interface RawQuota {
 interface RawUsageInfo {
   userQuota?: RawQuota
   orgResourcePackage?: RawQuota
+  dedicatedResourcePackages?: unknown
   totalUsagePercentage?: number
   isQuotaExceeded?: boolean
   expiresAt?: number | string
@@ -86,16 +89,22 @@ function normalizeQuota(raw?: RawQuota): QoderQuota | undefined {
 }
 
 
+/**
+ * Normalize an epoch-millis (or parseable date string) expiry to ISO-8601.
+ *
+ * The provider uses the int64 maximum as a "never expires" sentinel, which is
+ * outside the `Date` range: an unusable value resolves to `undefined` instead
+ * of throwing, so one bad field cannot abort the whole account read.
+ */
 function normalizeExpiresAt(rawExpires?: number | string): string | undefined {
   if (rawExpires === undefined || rawExpires === null) return undefined
-  if (typeof rawExpires === 'number' && rawExpires > 0) {
-    return new Date(rawExpires).toISOString()
-  }
-  if (typeof rawExpires === 'string' && rawExpires.length > 0) {
-    const parsed = Date.parse(rawExpires)
-    if (!Number.isNaN(parsed) && parsed > 0) return new Date(parsed).toISOString()
-  }
-  return undefined
+  const parsed = typeof rawExpires === 'number'
+    ? rawExpires
+    : (typeof rawExpires === 'string' && rawExpires.length > 0 ? Date.parse(rawExpires) : Number.NaN)
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined
+  const date = new Date(parsed)
+  if (!Number.isFinite(date.getTime())) return undefined
+  return date.toISOString()
 }
 
 function asString(value: unknown): string | undefined {
@@ -113,6 +122,81 @@ function asNumber(value: unknown): number | undefined {
     if (Number.isFinite(num)) return num
   }
   return undefined
+}
+
+/**
+ * The provider names a resource package with internal identifiers (campaign
+ * ids) that must never reach the UI, so the subscriber-facing copy only ever
+ * comes from `displayLabels`.
+ */
+function findDisplayLabel(raw: unknown, dimension: string): unknown {
+  if (!Array.isArray(raw)) return undefined
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const obj = entry as Record<string, unknown>
+    if (asString(obj.dimension) === dimension) return obj
+  }
+  return undefined
+}
+
+/**
+ * Normalize one `displayLabels` entry into language-tagged copy.
+ *
+ * The provider's value lives under `valueI18n`/`value_i18n`, keyed by language
+ * tag, plus `value` as the untagged fallback. An entry with neither is dropped
+ * rather than surfaced as an empty label.
+ */
+function normalizeLocalizedText(raw: unknown): QoderLocalizedText | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const values: Record<string, string> = {}
+  const localized = obj.valueI18n ?? obj.value_i18n
+  if (localized && typeof localized === 'object') {
+    for (const [locale, text] of Object.entries(localized as Record<string, unknown>)) {
+      const resolved = asString(text)
+      if (resolved !== undefined) values[locale] = resolved
+    }
+  }
+  const fallback = asString(obj.value)
+  if (fallback === undefined && Object.keys(values).length === 0) return undefined
+  return { values, fallback: fallback ?? '' }
+}
+
+/**
+ * Normalize the dedicated (entitlement-scoped) resource packages.
+ *
+ * Copy is read from `displayLabels` only, never from `name`/`description`,
+ * which carry internal campaign identifiers. Entries without a usable size are
+ * dropped and a non-array value yields `undefined`, so an unexpected payload
+ * never fails the account read that also feeds the model catalog.
+ */
+function normalizeResourcePackages(raw: unknown): QoderResourcePackage[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const packages: QoderResourcePackage[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const obj = entry as Record<string, unknown>
+    const quota = normalizeQuota(obj as RawQuota)
+    // A malformed entry carries no usable size at all: dropping it keeps the
+    // rest of the quota panel readable instead of failing the account read.
+    if (quota === undefined || (quota.total <= 0 && quota.used <= 0 && quota.remaining <= 0)) continue
+    const id = asString(obj.id)
+    const title = normalizeLocalizedText(findDisplayLabel(obj.displayLabels ?? obj.display_labels, 'title'))
+    const description = normalizeLocalizedText(findDisplayLabel(obj.displayLabels ?? obj.display_labels, 'description'))
+    const expiresAt = normalizeExpiresAt(obj.expiresAt as number | string | undefined)
+    const available = asBoolean(obj.available)
+    const status = asString(obj.status)
+    packages.push({
+      ...id !== undefined ? { id } : {},
+      ...title !== undefined ? { title } : {},
+      ...description !== undefined ? { description } : {},
+      ...quota,
+      ...expiresAt !== undefined ? { expiresAt } : {},
+      ...available !== undefined ? { available } : {},
+      ...status !== undefined ? { status } : {},
+    })
+  }
+  return packages.length > 0 ? packages : undefined
 }
 
 function normalizeOrganization(raw: unknown): QoderSubscriberOrganization | undefined {
@@ -280,6 +364,14 @@ export class QoderUsageReader {
     }
   }
 
+  /**
+   * Read `GET /api/v2/quota/usage` and normalize it for the host/client seam.
+   *
+   * The `raw` echo keeps the upstream fields for diagnostics, but never
+   * `dedicatedResourcePackages`: those entries carry the campaign identifiers
+   * that the normalized list deliberately discards, and this payload crosses
+   * the seam into the browser.
+   */
   private async fetchUsage(jobToken: string, signal?: AbortSignal): Promise<QoderQuotaUsage> {
     const data = await openApiJsonRequest<RawUsageInfo>(this.fetchImpl, {
       url: getQoderUsageUrl(this.region),
@@ -291,13 +383,18 @@ export class QoderUsageReader {
       logCategory: 'account.usage',
     })
 
+    const dedicatedResourcePackages = normalizeResourcePackages(data.dedicatedResourcePackages)
+    const rawUsage: RawUsageInfo = { ...data }
+    delete rawUsage.dedicatedResourcePackages
+
     return {
       userQuota: normalizeQuota(data.userQuota),
       orgResourcePackage: normalizeQuota(data.orgResourcePackage),
+      ...dedicatedResourcePackages !== undefined ? { dedicatedResourcePackages } : {},
       totalUsagePercentage: typeof data.totalUsagePercentage === 'number' ? data.totalUsagePercentage : undefined,
       isQuotaExceeded: typeof data.isQuotaExceeded === 'boolean' ? data.isQuotaExceeded : false,
       expiresAt: normalizeExpiresAt(data.expiresAt),
-      raw: data,
+      raw: rawUsage,
     }
   }
 

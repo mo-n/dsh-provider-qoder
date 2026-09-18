@@ -80,6 +80,10 @@ _Avoid_: account credential, user token
 The point-in-time metrics of a Qoder subscriber's model consumption, remaining allowance, and reset horizon provided by the Qoder service.
 _Avoid_: billing balance, token count
 
+**Qoder dedicated resource package**:
+An entitlement-scoped allowance carved out of a Qoder subscription that is drawn down ahead of the shared personal quota, such as SOTA credits that only apply to one model series. Each package carries its own size, consumption, expiry, and subscriber-facing copy localized by the provider, and it is reported independently of the organization resource package.
+_Avoid_: add-on credits, top-up balance, organization resource pack
+
 **Qoder service region**:
 The target service environment (`global` or `china`) of the Qoder platform selected in settings. A Qoder model catalog belongs to exactly one service region and must not be merged with another region's catalog.
 _Avoid_: endpoint mode, cluster, server flavor

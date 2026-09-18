@@ -69,6 +69,7 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
   assert.equal(first.usage?.orgResourcePackage?.total, 3000)
   assert.equal(first.usage?.orgResourcePackage?.used, 0)
   assert.equal(first.usage?.orgResourcePackage?.remaining, 3000)
+  assert.equal(first.usage?.dedicatedResourcePackages, undefined)
   assert.equal(quotaCalls, 1)
   assert.match(diagnostics.join('\n'), /account\.usage/)
 
@@ -315,6 +316,182 @@ test('QoderUsageReader reads subscriber plan and user status with machine finger
   assert.equal(planHeaders?.['cosy-clienttype'], '5')
   assert.equal(statusHeaders?.['cosy-clienttype'], '5')
   assert.equal(quotaHeaders?.['cosy-clienttype'], '5')
+})
+
+test('QoderUsageReader normalizes dedicated resource packages and skips unusable entries', async () => {
+  const usagePayload = {
+    userId: 'user-pkg',
+    userType: 'teams',
+    totalUsagePercentage: 0.89,
+    isQuotaExceeded: false,
+    expiresAt: 1790822453000,
+    userQuota: { total: 3000, used: 3000, remaining: 0, percentage: 1, unit: 'credits' },
+    dedicatedResourcePackages: [
+      {
+        id: 'pkg-0001',
+        name: 'act-20260918-468',
+        description: 'growth-campaign:act-20260918-468:grant:internal',
+        total: 2000,
+        used: 1425,
+        remaining: 575,
+        percentage: 0.72,
+        unit: 'credits',
+        expiresAt: 1789790399000,
+        available: true,
+        status: 'QUOTA_DETAIL_STATUS_ACTIVE',
+        displayLabels: [
+          {
+            dimension: 'description',
+            value: 'sota model series description',
+            valueI18n: {
+              'en-US': 'SOTA Exclusive Credits: used first when you select the Sonus model in the model selector.',
+              'zh-CN': 'SOTA 专属积分：在模型选择器中选择 Sonus 模型时优先抵扣该积分。',
+            },
+          },
+          {
+            dimension: 'title',
+            value: 'sota model series',
+            valueI18n: {
+              'en-US': 'SOTA Exclusive Credits',
+              'zh-CN': 'SOTA 专属积分',
+            },
+          },
+        ],
+      },
+      {
+        id: 'pkg-0002',
+        cap: 500,
+        used: 100,
+        remaining: 400,
+        percentage: 0.2,
+        unit: 'credits',
+        // A malformed container must degrade to "no copy" instead of throwing.
+        displayLabels: { dimension: 'title', value: 'not an array' },
+      },
+      { name: 'empty', total: 0, used: 0, remaining: 0 },
+      null,
+    ],
+  }
+  const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) {
+      return new Response(JSON.stringify({ token: 'jt-package-test', expires_in: 3_600_000 }))
+    }
+    if (url.includes('/userinfo')) {
+      return new Response(JSON.stringify({ id: 'user-pkg', email: 'pkg@qoder.sh', name: 'Package Dev' }))
+    }
+    if (url.includes('/quota/usage')) {
+      return new Response(JSON.stringify(usagePayload))
+    }
+    throw new Error(`unexpected URL: ${url}`)
+  }
+  const authService = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+  const reader = new QoderUsageReader({ authService, fetch: fetchMock as typeof fetch })
+
+  const account = await reader.readAccount('pt-package-test')
+  const packages = account.usage?.dedicatedResourcePackages
+  assert.ok(packages)
+  assert.equal(packages.length, 2)
+
+  const [first, second] = packages
+  assert.equal(first.id, 'pkg-0001')
+  assert.equal(first.total, 2000)
+  assert.equal(first.used, 1425)
+  assert.equal(first.remaining, 575)
+  assert.equal(first.percentage, 72)
+  assert.equal(first.unit, 'credits')
+  assert.equal(first.expiresAt, new Date(1789790399000).toISOString())
+  assert.equal(first.available, true)
+  assert.equal(first.status, 'QUOTA_DETAIL_STATUS_ACTIVE')
+  assert.equal(first.title?.fallback, 'sota model series')
+  assert.equal(first.title?.values['zh-CN'], 'SOTA 专属积分')
+  assert.equal(first.title?.values['en-US'], 'SOTA Exclusive Credits')
+  assert.equal(first.description?.fallback, 'sota model series description')
+  assert.equal(first.description?.values['zh-CN'], 'SOTA 专属积分：在模型选择器中选择 Sonus 模型时优先抵扣该积分。')
+  // The internal growth-campaign identifiers must never ride the normalized copy.
+  assert.doesNotMatch(JSON.stringify(packages), /act-20260918-468/u)
+  // ...nor the raw upstream echo that shares the payload sent to the client.
+  assert.doesNotMatch(JSON.stringify(account.usage), /act-20260918-468|growth-campaign/u)
+  const rawUsage = account.usage?.raw as Record<string, unknown> | undefined
+  assert.equal(rawUsage?.dedicatedResourcePackages, undefined)
+  assert.equal(rawUsage?.userType, 'teams')
+
+  assert.equal(second.id, 'pkg-0002')
+  assert.equal(second.total, 500)
+  assert.equal(second.used, 100)
+  assert.equal(second.remaining, 400)
+  assert.equal(second.percentage, 20)
+  assert.equal(second.title, undefined)
+  assert.equal(second.description, undefined)
+  assert.equal(second.expiresAt, undefined)
+})
+
+test('QoderUsageReader tolerates an out-of-range expiry instead of failing the account read', async () => {
+  // int64 max is the provider's "never expires" sentinel and sits far outside
+  // the Date range, so it must degrade to "no expiry" rather than throw.
+  const payload = {
+    userQuota: { total: 3000, used: 3000, remaining: 0, percentage: 1, unit: 'credits' },
+    expiresAt: 9_223_372_036_854_775_807,
+    dedicatedResourcePackages: [
+      {
+        id: 'pkg-never',
+        total: 2000,
+        used: 10,
+        remaining: 1990,
+        expiresAt: 9_223_372_036_854_775_807,
+      },
+    ],
+  }
+  const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-sentinel' }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-sentinel' }))
+    if (url.includes('/quota/usage')) return new Response(JSON.stringify(payload))
+    throw new Error(`unexpected URL: ${url}`)
+  }
+  const authService = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+  const reader = new QoderUsageReader({ authService, fetch: fetchMock as typeof fetch })
+
+  const account = await reader.readAccount('pt-sentinel')
+  assert.equal(account.usage?.expiresAt, undefined)
+  const [pkg] = account.usage?.dedicatedResourcePackages ?? []
+  assert.equal(pkg?.expiresAt, undefined)
+  assert.equal(pkg?.remaining, 1990)
+  assert.equal(account.usage?.userQuota?.total, 3000)
+})
+
+test('QoderUsageReader omits dedicated resource packages for an absent or non-array field', async () => {
+  let payload: Record<string, unknown> = { userQuota: { total: 10, used: 1, remaining: 9 } }
+  const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-no-pkg' }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-no-pkg' }))
+    if (url.includes('/quota/usage')) return new Response(JSON.stringify(payload))
+    throw new Error(`unexpected URL: ${url}`)
+  }
+  const authService = new QoderAuthService({
+    fetch: fetchMock as typeof fetch,
+    resolveMachineId: () => 'machine-test',
+  })
+  const reader = new QoderUsageReader({ authService, fetch: fetchMock as typeof fetch })
+
+  const absent = await reader.readAccount('pt-no-pkg')
+  assert.equal(absent.usage?.dedicatedResourcePackages, undefined)
+
+  payload = { userQuota: { total: 10, used: 1, remaining: 9 }, dedicatedResourcePackages: 'not an array' }
+  const malformed = await reader.readAccount('pt-no-pkg', { force: true })
+  assert.equal(malformed.usage?.dedicatedResourcePackages, undefined)
+
+  payload = { userQuota: { total: 10, used: 1, remaining: 9 }, dedicatedResourcePackages: [] }
+  const empty = await reader.readAccount('pt-no-pkg', { force: true })
+  assert.equal(empty.usage?.dedicatedResourcePackages, undefined)
+  assert.equal(empty.usage?.userQuota?.remaining, 9)
 })
 
 test('QoderUsageReader degrades gracefully when plan or status endpoint returns error', async () => {
