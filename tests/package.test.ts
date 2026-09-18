@@ -206,22 +206,22 @@ test('apply succeeds with default Config schema and empty models array', async (
   assert.ok(fallbackModels.some(model => model.id === 'cmodel'))
 })
 
-test('apply safely handles connection RPC when webServer is absent or present', async () => {
+test('apply mounts the settings RPC on the connection Fetch registry', async () => {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
 
-  let registeredChannel: string | undefined
+  const registeredPaths: string[] = []
   const fakeConnection = {
-    rpc: {
-      handle: (channel: string) => {
-        registeredChannel = channel
+    fetch: {
+      register: (route: { path: string }) => {
+        registeredPaths.push(route.path)
         return () => {}
       },
     },
   }
-  ctx.provide('connection', fakeConnection)
+  ctx.provide('connection', fakeConnection as any)
   ctx.provide('attachments', {} as any)
 
   const fiber = ctx.plugin({
@@ -231,16 +231,32 @@ test('apply safely handles connection RPC when webServer is absent or present', 
   }, {})
   await fiber.await()
 
-  // Without webServer provided, plugin loads cleanly without injecting webServer
-  assert.equal(registeredChannel, undefined)
+  // Exact Fetch routes ride on the Connection plugin's own /api route, so the
+  // host half needs no webServer injection of its own.
+  assert.deepEqual(registeredPaths, [
+    '/api/qoder-subscription/account',
+    '/api/qoder-subscription/models',
+  ])
+})
 
-  // Once webServer is provided, the webServer-injected effect runs and registers the RPC
-  const fakeWebServer = {
-    register: () => () => {},
-  }
-  ctx.provide('webServer', fakeWebServer)
-  await ctx.fiber.await()
-  assert.equal(registeredChannel, '/qoder-subscription')
+test('apply survives a connection service without a Fetch registry', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  ctx.provide('connection', { rpc: { handle: () => () => {} } } as any)
+  ctx.provide('attachments', {} as any)
+
+  const fiber = ctx.plugin({
+    name: plugin.name,
+    inject: plugin.inject,
+    apply: plugin.apply,
+  }, {})
+  await fiber.await()
+
+  // The model catalog stays registered even though the settings RPC is gone.
+  const models = await ctx.llm.listModels('qoder-official')
+  assert.ok(models.some(model => model.id === 'cmodel'))
 })
 
 test('apply registers QoderSearchProvider with ctx.web when web service is provided', async () => {
@@ -248,7 +264,7 @@ test('apply registers QoderSearchProvider with ctx.web when web service is provi
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
-  ctx.provide('connection', { rpc: { handle: () => () => {} } } as any)
+  ctx.provide('connection', { fetch: { register: () => () => {} } } as any)
   ctx.provide('attachments', {} as any)
 
   let registeredSearchProvider: { id: string } | undefined
@@ -272,7 +288,7 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
-  ctx.provide('connection', { rpc: { handle: () => () => {} } } as any)
+  ctx.provide('connection', { fetch: { register: () => () => {} } } as any)
   ctx.provide('attachments', {} as any)
 
   let originalSearchCalled = false
