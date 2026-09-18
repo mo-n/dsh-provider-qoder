@@ -13,7 +13,7 @@ This project is a community adapter plugin.
 - Supports both Global (`global`) and China (`china`) services.
 - Discovers available models for your account, allows selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
 - Supports streaming responses, reasoning content, multimodality, search, tool calls, and multi-turn interactions.
-- View account information, personal quota, organization resource packs, and reset dates in Settings.
+- View account information, quota, and reset dates in Settings.
 
 ## Installation
 

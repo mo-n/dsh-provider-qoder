@@ -4,6 +4,7 @@ import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
 import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderCredentialInjected, QoderCredentialStatus } from './credential-operations.ts'
+import { resolveLocalizedText } from './locales.ts'
 import css from './QoderCredentialCard.module.css'
 
 export type QoderAccountCardProps = SettingsSectionOwnerProps & QoderCredentialInjected
@@ -31,7 +32,11 @@ function formatResetDate(dateStr?: string): string | undefined {
   })
 }
 
-export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
+/**
+ * Settings card for the Qoder subscription: credential state, subscriber
+ * profile, and every quota block the provider reports.
+ */
+export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCardProps) {
   const [credentialState, setCredentialState] = useState<CredentialViewState>({ status: 'loading' })
   const [accountState, setAccountState] = useState<AccountViewState>({ status: 'idle' })
   const [refreshing, setRefreshing] = useState(false)
@@ -101,11 +106,26 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
     )
   }
 
-  const renderQuota = (label: string, quota: QoderQuota | undefined, resetDate?: string) => {
+  /**
+   * Render one quota block.
+   *
+   * `expiresAt` wins over `resetDate` when both are supplied, because a
+   * dedicated package expires on its own date rather than on the subscription
+   * reset horizon. A package with no size renders nothing.
+   */
+  const renderQuota = (
+    key: string,
+    label: string,
+    quota: QoderQuota | undefined,
+    options?: { resetDate?: string; expiresAt?: string; description?: string },
+  ) => {
     if (!quota || quota.total <= 0) return null
     const remainingPercent = Math.max(0, Math.min(100, Math.round((quota.remaining / quota.total) * 100)))
+    const meta = options?.expiresAt
+      ? t('dedicatedResourceExpiresAt', { value: options.expiresAt })
+      : (options?.resetDate ? t('resetsAt', { value: options.resetDate }) : undefined)
     return (
-      <div className={css.quotaBlock} key={label}>
+      <div className={css.quotaBlock} key={key}>
         <div className={css.quotaHeader}>
           <span className={css.quotaLabel}>{label}</span>
           <strong>{t('quotaRemaining', { value: remainingPercent })}</strong>
@@ -117,13 +137,16 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
             unit: quota.unit,
           })}</span>
         </div>
+        {options?.description ? (
+          <p className={css.quotaDescription}>{options.description}</p>
+        ) : null}
         <progress
           className={css.quotaProgress}
           max={quota.total}
           value={Math.min(quota.total, quota.used)}
           aria-label={`${label} ${t('quotaRemaining', { value: remainingPercent })}`}
         />
-        {resetDate ? <div className={css.quotaMeta}>{t('resetsAt', { value: resetDate })}</div> : null}
+        {meta ? <div className={css.quotaMeta}>{meta}</div> : null}
       </div>
     )
   }
@@ -151,10 +174,15 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
     const { profile, usage, plan } = accountState.account
     const userQuota = usage?.userQuota
     const orgPackage = usage?.orgResourcePackage
+    const dedicatedPackages = usage?.dedicatedResourcePackages ?? []
+    const locale = activeLocale()
     const avatarInitial = (profile.name || profile.email || 'Q').charAt(0).toUpperCase()
     const resetDate = formatResetDate(usage?.expiresAt)
     const planExpiry = plan?.endDate ? formatResetDate(plan.endDate) : undefined
     const isSuspended = plan?.organization?.isSuspended === true
+    const hasQuota = (userQuota?.total ?? 0) > 0
+      || (orgPackage?.total ?? 0) > 0
+      || dedicatedPackages.some(pkg => pkg.total > 0)
     return (
       <div className={css.accountSection}>
         {isSuspended ? (
@@ -195,11 +223,18 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
           </button>
         </div>
         {usage?.isQuotaExceeded ? <p className={css.error}>{t('quotaExceeded')}</p> : null}
-        {renderQuota(t('userQuotaTitle'), userQuota, resetDate)}
-        {renderQuota(t('orgResourceTitle'), orgPackage, resetDate)}
-        {(!userQuota || userQuota.total <= 0) && (!orgPackage || orgPackage.total <= 0)
-          ? <p className={css.accountEmptyText}>{t('noQuota')}</p>
-          : null}
+        {renderQuota('userQuota', t('userQuotaTitle'), userQuota, { resetDate })}
+        {renderQuota('orgResource', t('orgResourceTitle'), orgPackage, { resetDate })}
+        {dedicatedPackages.map((pkg, index) => renderQuota(
+          `dedicatedResource-${pkg.id ?? index}`,
+          resolveLocalizedText(pkg.title, locale) ?? t('dedicatedResourceTitle'),
+          pkg,
+          {
+            expiresAt: formatResetDate(pkg.expiresAt),
+            description: resolveLocalizedText(pkg.description, locale),
+          },
+        ))}
+        {hasQuota ? null : <p className={css.accountEmptyText}>{t('noQuota')}</p>}
       </div>
     )
   }

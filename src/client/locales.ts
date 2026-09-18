@@ -1,3 +1,5 @@
+import type { QoderLocalizedText } from '../qoder/account.ts'
+
 export const zh = {
   nav: 'Qoder',
   title: 'Qoder 凭据',
@@ -44,6 +46,8 @@ export const zh = {
   refreshing: '正在刷新…',
   userQuotaTitle: '个人额度',
   orgResourceTitle: '组织资源包',
+  dedicatedResourceTitle: '专属资源包',
+  dedicatedResourceExpiresAt: '有效期至：{value}',
   quotaRemaining: '剩余 {value}%',
   quotaUsed: '已用 {used} / {total} {unit}',
   resetsAt: '重置时间：{value}',
@@ -106,6 +110,8 @@ export const en: typeof zh = {
   refreshing: 'Refreshing…',
   userQuotaTitle: 'Personal Quota',
   orgResourceTitle: 'Org Resource Package',
+  dedicatedResourceTitle: 'Dedicated Resource Package',
+  dedicatedResourceExpiresAt: 'Expires at: {value}',
   quotaRemaining: '{value}% remaining',
   quotaUsed: 'Used {used} / {total} {unit}',
   resetsAt: 'Resets: {value}',
@@ -124,3 +130,65 @@ export const en: typeof zh = {
 
 
 export type QoderCredentialCopy = keyof typeof zh
+
+/**
+ * Compare one provider language tag against the requested locale.
+ *
+ * `prefix` additionally accepts a shared primary subtag, which is what lets the
+ * built-in `zh`/`en` ids reach the provider's `zh-CN`/`en-US` keys.
+ */
+function localeMatches(tag: string, requested: string, prefix: boolean): boolean {
+  const normalized = tag.trim().toLowerCase()
+  if (normalized === requested) return true
+  if (!prefix) return false
+  const primary = requested.split('-')[0]
+  return primary.length > 0 && normalized.split('-')[0] === primary
+}
+
+/**
+ * Return the first provider translation whose language tag matches the request.
+ *
+ * `prefix` decides whether a shared primary subtag counts as a match; blank
+ * translations are skipped so they cannot shadow a later usable one.
+ */
+function pickLocalizedValue(
+  values: Readonly<Record<string, string>>,
+  requested: string,
+  prefix: boolean,
+): string | undefined {
+  for (const [tag, value] of Object.entries(values)) {
+    if (!localeMatches(tag, requested, prefix)) continue
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (text.length > 0) return text
+  }
+  return undefined
+}
+
+/**
+ * Resolve provider copy for the active UI locale.
+ *
+ * Order: exact language tag, then a shared primary subtag, then the provider's
+ * language-neutral fallback, then any translation at all. The client owns this
+ * choice because only it knows the locale the user is reading.
+ */
+export function resolveLocalizedText(
+  text: QoderLocalizedText | undefined,
+  locale: string,
+): string | undefined {
+  if (!text) return undefined
+  const values = text.values ?? {}
+  const requested = typeof locale === 'string' ? locale.trim().toLowerCase() : ''
+  if (requested.length > 0) {
+    const exact = pickLocalizedValue(values, requested, false)
+    if (exact !== undefined) return exact
+    const related = pickLocalizedValue(values, requested, true)
+    if (related !== undefined) return related
+  }
+  const fallback = typeof text.fallback === 'string' ? text.fallback.trim() : ''
+  if (fallback.length > 0) return fallback
+  for (const value of Object.values(values)) {
+    const candidate = typeof value === 'string' ? value.trim() : ''
+    if (candidate.length > 0) return candidate
+  }
+  return undefined
+}

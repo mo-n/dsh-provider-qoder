@@ -14,9 +14,39 @@ export interface QoderQuota {
   unit: string
 }
 
+/**
+ * Provider copy carried verbatim across the host/client seam.
+ *
+ * The host has no browser language, so it never picks one: the language map
+ * travels intact and the client resolves it against the active UI locale.
+ */
+export interface QoderLocalizedText {
+  /** Language tag (e.g. 'zh-CN', 'en-US') to copy. */
+  values: Readonly<Record<string, string>>
+  /** Provider copy that carries no language tag; empty when absent. */
+  fallback: string
+}
+
+/** One dedicated (entitlement-scoped) resource package carved out of the plan. */
+export interface QoderResourcePackage {
+  id?: string
+  title?: QoderLocalizedText
+  description?: QoderLocalizedText
+  total: number
+  used: number
+  remaining: number
+  percentage: number
+  unit: string
+  /** Package expiry, distinct from the usage-level subscription expiry. */
+  expiresAt?: string
+  available?: boolean
+  status?: string
+}
+
 export interface QoderQuotaUsage {
   userQuota?: QoderQuota
   orgResourcePackage?: QoderQuota
+  dedicatedResourcePackages?: QoderResourcePackage[]
   totalUsagePercentage?: number
   isQuotaExceeded?: boolean
   expiresAt?: string
