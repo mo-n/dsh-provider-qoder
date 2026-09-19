@@ -2,6 +2,7 @@ import type { QoderAccountInfo } from '../qoder/account.ts'
 import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
+import type { QoderRpcResult } from '../dsh/rpc-channel.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 
 export interface QoderCredentialOperations {
@@ -37,9 +38,7 @@ export interface QoderModelSettingsSnapshot {
   mode: 'host' | 'memory'
 }
 
-export type QoderModelDiscoveryResult =
-  | { ok: true; data: QoderCatalogModel[] }
-  | { ok: false; error?: string }
+export type QoderModelDiscoveryResult = QoderRpcResult<QoderCatalogModel[]>
 
 export interface QoderModelReconciliation {
   catalog: QoderCatalogModel[]
@@ -73,9 +72,7 @@ export interface QoderCredentialStatus {
   writable: boolean
 }
 
-export type QoderAccountResult =
-  | { ok: true; data: QoderAccountInfo }
-  | { ok: false; error?: string }
+export type QoderAccountResult = QoderRpcResult<QoderAccountInfo>
 
 export interface QoderCredentialInjected {
   operations: QoderCredentialOperations

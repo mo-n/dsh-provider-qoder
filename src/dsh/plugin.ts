@@ -24,6 +24,7 @@ import {
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
 import { Config, modelsFor, resolveModels, type Config as QoderConfig } from './config.ts'
+import { isQoderRpcEndpoint, type QoderRpcErrorCode } from './rpc-channel.ts'
 import { registerQoderRpc } from './rpc.ts'
 
 export const name = 'provider-qoder'
@@ -45,10 +46,14 @@ function logError(error: unknown): unknown {
   }
 }
 
-function publicError(message: string) {
+type QoderHostRpcResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: { readonly code: QoderRpcErrorCode; readonly message: string; readonly details: object } }
+
+function publicError(code: QoderRpcErrorCode, message: string, details: object = { issues: [] }): QoderHostRpcResult<never> {
   return {
-    ok: false as const,
-    error: { code: 'internal' as const, message, details: { issues: [] } },
+    ok: false,
+    error: { code, message, details },
   }
 }
 
@@ -238,31 +243,48 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
   })
 
   const handler: ConnectionRpcHandler = async (endpoint, payload, signal) => {
-    if (endpoint !== 'account' && endpoint !== 'models') return publicError(`Unknown endpoint: ${endpoint}`)
-    signal.throwIfAborted()
-    if (endpoint === 'models') {
+    if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
+    if (signal.aborted) return publicError('ABORTED', 'Request aborted')
+
+    const executeRpc = async <T>(operation: string, task: () => Promise<T>): Promise<QoderHostRpcResult<T>> => {
       try {
-        return { ok: true, value: await discoverModels(signal) }
+        return { ok: true, value: await task() }
       } catch (error) {
-        if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) throw error
-        logger?.error?.('[Qoder RPC] Failed to discover models', logError(error))
-        return publicError(error instanceof Error ? error.message : 'Failed to discover Qoder models')
+        if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) {
+          logger?.debug?.(`[Qoder RPC] ${operation} was aborted`)
+          return publicError('ABORTED', 'Request aborted')
+        }
+        let code: QoderRpcErrorCode = 'INTERNAL'
+        if (error instanceof QoderLlmError) {
+          if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
+            code = 'NO_CREDENTIALS'
+          } else if (error.code === 'AUTH') {
+            code = 'UNAUTHENTICATED'
+          } else if (error.code === 'TIMEOUT') {
+            code = 'TIMEOUT'
+          } else {
+            code = 'UPSTREAM_ERROR'
+          }
+        }
+        logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
+        return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
       }
+    }
+
+    if (endpoint === 'models') {
+      return await executeRpc('discover Qoder models', () => discoverModels(signal))
     }
 
     const force = typeof payload === 'object' && payload !== null && 'force' in payload
       ? payload.force === true
       : false
     logger?.debug?.('[Qoder RPC] Reading subscriber account', { force })
-    try {
-      const account = await activeTransport.readAccount({ force, signal })
-      logger?.debug?.('[Qoder RPC] Subscriber account resolved')
-      return { ok: true, value: account }
-    } catch (error) {
-      if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) throw error
-      logger?.error?.('[Qoder RPC] Failed to read subscriber account', logError(error))
-      return publicError(error instanceof Error ? error.message : 'Failed to load Qoder account')
-    }
+    const outcome = await executeRpc(
+      'load Qoder account',
+      () => activeTransport.readAccount({ force, signal }),
+    )
+    if (outcome.ok) logger?.debug?.('[Qoder RPC] Subscriber account resolved')
+    return outcome
   }
 
   try {

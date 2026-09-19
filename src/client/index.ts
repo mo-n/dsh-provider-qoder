@@ -57,10 +57,6 @@ interface QoderCredentialsRemote {
   unset(ref: string): Promise<CredentialRemoteResponse<unknown>>
 }
 
-export type GetAccountResult =
-  | { ok: true; data: QoderAccountInfo }
-  | { ok: false; error?: string }
-
 const fill = (text: string, values?: Record<string, string | number>): string => {
   if (!values) return text
   return Object.entries(values).reduce(

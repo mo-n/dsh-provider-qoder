@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import { createQoderRpcCaller } from '../src/client/rpc-client.ts'
+import { isQoderRpcEndpoint, isQoderRpcErrorCode } from '../src/dsh/rpc-channel.ts'
 import { registerQoderRpc, type QoderFetchRoute } from '../src/dsh/rpc.ts'
 
 interface Capture {
@@ -99,6 +100,24 @@ test('a route keeps endpoint failures inside the envelope and reports bad reques
   assert.equal(await malformed.text(), 'body is not JSON')
 })
 
+test('a route returns an ABORTED envelope when the request is aborted', async () => {
+  const { context, routes } = captureConnection()
+  registerQoderRpc(context, async () => ({ ok: true, value: {} }))
+
+  const controller = new AbortController()
+  controller.abort()
+  const req = new Request('http://127.0.0.1/api/qoder-subscription/account', {
+    method: 'POST',
+    signal: controller.signal,
+  })
+  const response = await routes[0].fetch(req)
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    error: { code: 'ABORTED', message: 'Request aborted', details: { issues: [] } },
+  })
+})
+
 test('the settings RPC reports an unavailable Connection fetch registry', () => {
   const handler: ConnectionRpcHandler = async () => ({ ok: true, value: {} })
 
@@ -110,6 +129,29 @@ test('the settings RPC reports an unavailable Connection fetch registry', () => 
     () => registerQoderRpc({ connection: {} } as unknown as Context, handler),
     /connection exposes no exact Fetch route registry/u,
   )
+})
+
+test('isQoderRpcEndpoint recognizes valid endpoint names and rejects others', () => {
+  assert.equal(isQoderRpcEndpoint('account'), true)
+  assert.equal(isQoderRpcEndpoint('models'), true)
+  assert.equal(isQoderRpcEndpoint('unknown'), false)
+  assert.equal(isQoderRpcEndpoint(''), false)
+  assert.equal(isQoderRpcEndpoint(null), false)
+  assert.equal(isQoderRpcEndpoint(undefined), false)
+  assert.equal(isQoderRpcEndpoint(123), false)
+})
+
+test('isQoderRpcErrorCode recognizes valid error codes and rejects others', () => {
+  assert.equal(isQoderRpcErrorCode('NO_CREDENTIALS'), true)
+  assert.equal(isQoderRpcErrorCode('UNAUTHENTICATED'), true)
+  assert.equal(isQoderRpcErrorCode('UPSTREAM_ERROR'), true)
+  assert.equal(isQoderRpcErrorCode('TIMEOUT'), true)
+  assert.equal(isQoderRpcErrorCode('ABORTED'), true)
+  assert.equal(isQoderRpcErrorCode('UNKNOWN_ENDPOINT'), true)
+  assert.equal(isQoderRpcErrorCode('INTERNAL'), true)
+  assert.equal(isQoderRpcErrorCode('INVALID_CODE'), false)
+  assert.equal(isQoderRpcErrorCode(''), false)
+  assert.equal(isQoderRpcErrorCode(null), false)
 })
 
 test('the browser caller posts to the shared API channel with the session cookie', async () => {
@@ -124,7 +166,7 @@ test('the browser caller posts to the shared API channel with the session cookie
 
   const result = await caller.call('models', {}, controller.signal)
 
-  assert.deepEqual(result, { ok: true, data: [{ id: 'cmodel' }] })
+  assert.deepEqual(result, { ok: true, value: [{ id: 'cmodel' }] })
   assert.equal(String(calls[0].input), '/api/qoder-subscription/models')
   assert.equal(calls[0].init?.method, 'POST')
   assert.equal(calls[0].init?.credentials, 'include')
@@ -137,15 +179,47 @@ test('the browser caller reports transport and endpoint failures without throwin
   const unavailable = createQoderRpcCaller({ fetch: async () => new Response('', { status: 405 }) })
   assert.deepEqual(await unavailable.call('account', { force: true }), {
     ok: false,
-    error: 'transport failure for /api/qoder-subscription/account: HTTP 405',
+    error: {
+      code: 'UPSTREAM_ERROR',
+      message: 'transport failure for /api/qoder-subscription/account: HTTP 405',
+    },
   })
 
-  const rejected = createQoderRpcCaller({ fetch: async () => Response.json({ ok: false, error: { message: 'no PAT' } }) })
-  assert.deepEqual(await rejected.call('account', {}), { ok: false, error: 'no PAT' })
+  const rejected = createQoderRpcCaller({ fetch: async () => Response.json({ ok: false, error: { code: 'NO_CREDENTIALS', message: 'no PAT' } }) })
+  assert.deepEqual(await rejected.call('account', {}), {
+    ok: false,
+    error: { code: 'NO_CREDENTIALS', message: 'no PAT' },
+  })
+
+  const flatRejected = createQoderRpcCaller({ fetch: async () => Response.json({ ok: false, error: 'flat error' }) })
+  assert.deepEqual(await flatRejected.call('account', {}), {
+    ok: false,
+    error: { code: 'INTERNAL', message: 'flat error' },
+  })
 
   const errorless = createQoderRpcCaller({ fetch: async () => Response.json({ ok: false }) })
-  assert.deepEqual(await errorless.call('account', {}), { ok: false, error: 'RPC returned error' })
+  assert.deepEqual(await errorless.call('account', {}), {
+    ok: false,
+    error: { code: 'INTERNAL', message: 'RPC returned error' },
+  })
 
   const offline = createQoderRpcCaller({ fetch: async () => { throw new Error('Failed to fetch') } })
-  assert.deepEqual(await offline.call('account', {}), { ok: false, error: 'Failed to fetch' })
+  assert.deepEqual(await offline.call('account', {}), {
+    ok: false,
+    error: { code: 'INTERNAL', message: 'Failed to fetch' },
+  })
+
+  const abortedController = new AbortController()
+  abortedController.abort()
+  const abortedCaller = createQoderRpcCaller({
+    fetch: async () => {
+      const err = new Error('The operation was aborted')
+      err.name = 'AbortError'
+      throw err
+    },
+  })
+  assert.deepEqual(await abortedCaller.call('account', {}, abortedController.signal), {
+    ok: false,
+    error: { code: 'ABORTED', message: 'The operation was aborted' },
+  })
 })
