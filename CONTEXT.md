@@ -109,6 +109,10 @@ The provider-level mechanism that inspects the initiating agent's active model p
 _Avoid_: static search provider, fixed search binding
 
 **Qoder settings RPC**:
-The loopback exchange that answers the Qoder cards' model-catalog and subscriber-account reads from the host, carried as Connection exact Fetch routes on the shared `/api` channel rather than as a dedicated RPC channel.
+The loopback exchange that answers the Qoder cards' model-catalog and subscriber-account reads from the host, carried as Connection exact Fetch routes on the shared `/api` channel using standard `ConnectionRpcResult` envelopes (`{ ok: true, value }` or `{ ok: false, error: { code, message } }`), rather than as a dedicated RPC channel or an ad-hoc REST endpoint.
 _Avoid_: remote API client, quota webhook, HTTP proxy
+
+**Qoder settings RPC error code**:
+A standardized diagnostic identifier (`NO_CREDENTIALS`, `UNAUTHENTICATED`, `UPSTREAM_ERROR`, `TIMEOUT`, `ABORTED`, `UNKNOWN_ENDPOINT`, or `INTERNAL`) carried in a settings RPC failure envelope to drive UI state without inspecting free-form message strings.
+_Avoid_: HTTP status mapping, ad-hoc string matching
 

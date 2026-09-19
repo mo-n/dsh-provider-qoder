@@ -34,10 +34,10 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
     const result = await operations.discoverModels()
     setFetching(false)
     if (!result.ok) {
-      setFailure(result.error || t('modelsFetchFailed'))
+      setFailure(result.error.message || t('modelsFetchFailed'))
       return
     }
-    const reconciled = reconcileQoderModels(catalog ?? models, result.data)
+    const reconciled = reconcileQoderModels(catalog ?? models, result.value)
     setCatalog(reconciled.catalog)
     setUnavailableIds(reconciled.unavailableIds)
     onChange(reconciled.selected)

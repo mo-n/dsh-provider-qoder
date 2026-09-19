@@ -6,16 +6,18 @@
  * authentication; the caller only has to carry the session cookie.
  */
 
-import { qoderRpcPath, type QoderRpcEndpoint } from '../dsh/rpc-channel.ts'
-
-export type QoderRpcOutcome<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: string }
+import {
+  isQoderRpcErrorCode,
+  qoderRpcPath,
+  type QoderRpcEndpoint,
+  type QoderRpcErrorCode,
+  type QoderRpcResult,
+} from '../dsh/rpc-channel.ts'
 
 interface QoderRpcEnvelope {
   ok?: unknown
   value?: unknown
-  error?: { message?: unknown }
+  error?: unknown
 }
 
 export interface QoderRpcTransport {
@@ -24,7 +26,7 @@ export interface QoderRpcTransport {
 }
 
 export interface QoderRpcCaller {
-  call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcOutcome<T>>
+  call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcResult<T>>
 }
 
 /**
@@ -37,7 +39,7 @@ export interface QoderRpcCaller {
 export function createQoderRpcCaller(transport: QoderRpcTransport = {}): QoderRpcCaller {
   const send = transport.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
   return {
-    async call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcOutcome<T>> {
+    async call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcResult<T>> {
       const path = qoderRpcPath(endpoint)
       try {
         const response = await send(path, {
@@ -47,13 +49,51 @@ export function createQoderRpcCaller(transport: QoderRpcTransport = {}): QoderRp
           body: JSON.stringify(payload ?? {}),
           ...signal === undefined ? {} : { signal },
         })
-        if (!response.ok) return { ok: false, error: `transport failure for ${path}: HTTP ${response.status}` }
+        if (!response.ok) {
+          const code: QoderRpcErrorCode = signal?.aborted ? 'ABORTED' : 'UPSTREAM_ERROR'
+          return {
+            ok: false,
+            error: {
+              code,
+              message: `transport failure for ${path}: HTTP ${response.status}`,
+            },
+          }
+        }
         const envelope = await response.json() as QoderRpcEnvelope
-        if (envelope?.ok === true) return { ok: true, data: envelope.value as T }
-        const message = envelope?.error?.message
-        return { ok: false, error: typeof message === 'string' ? message : 'RPC returned error' }
+        if (envelope?.ok === true) return { ok: true, value: envelope.value as T }
+
+        const rawError = envelope?.error
+        let code: QoderRpcErrorCode = 'INTERNAL'
+        let message = 'RPC returned error'
+        let details: object | undefined
+
+        if (typeof rawError === 'string') {
+          message = rawError
+        } else if (typeof rawError === 'object' && rawError !== null) {
+          const errObj = rawError as { code?: unknown; message?: unknown; details?: unknown }
+          if (isQoderRpcErrorCode(errObj.code)) code = errObj.code
+          if (typeof errObj.message === 'string') message = errObj.message
+          if (typeof errObj.details === 'object' && errObj.details !== null) details = errObj.details
+        }
+        if (code === 'INTERNAL' && signal?.aborted) code = 'ABORTED'
+
+        return {
+          ok: false,
+          error: {
+            code,
+            message,
+            ...details === undefined ? {} : { details },
+          },
+        }
       } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        const isAbort = signal?.aborted || (error instanceof Error && error.name === 'AbortError')
+        return {
+          ok: false,
+          error: {
+            code: isAbort ? 'ABORTED' : 'INTERNAL',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }
       }
     },
   }

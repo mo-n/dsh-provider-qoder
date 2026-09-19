@@ -85,6 +85,12 @@ async function handleQoderRpcRequest(
   handler: ConnectionRpcHandler,
   request: Request,
 ): Promise<Response> {
+  if (request.signal.aborted) {
+    return Response.json({
+      ok: false,
+      error: { code: 'ABORTED', message: 'Request aborted', details: { issues: [] } },
+    })
+  }
   let payload: unknown = {}
   const body = await request.text()
   if (body.trim().length > 0) {
@@ -97,6 +103,12 @@ async function handleQoderRpcRequest(
   try {
     return Response.json(await handler(endpoint, payload, request.signal))
   } catch (error) {
+    if (request.signal.aborted) {
+      return Response.json({
+        ok: false,
+        error: { code: 'ABORTED', message: 'Request aborted', details: { issues: [] } },
+      })
+    }
     return new Response(`handler failure: ${String(error)}`, { status: 500 })
   }
 }

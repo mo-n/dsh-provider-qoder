@@ -56,8 +56,8 @@ export function QoderAccountCard({ operations, t }: QoderAccountCardProps) {
     try {
       const result = await operations.getAccount(force)
       if (requestId !== latestAccountRequest.current) return
-      if (result?.ok) setAccountState({ status: 'ready', account: result.data })
-      else setAccountState({ status: 'failed', error: result?.error })
+      if (result && result.ok) setAccountState({ status: 'ready', account: result.value })
+      else setAccountState({ status: 'failed', error: result?.error?.message })
     } catch (error) {
       if (requestId !== latestAccountRequest.current) return
       setAccountState({ status: 'failed', error: error instanceof Error ? error.message : String(error) })

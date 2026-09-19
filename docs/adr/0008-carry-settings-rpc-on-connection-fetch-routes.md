@@ -44,9 +44,9 @@ plugin uses. Connection's `/api` route keeps applying its Host/Origin fence and
 browser authentication before dispatch, so the routes are exactly as protected
 as the channel was.
 
-The wire contract is a plain result envelope — `{ ok: true, value }` or
-`{ ok: false, error }` — instead of the Connection client-request envelope,
-because the calling half builds its own request with `fetch`. The 405 diagnostic
+The wire contract is a standard result envelope — `{ ok: true, value }` or
+`{ ok: false, error: { code, message } }` — instead of the Connection client-request
+envelope, because the calling half builds its own request with `fetch`. The 405 diagnostic
 is preserved verbatim so a future transport failure stays recognizable.
 
 The client half therefore no longer needs the `connection` client service, and
