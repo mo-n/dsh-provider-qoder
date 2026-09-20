@@ -250,8 +250,39 @@ test('parseQoderSse treats EOF before any finish reason as a retryable transport
   }, (error: Error) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
 })
 
+test('parseQoderSse ignores a null delta before DONE', async () => {
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content: 'Done.' } }] }),
+    data({ choices: [{ delta: null, finish_reason: null }] }),
+    done,
+  ]))) chunks.push(chunk)
+
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+    { type: 'text', text: 'Done.' },
+  ])
+  assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'stop')
+})
+
+test('parseQoderSse preserves completion across trailing null and empty tool deltas', async () => {
+  for (const delta of [null, { tool_calls: [] }]) {
+    const chunks = []
+    for await (const chunk of parseQoderSse(streamOf([
+      data({ choices: [{ delta: { content: 'Done.' }, finish_reason: 'stop' }] }),
+      data({ choices: [{ delta, finish_reason: null }] }),
+    ]))) chunks.push(chunk)
+
+    assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+      { type: 'text', text: 'Done.' },
+    ])
+    assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'stop')
+  }
+})
+
 test('parseQoderSse does not treat a control-only frame as stream completion', async () => {
   const truncated = [
+    [data({ choices: [{ delta: null, finish_reason: null }] })],
+    [data({ choices: [{ delta: { tool_calls: [] } }] })],
     [data({ choices: [{ delta: {}, finish_reason: null }] })],
     [data({ choices: [{ delta: {}, finish_reason: '' }] })],
     [data({ choices: [] })],
