@@ -128,7 +128,7 @@ export interface QoderInnerChunk {
           arguments?: string
         }
       }>
-    }
+    } | null
     finish_reason?: string | null
   }>
   usage?: {

@@ -98,7 +98,7 @@ function finishKind(value: string | null | undefined): SuccessfulFinishKind | un
   if (value === undefined || value === null || value === '') return undefined
   if (value === 'stop') return 'stop'
   if (value === 'length') return 'max-tokens'
-  // The Sonus route terminates tool-calling turns with the legacy OpenAI alias for "tool_calls".
+  // Qoder CLI accepts this legacy OpenAI alias alongside "tool_calls".
   if (value === 'tool_calls' || value === 'toolUse' || value === 'function_call') return 'tool-calls'
   if (value === 'content_filter') {
     throw new QoderLlmError('Qoder blocked the response through its content filter.', 'PROVIDER_ERROR')
@@ -110,8 +110,8 @@ type QoderInnerDelta = NonNullable<QoderInnerChunk['choices']>[number]['delta']
 
 /** Whether a choice delta streams content, reasoning, or tool-call data. Control-only frames do not. */
 function carriesStreamDelta(delta: QoderInnerDelta): boolean {
-  if (delta === undefined) return false
-  if (delta.tool_calls !== undefined) return true
+  if (delta == null) return false
+  if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) return true
   if (typeof delta.content === 'string' && delta.content) return true
   if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) return true
   return false
