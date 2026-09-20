@@ -328,3 +328,52 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
 
 })
 
+test('a stored context tier widens the context window reported to DSH', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  plugin.apply(ctx, {
+    modelsByRegion: {
+      global: [{
+        id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextTier: 'large',
+        contextOptions: {
+          small: { tokenCount: 200_000, isDefault: true },
+          large: { tokenCount: 1_000_000 },
+        },
+      }],
+    },
+  })
+
+  const prepared = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'tiered' })
+  assert.equal(prepared.context?.contextWindow, 1_000_000)
+})
+
+test('the settings round-trip keeps a context tier selection', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  plugin.apply(ctx, {})
+  await ctx.fiber.await()
+  const ns = 'provider-qoder' as SettingsNamespace
+
+  await ctx.settings.update(ns, {
+    modelsByRegion: {
+      global: [{
+        id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large',
+        contextOptions: {
+          small: { tokenCount: 200_000, isDefault: true },
+          large: { tokenCount: 1_000_000 },
+        },
+      }],
+    },
+  })
+
+  const stored = ctx.settings.get(ns) as plugin.Config
+  assert.equal(stored.modelsByRegion?.global?.[0].contextTier, 'large')
+  assert.equal(
+    (await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'tiered' })).context?.contextWindow,
+    1_000_000,
+  )
+})

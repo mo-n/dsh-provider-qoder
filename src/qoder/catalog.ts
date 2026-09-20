@@ -8,6 +8,11 @@ export interface QoderCatalogModel {
   contextWindow?: number
   /** Largest known capacity, independent of the effective input budget. */
   maxContextWindow?: number
+  /**
+   * Provider-owned key of the context tier the subscriber selected. Absent means
+   * the provider default tier decides the effective input budget.
+   */
+  contextTier?: string
   maxTokens?: number
   source?: string
   isReasoning?: boolean
@@ -173,6 +178,32 @@ export function normalizeQoderModels(
   return models
 }
 
+/**
+ * The provider-advertised context tier the subscriber selected, when the
+ * provider still advertises that tier with a usable capacity.
+ */
+export function selectedContextTier(
+  model: Pick<QoderCatalogModel, 'contextTier' | 'contextOptions'>,
+): { key: string; tokenCount: number } | undefined {
+  const key = model.contextTier
+  if (typeof key !== 'string' || key.length === 0) return undefined
+  const tokenCount = positiveNumber(model.contextOptions?.[key]?.tokenCount)
+  return tokenCount === undefined ? undefined : { key, tokenCount }
+}
+
+/**
+ * Effective input budget carried to DSH for one catalog entry.
+ *
+ * A selected tier is an explicit subscriber decision, so it outranks the
+ * provider default tier and may widen the budget beyond it; without a selection
+ * the entry keeps its stored budget.
+ */
+export function effectiveContextWindow(
+  model: Pick<QoderCatalogModel, 'contextWindow' | 'contextTier' | 'contextOptions'>,
+): number | undefined {
+  return selectedContextTier(model)?.tokenCount ?? model.contextWindow
+}
+
 export function mergeQoderDiscoveryMetadata(
   configured: readonly QoderCatalogModel[],
   discovered: readonly QoderCatalogModel[],
@@ -183,12 +214,20 @@ export function mergeQoderDiscoveryMetadata(
     if (advertised === undefined) return { ...model }
 
     const merged = { ...model }
-    if (advertised.contextWindow !== undefined) {
-      merged.contextWindow = Math.min(model.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
-    }
     for (const key of discoveredMetadataKeys) delete merged[key]
     for (const key of discoveredMetadataKeys) {
       if (advertised[key] !== undefined) Object.assign(merged, { [key]: advertised[key] })
+    }
+    // The selection is resolved after the refreshed tier options land: a selected
+    // tier is an explicit subscriber decision and outranks the provider default.
+    const tier = selectedContextTier(merged)
+    if (tier !== undefined) {
+      merged.contextWindow = tier.tokenCount
+      return merged
+    }
+    delete merged.contextTier
+    if (advertised.contextWindow !== undefined) {
+      merged.contextWindow = Math.min(model.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
     }
     return merged
   })

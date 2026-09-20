@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { fetchQoderModels } from '../src/qoder/transport/catalog-reader.ts'
 import {
+  effectiveContextWindow,
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
   normalizeQoderModels,
+  selectedContextTier,
 } from '../src/qoder/catalog.ts'
 
 const payload = {
@@ -303,4 +305,42 @@ test('fetchQoderModels rejects oversized catalog responses', async () => {
       headers: { 'content-length': String(3 * 1024 * 1024) },
     })) as typeof fetch,
   }), (error: Error) => error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE')
+})
+
+test('an explicit context tier outranks the provider default and survives rediscovery', () => {
+  const discovered = normalizeQoderModels({ assistant: [{
+    key: 'model', enable: true,
+    context_config: {
+      small: { token_count: 200_000, is_default: true },
+      large: { token_count: 1_000_000 },
+    },
+  }] })
+  assert.equal(discovered[0].contextWindow, 200_000)
+  assert.equal(selectedContextTier(discovered[0]), undefined)
+  assert.equal(effectiveContextWindow(discovered[0]), 200_000)
+
+  const selected = { ...discovered[0], contextTier: 'large', contextWindow: 1_000_000 }
+  assert.deepEqual(selectedContextTier(selected), { key: 'large', tokenCount: 1_000_000 })
+  assert.equal(effectiveContextWindow(selected), 1_000_000)
+
+  const merged = mergeQoderDiscoveryMetadata([selected], discovered)
+  assert.equal(merged[0].contextTier, 'large')
+  assert.equal(merged[0].contextWindow, 1_000_000)
+  assert.equal(hasSameQoderDiscoveryMetadata(merged, mergeQoderDiscoveryMetadata(merged, discovered)), true)
+})
+
+test('a context tier selection is dropped once the provider stops advertising it', () => {
+  const selected = [{
+    id: 'model', name: 'Model', contextWindow: 1_000_000, contextTier: 'large',
+    contextOptions: { small: { tokenCount: 200_000, isDefault: true }, large: { tokenCount: 1_000_000 } },
+  }]
+  const narrowed = normalizeQoderModels({ assistant: [{
+    key: 'model', enable: true,
+    context_config: { small: { token_count: 200_000, is_default: true } },
+  }] })
+
+  const merged = mergeQoderDiscoveryMetadata(selected, narrowed)
+
+  assert.equal(merged[0].contextTier, undefined)
+  assert.equal(merged[0].contextWindow, 200_000)
 })
