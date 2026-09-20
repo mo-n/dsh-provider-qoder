@@ -98,11 +98,23 @@ function finishKind(value: string | null | undefined): SuccessfulFinishKind | un
   if (value === undefined || value === null || value === '') return undefined
   if (value === 'stop') return 'stop'
   if (value === 'length') return 'max-tokens'
-  if (value === 'tool_calls' || value === 'toolUse') return 'tool-calls'
+  // The Sonus route terminates tool-calling turns with the legacy OpenAI alias for "tool_calls".
+  if (value === 'tool_calls' || value === 'toolUse' || value === 'function_call') return 'tool-calls'
   if (value === 'content_filter') {
     throw new QoderLlmError('Qoder blocked the response through its content filter.', 'PROVIDER_ERROR')
   }
   throw malformed(`Qoder returned unknown finish reason "${value}".`)
+}
+
+type QoderInnerDelta = NonNullable<QoderInnerChunk['choices']>[number]['delta']
+
+/** Whether a choice delta streams content, reasoning, or tool-call data. Control-only frames do not. */
+function carriesStreamDelta(delta: QoderInnerDelta): boolean {
+  if (delta === undefined) return false
+  if (delta.tool_calls !== undefined) return true
+  if (typeof delta.content === 'string' && delta.content) return true
+  if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) return true
+  return false
 }
 
 export async function* parseQoderSse(
@@ -120,6 +132,7 @@ export async function* parseQoderSse(
   let activeTextual: TextualBlockState | undefined
   let pendingUsage: TokenUsage | undefined
   let terminalKind: SuccessfulFinishKind = 'stop'
+  let sawFinishReason = false
   let sawContent = false
   const maxBufferChars = options.maxBufferChars ?? defaultMaxSseBufferChars
 
@@ -212,7 +225,15 @@ export async function* parseQoderSse(
         pendingUsage = tokenUsage(innerChunk) ?? pendingUsage
 
         for (const choice of innerChunk.choices ?? []) {
-          terminalKind = finishKind(choice.finish_reason) ?? terminalKind
+          const kind = finishKind(choice.finish_reason)
+          if (kind !== undefined) {
+            terminalKind = kind
+            sawFinishReason = true
+          } else if (carriesStreamDelta(choice.delta)) {
+            // A finish reason is terminal only while nothing streams after it. A later content or
+            // tool delta means the turn kept going, so the sentinel is required again at EOF.
+            sawFinishReason = false
+          }
           const delta = choice.delta
           if (!delta) continue
 
@@ -307,7 +328,10 @@ export async function* parseQoderSse(
     reader.releaseLock()
   }
 
-  if (!sawDone) throw new QoderLlmError('SSE stream ended prematurely without [DONE].', 'TRANSPORT')
+  // Qoder does not always close the SSE body with a [DONE] sentinel. A terminal finish reason that
+  // nothing streamed past proves the turn declared completion, so only a stream without one is a
+  // truncation.
+  if (!sawDone && !sawFinishReason) throw new QoderLlmError('SSE stream ended prematurely without [DONE].', 'TRANSPORT')
 
   for (const segment of thinkingParser.finish()) {
     for (const chunk of appendSegment(segment)) yield chunk

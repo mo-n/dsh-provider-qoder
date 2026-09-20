@@ -96,6 +96,26 @@ test('parseQoderSse assembles interleaved parallel tool calls', async () => {
   assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'tool-calls')
 })
 
+test('parseQoderSse accepts the legacy function_call finish reason without a DONE sentinel', async () => {
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content: 'Reading the pull request first.' } }] }),
+    data({ choices: [{ delta: { tool_calls: [
+      { index: 0, id: 'call-legacy', function: { name: 'read_file' } },
+    ] } }] }),
+    data({ choices: [{ delta: { tool_calls: [
+      { index: 0, function: { arguments: '{"path":"src/index.ts"}' } },
+    ] } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'function_call' }] }),
+  ]))) chunks.push(chunk)
+
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+    { type: 'text', text: 'Reading the pull request first.' },
+    { type: 'tool-call', id: 'call-legacy', name: 'read_file', arguments: '{"path":"src/index.ts"}' },
+  ])
+  assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'tool-calls')
+})
+
 test('parseQoderSse normalizes absent tool arguments to an empty object', async () => {
   const chunks = []
   for await (const chunk of parseQoderSse(streamOf([
@@ -212,12 +232,84 @@ test('parseQoderSse rejects invalid status, malformed body, and premature EOF', 
   }
 })
 
-test('parseQoderSse treats EOF after finish_reason as a retryable transport truncation', async () => {
+test('parseQoderSse completes a body closed without the DONE sentinel after a finish reason', async () => {
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content: 'complete-looking' }, finish_reason: 'stop' }] }),
+  ]))) chunks.push(chunk)
+
+  assert.deepEqual(chunks.map(chunk => chunk.type), ['block-start', 'text-delta', 'block-end', 'finish'])
+  assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'stop')
+})
+
+test('parseQoderSse treats EOF before any finish reason as a retryable transport truncation', async () => {
   await assert.rejects(async () => {
     for await (const _chunk of parseQoderSse(streamOf([
-      data({ choices: [{ delta: { content: 'complete-looking' }, finish_reason: 'stop' }] }),
+      data({ choices: [{ delta: { content: 'half an ans' } }] }),
     ]))) continue
   }, (error: Error) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
+})
+
+test('parseQoderSse does not treat a control-only frame as stream completion', async () => {
+  const truncated = [
+    [data({ choices: [{ delta: {}, finish_reason: null }] })],
+    [data({ choices: [{ delta: {}, finish_reason: '' }] })],
+    [data({ choices: [] })],
+    [data({ usage: { prompt_tokens: 4, completion_tokens: 2 } })],
+    [data({ choices: [{ delta: { role: 'assistant' } }] })],
+  ]
+  for (const lines of truncated) {
+    await assert.rejects(async () => {
+      for await (const _chunk of parseQoderSse(streamOf(lines))) continue
+    }, (error: Error) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
+  }
+})
+
+test('parseQoderSse completes when the terminal reason arrives after the last streamed delta', async () => {
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content: 'Done.' } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+  ]))) chunks.push(chunk)
+
+  assert.deepEqual(chunks.map(chunk => chunk.type), ['block-start', 'text-delta', 'block-end', 'finish'])
+  assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'stop')
+})
+
+test('parseQoderSse requires the DONE sentinel once a terminal reason is followed by more content', async () => {
+  const truncated = [
+    data({ choices: [{ delta: { content: 'Answer so far.' }, finish_reason: 'stop' }] }),
+    data({ choices: [{ delta: { content: ' and a tail that may be cut' } }] }),
+  ]
+  await assert.rejects(async () => {
+    for await (const _chunk of parseQoderSse(streamOf(truncated))) continue
+  }, (error: Error) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
+
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([...truncated, done]))) chunks.push(chunk)
+  const blocks = chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block)
+  assert.deepEqual(blocks, [{ type: 'text', text: 'Answer so far. and a tail that may be cut' }])
+})
+
+test('parseQoderSse requires the DONE sentinel while another choice keeps streaming', async () => {
+  await assert.rejects(async () => {
+    for await (const _chunk of parseQoderSse(streamOf([
+      data({ choices: [{ index: 0, delta: { content: 'first' }, finish_reason: 'stop' }] }),
+      data({ choices: [{ index: 1, delta: { content: 'second' } }] }),
+    ]))) continue
+  }, (error: Error) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
+})
+
+test('parseQoderSse relays an upstream tool-calls reason without inventing a tool-call block', async () => {
+  // Deliberate, ADR-0009-documented limitation: the reported reason is relayed as received and no
+  // tool-call block is synthesized for a turn that never streamed one.
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content: 'No tool after all.' }, finish_reason: 'function_call' }] }),
+  ]))) chunks.push(chunk)
+
+  assert.equal(chunks.some(chunk => chunk.type === 'block-end' && chunk.block.type === 'tool-call'), false)
+  assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'tool-calls')
 })
 
 test('parseQoderSse preserves explicit upstream error statuses', async () => {
