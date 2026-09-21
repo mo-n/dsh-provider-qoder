@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-web'
 import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderSearchProvider } from './search-provider.ts'
@@ -129,6 +129,17 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     models: initial.models,
     providerId: providerQoder,
     providerName: 'Qoder',
+    onModelsDiscovered: (transport, models) => {
+      if (transport !== activeTransport || ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
+      const region = activeTransportConfig.region
+      discoveredCatalogs[region] = models
+      refreshAdapter()
+      // Persist in the background so a queued settings write never stalls catalog reads.
+      void persistDiscoveredModels(region).catch((error) => {
+        // A settings failure must not discard fresh metadata or break model reads.
+        logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error))
+      })
+    },
   })
 
   const registration = ctx.llm.registerAdapter([providerQoder], adapter)
@@ -170,14 +181,33 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     })
     legacyModelsRegion = scope.get().region ?? initialRegion
     current = () => scope.get()
-    persistDiscoveredModels = async (region) => {
-      const value = scope.get()
-      const selected = modelsFor(value, region, legacyModelsRegion)
-      const enriched = mergeQoderDiscoveryMetadata(selected, discoveredCatalogs[region])
-      if (!hasSameQoderDiscoveryMetadata(selected, enriched)) {
-        await scope.update({ modelsByRegion: { ...value.modelsByRegion, [region]: enriched } })
+    let bindingActive = true
+    const persistCatalog = async (region: QoderRegion): Promise<void> => {
+      while (bindingActive && ctx.fiber.state !== fiberUnloading && ctx.fiber.state !== fiberDisposed) {
+        if (!settingsCtx.settings.writable || discoveredCatalogs[region].length === 0) return
+        const snapshot = settingsCtx.settings.describe().find(section => section.ns === settingsNamespace)
+        if (snapshot === undefined) return
+        const selected = modelsFor(snapshot.value as QoderConfig, region, legacyModelsRegion)
+        // Compare the stored schema shape (including empty collection defaults) so
+        // an unchanged catalog does not trigger another settings write on every read.
+        const enriched = modelsFor(Config({
+          modelsByRegion: { [region]: mergeQoderDiscoveryMetadata(selected, discoveredCatalogs[region]) },
+        }), region)
+        if (hasSameQoderDiscoveryMetadata(selected, enriched)) return
+        try {
+          // Discovery is advisory. Never overwrite a user's concurrent model selection
+          // or replay a stale snapshot of another region while persisting metadata.
+          await settingsCtx.settings.update(settingsNamespace, {
+            modelsByRegion: { [region]: enriched },
+          }, snapshot.revision)
+          return
+        } catch (error) {
+          if (!(error instanceof SettingsConflictError)) throw error
+          // Reconcile again against the committed selection and latest discovery.
+        }
       }
     }
+    persistDiscoveredModels = persistCatalog
     refreshAdapter()
 
     const loaded = scope.get()
@@ -186,25 +216,23 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
       && loaded.modelsByRegion?.[loadedRegion] === undefined) {
       void scope.update({
         modelsByRegion: {
-          ...loaded.modelsByRegion,
           [loadedRegion]: resolveModels(loaded.models),
         },
       }).catch(error => logger?.error?.('[Qoder Settings] Failed to migrate model catalog', logError(error)))
     }
 
-    scope.watch(async (next) => {
-      if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
+    scope.watch(async () => {
+      if (!bindingActive || ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
       refreshAdapter()
-      const region = next.region ?? 'global'
-      const selected = modelsFor(next, region, legacyModelsRegion)
-      const enriched = mergeQoderDiscoveryMetadata(selected, discoveredCatalogs[region])
-      if (!hasSameQoderDiscoveryMetadata(selected, enriched)) {
-        await scope.update({
-          modelsByRegion: { ...next.modelsByRegion, [region]: enriched },
-        })
-      }
+      await persistCatalog(scope.get().region ?? 'global')
     })
+    // Settings may attach after an automatic discovery has already warmed the cache.
+    for (const region of ['global', 'china'] as const) {
+      if (discoveredCatalogs[region].length === 0) continue
+      void persistCatalog(region).catch(error => logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error)))
+    }
     settingsCtx.effect(() => () => {
+      bindingActive = false
       if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
       persistDiscoveredModels = async () => {}
       current = () => baseConfig
