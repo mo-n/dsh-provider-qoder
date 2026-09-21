@@ -9,6 +9,17 @@ function transport(discoverModels: () => Promise<readonly QoderCatalogModel[]>):
   return { discoverModels } as QoderTransport
 }
 
+/** Bound a catalog read so a stall fails the test instead of hanging the suite. */
+function withDeadline<T>(pending: Promise<T>, message: string): Promise<T> {
+  return Promise.race([
+    pending,
+    new Promise<never>((_resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), 2_000)
+      timer.unref()
+    }),
+  ])
+}
+
 test('explicit discovery supersedes cached metadata and older in-flight discovery', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 })
   const old = [{ id: 'chosen', name: 'Chosen', supportsImages: false, priceFactor: 2 }]
@@ -131,4 +142,22 @@ test('a failed discovery notification does not discard fresh runtime metadata', 
   assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
   assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
   assert.equal(notifications, 1)
+})
+
+test('catalog reads do not wait for a pending discovery notification', async () => {
+  const remote = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
+  let notified!: () => void
+  const notificationStarted = new Promise<void>(resolve => { notified = resolve })
+  const adapter = new QoderAdapter({
+    resolveTransport: () => remote,
+    models: [{ id: 'chosen', name: 'Chosen', priceFactor: 1 }],
+    onModelsDiscovered: () => new Promise<void>(() => { notified() }),
+  })
+  const models = await withDeadline(
+    adapter.listModels(QODER_PROVIDER_ID),
+    'catalog read waited for the discovery notification',
+  )
+  await notificationStarted
+  assert.match(models[0].name, /3x/u)
+  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
 })

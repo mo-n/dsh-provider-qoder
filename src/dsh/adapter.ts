@@ -22,8 +22,14 @@ export interface QoderAdapterOptions {
   models?: readonly QoderCatalogModel[]
   providerId?: string
   providerName?: string
-  /** Publish accepted automatic discoveries to the host's settings catalog. */
-  onModelsDiscovered?: (transport: QoderTransport, models: readonly QoderCatalogModel[]) => void | Promise<void>
+  /**
+   * Publish accepted automatic discoveries to the host's settings catalog.
+   *
+   * The return value is ignored: a catalog read never waits for this
+   * notification, so a host that persists settings owns its own background
+   * scheduling and error handling.
+   */
+  onModelsDiscovered?: (transport: QoderTransport, models: readonly QoderCatalogModel[]) => unknown
 }
 
 function modelInfo(provider: string, model: QoderCatalogModel): LlmModelInfo {
@@ -73,13 +79,13 @@ export class QoderAdapter extends LlmAdapter {
     }
     const entry = cached
     if (entry.inflight === undefined && Date.now() >= entry.expiresAt) {
-      entry.inflight = Promise.resolve().then(() => transport.discoverModels()).then(async models => {
+      entry.inflight = Promise.resolve().then(() => transport.discoverModels()).then(models => {
         // Explicit discovery replaces this entry; a region switch replaces the transport.
         // Neither obsolete result may overwrite the host's current settings catalog.
         if (this.discoveries.get(transport) !== entry || this.resolveTransport() !== transport) return
         entry.models = models
         entry.expiresAt = Date.now() + 5 * 60 * 1000
-        await this.onModelsDiscovered?.(transport, models)
+        this.publishDiscoveredModels(transport, models)
       }).catch(() => {
         // Discovery is advisory: retain the configured or last advertised models on failure.
       }).finally(() => { entry.inflight = undefined })
@@ -87,6 +93,23 @@ export class QoderAdapter extends LlmAdapter {
     await entry.inflight
     if (this.resolveTransport() !== transport) return this.listModels(provider)
     return this.effectiveModels().map(model => modelInfo(provider, model))
+  }
+
+  /**
+   * Announce one accepted discovery without joining the catalog read.
+   *
+   * Persisting metadata can queue behind unrelated settings writes, so awaiting
+   * it here would stall every `listModels` call on settings storage.
+   */
+  private publishDiscoveredModels(transport: QoderTransport, models: readonly QoderCatalogModel[]): void {
+    try {
+      const pending: unknown = this.onModelsDiscovered?.(transport, models)
+      if (pending !== undefined && pending !== null && typeof (pending as Promise<unknown>).catch === 'function') {
+        void (pending as Promise<unknown>).catch(() => {})
+      }
+    } catch {
+      // Discovery is advisory: a notification failure never affects catalog reads.
+    }
   }
 
   private effectiveModels(): readonly QoderCatalogModel[] {

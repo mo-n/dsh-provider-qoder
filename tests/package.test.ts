@@ -216,6 +216,11 @@ async function modelRuntime(config: plugin.Config) {
   return { ctx, settings: ctx.settings as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace }
 }
 
+/** Let background settings writes and their revision retries settle. */
+async function drain(): Promise<void> {
+  for (let turn = 0; turn < 20; turn++) await new Promise<void>(resolve => setImmediate(resolve))
+}
+
 test('automatic discovery persists rates without changing selection and refreshes after five minutes', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 })
   let advertised: QoderCatalogModel[] = [
@@ -231,6 +236,7 @@ test('automatic discovery persists rates without changing selection and refreshe
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
     ['chosen', 'Chosen name （2x）'],
   ])
+  await drain()
   assert.deepEqual(stored().global, normalizedCatalog([{ ...chosen, priceFactor: 2 }]))
   assert.deepEqual(stored().china, normalizedCatalog(china))
   assert.equal((settings.writes[0] as plugin.Config).modelsByRegion?.global?.[0].priceFactor, 2)
@@ -238,23 +244,57 @@ test('automatic discovery persists rates without changing selection and refreshe
 
   t.mock.timers.tick(299_999)
   await ctx.llm.listModels(QODER_PROVIDER_ID)
+  await drain()
   assert.equal(discovery.mock.callCount(), 1)
   assert.equal(settings.writes.length, 1)
   t.mock.timers.tick(1)
   advertised = [{ ...advertised[0], priceFactor: 0 }]
   assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
+  await drain()
   assert.equal(stored().global?.[0].priceFactor, 0)
 
   t.mock.timers.tick(300_000)
   advertised = [{ id: 'chosen', name: 'Remote name', contextWindow: 200_000 }]
   assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, chosen.name)
+  await drain()
   assert.equal(Object.hasOwn(stored().global![0], 'priceFactor'), false)
   assert.equal(settings.writes.length, 3)
   t.mock.timers.tick(300_000)
   await ctx.llm.listModels(QODER_PROVIDER_ID)
+  await drain()
   assert.equal(discovery.mock.callCount(), 4)
   assert.equal(settings.writes.length, 3)
   assert.deepEqual(stored().china, normalizedCatalog(china))
+})
+
+test('automatic discovery returns the catalog before settings persistence finishes', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 })
+  t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Remote name', priceFactor: 3 },
+  ])
+  const { ctx, settings } = await modelRuntime({ modelsByRegion: {
+    global: [{ id: 'chosen', name: 'Chosen name', priceFactor: 1 }],
+  } })
+  let release!: () => void
+  let persistStarted!: () => void
+  const started = new Promise<void>(resolve => { persistStarted = resolve })
+  settings.onPersist = async () => {
+    settings.onPersist = undefined
+    persistStarted()
+    await new Promise<void>(resolve => { release = resolve })
+  }
+
+  let listed = false
+  const reading = ctx.llm.listModels(QODER_PROVIDER_ID).then((models) => {
+    listed = true
+    return models
+  })
+  await started
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(listed, true)
+  assert.match((await reading)[0].name, /3x/u)
+  release()
+  await drain()
 })
 
 test('settings edits do not persist fallback models before a successful discovery', async () => {
@@ -278,14 +318,17 @@ test('automatic discovery and settings persistence failures remain advisory', as
   settings.onPersist = async () => { throw new Error('storage unavailable') }
 
   assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  await drain()
   assert.equal(settings.writes.length, 1)
   assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
   await ctx.llm.listModels(QODER_PROVIDER_ID)
+  await drain()
   assert.equal(discovery.mock.callCount(), 1)
   assert.equal(settings.writes.length, 1)
   offline = true
   t.mock.timers.tick(300_000)
   assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  await drain()
   assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
   assert.equal(settings.writes.length, 1)
 })
@@ -327,7 +370,9 @@ test('automatic discovery cannot overwrite a settings save already awaiting pers
   await new Promise<void>(resolve => setImmediate(resolve))
   releaseSave()
   await Promise.all([save, reading])
-  await new Promise<void>(resolve => setImmediate(resolve))
+  // The queued metadata write reconciles under a stale revision, so let its
+  // conflict retry settle before reading the committed catalog.
+  await drain()
 
   const stored = ctx.settings.get(ns) as plugin.Config
   assert.deepEqual(stored.modelsByRegion?.global, normalizedCatalog([{ ...chosen, priceFactor: 4 }]))

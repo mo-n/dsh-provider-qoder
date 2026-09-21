@@ -129,17 +129,16 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     models: initial.models,
     providerId: providerQoder,
     providerName: 'Qoder',
-    onModelsDiscovered: async (transport, models) => {
+    onModelsDiscovered: (transport, models) => {
       if (transport !== activeTransport || ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
       const region = activeTransportConfig.region
       discoveredCatalogs[region] = models
       refreshAdapter()
-      try {
-        await persistDiscoveredModels(region)
-      } catch (error) {
+      // Persist in the background so a queued settings write never stalls catalog reads.
+      void persistDiscoveredModels(region).catch((error) => {
         // A settings failure must not discard fresh metadata or break model reads.
         logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error))
-      }
+      })
     },
   })
 
