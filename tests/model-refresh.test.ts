@@ -17,7 +17,12 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
   const remote = transport(() => ++calls === 1
     ? Promise.resolve(old)
     : new Promise(resolve => { complete = resolve }))
-  const adapter = new QoderAdapter({ resolveTransport: () => remote, models: old })
+  const published: Array<readonly QoderCatalogModel[]> = []
+  const adapter = new QoderAdapter({
+    resolveTransport: () => remote,
+    models: old,
+    onModelsDiscovered: (_transport, models) => { published.push(models) },
+  })
   await adapter.listModels(QODER_PROVIDER_ID)
   t.mock.timers.tick(300000)
   const pending = adapter.listModels(QODER_PROVIDER_ID)
@@ -34,6 +39,7 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
   assert.match((await pending)[0].name, /4x/u)
   assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
   assert.equal(calls, 2)
+  assert.deepEqual(published, [old])
 })
 
 test('model reads share discovery, cache for five minutes, and preserve enabled models', async (t) => {
@@ -44,9 +50,14 @@ test('model reads share discovery, cache for five minutes, and preserve enabled 
     calls++
     return new Promise(resolve => { complete = resolve })
   })
+  const published: Array<readonly QoderCatalogModel[]> = []
   const adapter = new QoderAdapter({
     resolveTransport: () => remote,
     models: [{ id: 'chosen', name: 'Chosen' }],
+    onModelsDiscovered: (source, models) => {
+      assert.equal(source, remote)
+      published.push(models)
+    },
   })
   const first = adapter.listModels(QODER_PROVIDER_ID)
   const concurrent = adapter.listModels(QODER_PROVIDER_ID)
@@ -65,6 +76,7 @@ test('model reads share discovery, cache for five minutes, and preserve enabled 
   assert.equal(calls, 2)
   complete([{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
   assert.match((await refreshed)[0].name, /3x/u)
+  assert.deepEqual(published.map(models => models[0].priceFactor), [2, 3])
 })
 
 test('failed refresh retains metadata and a changed transport ignores the old in-flight result', async (t) => {
@@ -86,4 +98,37 @@ test('failed refresh retains metadata and a changed transport ignores the old in
   active = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 4 }])
   complete([{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
   assert.match((await stale)[0].name, /4x/u)
+})
+
+test('a replaced transport cannot publish its late discovery', async () => {
+  let complete!: (models: readonly QoderCatalogModel[]) => void
+  let active = transport(() => new Promise(resolve => { complete = resolve }))
+  const published: number[] = []
+  const adapter = new QoderAdapter({
+    resolveTransport: () => active,
+    models: [{ id: 'chosen', name: 'Chosen' }],
+    onModelsDiscovered: (_transport, models) => { published.push(models[0].priceFactor!) },
+  })
+  const pending = adapter.listModels(QODER_PROVIDER_ID)
+  await Promise.resolve()
+  active = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 4 }])
+  complete([{ id: 'chosen', name: 'Chosen', priceFactor: 2 }])
+  assert.match((await pending)[0].name, /4x/u)
+  assert.deepEqual(published, [4])
+})
+
+test('a failed discovery notification does not discard fresh runtime metadata', async () => {
+  let notifications = 0
+  const remote = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 0 }])
+  const adapter = new QoderAdapter({
+    resolveTransport: () => remote,
+    models: [{ id: 'chosen', name: 'Chosen', priceFactor: 2 }],
+    onModelsDiscovered: async () => {
+      notifications++
+      throw new Error('settings unavailable')
+    },
+  })
+  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
+  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
+  assert.equal(notifications, 1)
 })

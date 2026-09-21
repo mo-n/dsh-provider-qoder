@@ -15,6 +15,8 @@ import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
+import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
+import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 
 class MemorySettings extends SettingsProvider {
   readonly writable = true
@@ -25,6 +27,16 @@ class MemorySettings extends SettingsProvider {
 
   protected persist(_ns: SettingsNamespace, _section: Record<string, unknown>): Promise<void> {
     return Promise.resolve()
+  }
+}
+
+class RecordingSettings extends MemorySettings {
+  readonly writes: Record<string, unknown>[] = []
+  onPersist?: () => Promise<void>
+
+  protected override async persist(_ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
+    this.writes.push(section)
+    await this.onPersist?.()
   }
 }
 
@@ -189,6 +201,141 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
   await assert.rejects(discover, /no enabled models/u)
   assert.deepEqual(ctx.settings.get(ns), stored)
   assert.equal((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'large' })).context?.contextWindow, 200_000)
+})
+
+function normalizedCatalog(models: QoderCatalogModel[]) {
+  return plugin.Config({ modelsByRegion: { global: models } }).modelsByRegion?.global
+}
+
+async function modelRuntime(config: plugin.Config) {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(RecordingSettings).await()
+  plugin.apply(ctx, config)
+  return { ctx, settings: ctx.settings as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace }
+}
+
+test('automatic discovery persists rates without changing selection and refreshes after five minutes', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 })
+  let advertised: QoderCatalogModel[] = [
+    { id: 'chosen', name: 'Remote name', priceFactor: 2, contextWindow: 200_000, maxTokens: 32_768 },
+    { id: 'disabled', name: 'Disabled', priceFactor: 8 },
+  ]
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => advertised)
+  const chosen = { id: 'chosen', name: 'Chosen name', contextWindow: 100_000, maxTokens: 4_096, priceFactor: 1 }
+  const china = [{ id: 'china-model', name: 'China model', priceFactor: 7 }]
+  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: { global: [chosen], china } })
+  const stored = () => (ctx.settings.get(ns) as plugin.Config).modelsByRegion!
+
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
+    ['chosen', 'Chosen name （2x）'],
+  ])
+  assert.deepEqual(stored().global, normalizedCatalog([{ ...chosen, priceFactor: 2 }]))
+  assert.deepEqual(stored().china, normalizedCatalog(china))
+  assert.equal((settings.writes[0] as plugin.Config).modelsByRegion?.global?.[0].priceFactor, 2)
+  assert.equal(settings.writes.length, 1)
+
+  t.mock.timers.tick(299_999)
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal(discovery.mock.callCount(), 1)
+  assert.equal(settings.writes.length, 1)
+  t.mock.timers.tick(1)
+  advertised = [{ ...advertised[0], priceFactor: 0 }]
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
+  assert.equal(stored().global?.[0].priceFactor, 0)
+
+  t.mock.timers.tick(300_000)
+  advertised = [{ id: 'chosen', name: 'Remote name', contextWindow: 200_000 }]
+  assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, chosen.name)
+  assert.equal(Object.hasOwn(stored().global![0], 'priceFactor'), false)
+  assert.equal(settings.writes.length, 3)
+  t.mock.timers.tick(300_000)
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal(discovery.mock.callCount(), 4)
+  assert.equal(settings.writes.length, 3)
+  assert.deepEqual(stored().china, normalizedCatalog(china))
+})
+
+test('settings edits do not persist fallback models before a successful discovery', async () => {
+  const { ctx, settings, ns } = await modelRuntime({})
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  await ctx.settings.update(ns, { webSearchMode: 'disabled' })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(settings.writes.length, 1)
+  assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion, {})
+})
+
+test('automatic discovery and settings persistence failures remain advisory', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 })
+  let offline = false
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => {
+    if (offline) throw new Error('offline')
+    return [{ id: 'chosen', name: 'Chosen', priceFactor: 3 }]
+  })
+  const chosen = { id: 'chosen', name: 'Chosen', priceFactor: 1 }
+  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: { global: [chosen] } })
+  settings.onPersist = async () => { throw new Error('storage unavailable') }
+
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  assert.equal(settings.writes.length, 1)
+  assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal(discovery.mock.callCount(), 1)
+  assert.equal(settings.writes.length, 1)
+  offline = true
+  t.mock.timers.tick(300_000)
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
+  assert.equal(settings.writes.length, 1)
+})
+
+test('automatic discovery cannot overwrite a settings save already awaiting persistence', async (t) => {
+  let completeDiscovery!: (models: QoderCatalogModel[]) => void
+  let discoveryStarted!: () => void
+  const started = new Promise<void>(resolve => { discoveryStarted = resolve })
+  t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', () => {
+    discoveryStarted()
+    return new Promise<QoderCatalogModel[]>(resolve => { completeDiscovery = resolve })
+  })
+  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: {
+    global: [{ id: 'chosen', name: 'Original', priceFactor: 1 }, { id: 'removed', name: 'Removed' }],
+    china: [{ id: 'old-china', name: 'Old China' }],
+  } })
+  const reading = ctx.llm.listModels(QODER_PROVIDER_ID)
+  await started
+
+  let releaseSave!: () => void
+  let saveStarted!: () => void
+  const saving = new Promise<void>(resolve => { saveStarted = resolve })
+  const gate = new Promise<void>(resolve => { releaseSave = resolve })
+  settings.onPersist = async () => {
+    settings.onPersist = undefined
+    saveStarted()
+    await gate
+  }
+  const chosen = { id: 'chosen', name: 'User renamed', contextWindow: 50_000, maxTokens: 2_048 }
+  const china = [{ id: 'new-china', name: 'New China', priceFactor: 9 }]
+  const save = ctx.settings.update(ns, { modelsByRegion: { global: [chosen], china }, webSearchMode: 'disabled' })
+  await saving
+  completeDiscovery([
+    { id: 'chosen', name: 'Remote name', priceFactor: 4, contextWindow: 200_000 },
+    { id: 'removed', name: 'Removed', priceFactor: 2 },
+    { id: 'disabled', name: 'Disabled', priceFactor: 8 },
+  ])
+  // Drain the discovery continuation while the earlier user write is still blocked.
+  await new Promise<void>(resolve => setImmediate(resolve))
+  releaseSave()
+  await Promise.all([save, reading])
+  await new Promise<void>(resolve => setImmediate(resolve))
+
+  const stored = ctx.settings.get(ns) as plugin.Config
+  assert.deepEqual(stored.modelsByRegion?.global, normalizedCatalog([{ ...chosen, priceFactor: 4 }]))
+  assert.deepEqual(stored.modelsByRegion?.china, normalizedCatalog(china))
+  assert.equal(stored.webSearchMode, 'disabled')
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
+    ['chosen', 'User renamed （4x）'],
+  ])
 })
 
 test('apply succeeds with default Config schema and empty models array', async () => {
