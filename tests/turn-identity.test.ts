@@ -194,17 +194,15 @@ test('one agent run reports one business id for every request', async () => {
   assert.ok(nextTurn.business.begin_at >= first.business.begin_at)
 })
 
-test('the tracker mode selects which field carries the turn id', async () => {
+test('buildQoderRequestBody accepts an injected tracker instance', async () => {
+  const tracker = new QoderTurnTracker()
+  const session = 'identity-session-injected'
   const prompt = user('Continue')
-  const optionsFor = (messages: GenerateOptions['messages']) => options(messages, 'identity-session-mode')
 
-  assert.equal(new QoderTurnTracker().mode, 'request-set')
-  assert.equal(new QoderTurnTracker({ mode: 'both' }).mode, 'both')
-  assert.equal(new QoderTurnTracker({ mode: 'chat-record' }).mode, 'chat-record')
-
-  const first = await buildQoderRequestBody(optionsFor([prompt]), 'user-42')
-  const second = await buildQoderRequestBody(optionsFor([prompt]), 'user-42')
+  const first = await buildQoderRequestBody(options([prompt], session), 'user-42', undefined, undefined, undefined, tracker)
+  const second = await buildQoderRequestBody(options([prompt], session), 'user-42', undefined, undefined, undefined, tracker)
   assert.equal(first.request_set_id, second.request_set_id)
+  assert.equal(first.business.id, second.business.id)
   assert.notEqual(first.chat_record_id, second.chat_record_id)
 })
 
@@ -233,6 +231,10 @@ test('an auxiliary host call never moves the open turn', async () => {
   // The auxiliary calls stay outside the turn instead of stealing it.
   assert.notEqual(titleBody.business.id, opening.business.id)
   assert.notEqual(summaryBody.business.id, opening.business.id)
+  assert.notEqual(titleBody.request_set_id, opening.request_set_id)
+  assert.notEqual(summaryBody.request_set_id, opening.request_set_id)
+  assert.equal(titleBody.session_id, opening.session_id)
+  assert.equal(summaryBody.session_id, opening.session_id)
   assert.equal(stepAfterAux.business.id, opening.business.id)
   assert.equal(stepAfterAux.request_set_id, opening.request_set_id)
   // The subscriber's own next prompt still opens a turn of its own.
@@ -326,7 +328,7 @@ test('the tracker keeps a bounded per-session identity and prefers idle sessions
 })
 
 test('the business id is stable for a turn and renews for the next one', () => {
-  const tracker = new QoderTurnTracker({ mode: 'both' })
+  const tracker = new QoderTurnTracker()
   const session = 'identity-session-business-tracker'
   const first = tracker.resolveBusinessId(session, [wireUser('One')])
   const stillOpen = tracker.resolveBusinessId(session, [wireUser('One'), injected('context')])
@@ -343,3 +345,68 @@ test('the business id is stable for a turn and renews for the next one', () => {
     next.businessId,
   )
 })
+
+test('session_id stays stable across model switches in the same conversation, but agent run renews', async () => {
+  const session = 'identity-session-model-switch'
+  const prompt = user('Hello')
+  const body1 = await buildQoderRequestBody({ ...options([prompt], session), model: 'model-a' } as GenerateOptions, 'user-42')
+  const body2 = await buildQoderRequestBody({ ...options([prompt], session), model: 'model-b' } as GenerateOptions, 'user-42')
+  // The conversation identity stays untouched.
+  assert.equal(body1.session_id, body2.session_id)
+  // The agent run and billing turn renew for the new model.
+  assert.notEqual(body2.business.id, body1.business.id)
+  assert.notEqual(body2.request_set_id, body1.request_set_id)
+})
+
+test('multiple user messages arriving in one turn open a new record', () => {
+  const tracker = new QoderTurnTracker()
+  const session = 'identity-session-multi-user'
+  const firstPrompt = wireUser('First message')
+  const secondPrompt = wireUser('Second message')
+
+  // Both user messages arrive together at the start of a turn
+  const firstTurn = tracker.resolveTurnIdentity(session, [firstPrompt, secondPrompt])
+  assert.ok(firstTurn.requestSetId)
+
+  // Continuation of the turn
+  const step2 = tracker.resolveTurnIdentity(session, [
+    firstPrompt,
+    secondPrompt,
+    wireToolCall('call-1'),
+    wireToolResult('call-1'),
+  ])
+  assert.equal(step2.requestSetId, firstTurn.requestSetId)
+  assert.equal(step2.businessId, firstTurn.businessId)
+
+  // Next turn with two new messages
+  const nextPrompt1 = wireUser('Next 1')
+  const nextPrompt2 = wireUser('Next 2')
+  const nextTurn = tracker.resolveTurnIdentity(session, [
+    firstPrompt,
+    secondPrompt,
+    nextPrompt1,
+    nextPrompt2,
+  ])
+  assert.notEqual(nextTurn.requestSetId, firstTurn.requestSetId)
+  assert.notEqual(nextTurn.businessId, firstTurn.businessId)
+})
+
+test('history compaction with repeated prompt reconciles claimed counts and opens new turn', () => {
+  const tracker = new QoderTurnTracker()
+  const session = 'identity-session-compaction-repeat'
+  const prompt = wireUser('Repeat prompt')
+
+  const turn1 = tracker.resolveTurnIdentity(session, [prompt])
+  const turn2 = tracker.resolveTurnIdentity(session, [prompt, prompt])
+  assert.notEqual(turn2.requestSetId, turn1.requestSetId)
+
+  // Compaction trims earlier messages, only 1 prompt remains in history
+  const stepCompacted = tracker.resolveTurnIdentity(session, [prompt])
+  assert.ok(stepCompacted.requestSetId)
+
+  // Repeating prompt again opens turn 3
+  const turn3 = tracker.resolveTurnIdentity(session, [prompt, prompt])
+  assert.notEqual(turn3.requestSetId, turn2.requestSetId)
+  assert.notEqual(turn3.businessId, turn2.businessId)
+})
+

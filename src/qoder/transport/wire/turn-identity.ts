@@ -29,15 +29,14 @@ import crypto from 'node:crypto'
 import type { QoderWireMessage } from './wire-types.ts'
 
 /**
- * Which request field carries the turn identity.
- *
- * The official client renews `request_set_id` once per agent run
- * (`AgentLifecycle.requestSetId`) while `chat_record_id` equals that request's
- * own `request_id`. Qoder's consumption panel is the only authority on which
- * field it groups by, so the transport can be switched between the candidates
- * for a live comparison before one is pinned as the default.
+ * Resolved identity fields for a Qoder wire request.
  */
-export type QoderTurnIdentityMode = 'request-set' | 'both' | 'chat-record'
+export interface QoderTurnIdentity {
+  readonly requestSetId: string
+  readonly chatRecordId: string
+  readonly businessId: string
+  readonly beginAt: number
+}
 
 /**
  * What a request is for.
@@ -71,8 +70,6 @@ export interface QoderTurnTrackerOptions {
    * real idle window.
    */
   now?: () => number
-  /** Request field the turn identity is written to. Defaults to `request-set`. */
-  mode?: QoderTurnIdentityMode
 }
 
 interface SessionTurnState {
@@ -107,6 +104,11 @@ interface SessionTurnState {
    * previous record — so the ordinal keeps every new turn distinct.
    */
   turnCount: number
+  /**
+   * Model that opened the current turn. A model switch inside the conversation
+   * opens a new agent run and consumption record.
+   */
+  currentModel?: string
 }
 
 const defaultMaxSessions = 64
@@ -163,8 +165,8 @@ const hostNotificationTemplate = /^(?:Agent|Background subagent) \S{3,} (?:sent 
  */
 const syntheticMarkerTemplate = /^\[\d+ images? returned by the previous tool call\]/
 
-/** Wire text of one user message, used for injection classification. */
-function messageText(message: QoderWireMessage): string {
+/** Wire text of one user message, used for injection classification and text extraction. */
+export function wireMessageText(message: QoderWireMessage): string {
   const content = message.content
   if (typeof content === 'string') return content
   if (content === null) return ''
@@ -173,7 +175,7 @@ function messageText(message: QoderWireMessage): string {
 
 /** Classify one user-role wire message. */
 function qoderMessageOrigin(message: QoderWireMessage): QoderMessageOrigin {
-  const text = messageText(message).trimStart()
+  const text = wireMessageText(message).trimStart()
   if (syntheticMarkerTemplate.test(text)) return 'synthetic'
   if (hostNotificationTemplate.test(text)) return 'injected'
   return injectedContextOpenings.some(opening => text.startsWith(opening)) ? 'injected' : 'prompt'
@@ -244,33 +246,53 @@ export class QoderTurnTracker {
   private readonly maxSessions: number
   private readonly idleSessionTtlMs: number
   private readonly now: () => number
-  /** Request field the resolved turn id is written to. */
-  readonly mode: QoderTurnIdentityMode
   private readonly sessions = new Map<string, SessionTurnState>()
 
   constructor(options: QoderTurnTrackerOptions = {}) {
     this.maxSessions = options.maxSessions ?? defaultMaxSessions
     this.idleSessionTtlMs = options.idleSessionTtlMs ?? defaultIdleSessionTtlMs
     this.now = options.now ?? Date.now
-    this.mode = options.mode ?? 'request-set'
   }
 
   /**
-   * Record id shared by every step of `sessionId`'s current turn.
+   * Resolves the full wire identity for one Qoder request.
    *
-   * `null` means the request carries no session identity, so no conversation
-   * identity can be derived and the caller must fall back to a per-request id.
+   * Coordinates `request_set_id`, `chat_record_id`, and `business` metadata so
+   * that requests within one subscriber turn share a single agent run and
+   * consumption record.
    */
-  resolveTurnRecordId(
+  resolveTurnIdentity(
     sessionId: string | undefined,
     messages: readonly QoderWireMessage[],
     kind: QoderCallKind = 'conversation',
-  ): string | null {
-    if (sessionId === undefined || sessionId.length === 0) return null
+    requestId = crypto.randomUUID(),
+    modelKey?: string,
+  ): QoderTurnIdentity {
+    const now = this.now()
+
+    if (sessionId === undefined || sessionId.length === 0) {
+      return {
+        requestSetId: `qoder-request-${crypto.randomUUID()}`,
+        chatRecordId: requestId,
+        businessId: crypto.randomUUID(),
+        beginAt: now,
+      }
+    }
+
+    if (kind === 'auxiliary') {
+      if (this.sessions.has(sessionId)) {
+        this.sessions.get(sessionId)!.lastTouchedAt = now
+      }
+      return {
+        requestSetId: `qoder-request-${crypto.randomUUID()}`,
+        chatRecordId: requestId,
+        businessId: crypto.randomUUID(),
+        beginAt: now,
+      }
+    }
 
     let state = this.sessions.get(sessionId)
     if (state === undefined) {
-      const now = this.now()
       // Stamp the session before claiming it: the eviction pass must see this
       // conversation as active, otherwise it evicts the entry just created.
       state = {
@@ -280,13 +302,19 @@ export class QoderTurnTracker {
         turnOpenedAt: 0,
         lastTouchedAt: now,
         turnCount: 0,
+        currentModel: modelKey,
       }
       this.claimSession(sessionId, state)
     } else {
-      state.lastTouchedAt = this.now()
+      state.lastTouchedAt = now
       // Refresh recency so eviction drops the coldest conversation.
       this.sessions.delete(sessionId)
       this.sessions.set(sessionId, state)
+    }
+
+    const modelChanged = state.currentModel !== undefined && modelKey !== undefined && state.currentModel !== modelKey
+    if (modelKey !== undefined) {
+      state.currentModel = modelKey
     }
 
     // A turn is the multiset of user-role messages it has accounted for. Text
@@ -313,10 +341,10 @@ export class QoderTurnTracker {
     for (const [fingerprint, entry] of present) {
       const claimed = state.claimed.get(fingerprint) ?? 0
       if (entry.count <= claimed) continue
-      if (kind === 'conversation') state.claimed.set(fingerprint, entry.count)
+      state.claimed.set(fingerprint, entry.count)
       // Host-appended context and transport-synthesized markers join the open
-      // record. An unaccounted subscriber message is the only candidate for
-      // opening the next one, and exactly one such message means it did.
+      // record. An unaccounted subscriber message is the candidate for opening
+      // the next one.
       if (entry.host === 'injected' || entry.host === 'synthetic') continue
       unclaimed += entry.count - claimed
       opening = fingerprint
@@ -326,33 +354,54 @@ export class QoderTurnTracker {
     // accounted for and that history has since dropped must not mask the same
     // words arriving again as new input, which is exactly what happens when
     // compaction replaces a span and the subscriber repeats their prompt.
-    if (kind === 'conversation') {
-      for (const fingerprint of [...state.claimed.keys()]) {
-        if (!present.has(fingerprint)) state.claimed.delete(fingerprint)
+    // If the count of a claimed fingerprint decreased, clamp it down to present.count.
+    for (const [fingerprint, claimed] of state.claimed) {
+      const current = present.get(fingerprint)
+      if (current === undefined) {
+        state.claimed.delete(fingerprint)
+      } else if (current.count < claimed) {
+        state.claimed.set(fingerprint, current.count)
       }
     }
 
-    // Exactly one unaccounted subscriber message opens the next turn, so a
-    // subscriber who repeats the same words still gets a record of their own.
-    // Anything else — no new input, several at once, or host and transport
-    // messages — continues the open record.
-    if (kind === 'conversation' && opening !== undefined && unclaimed === 1) {
+    // Any unaccounted subscriber message or model switch opens the next turn, so a
+    // subscriber who sends multiple messages, repeats words, or switches models
+    // gets a distinct agent run and consumption record.
+    if ((opening !== undefined && unclaimed > 0) || modelChanged) {
       state.turnCount += 1
-      state.currentTurnId = turnIdFor(sessionId, state.turnCount, opening)
+      state.currentTurnId = turnIdFor(sessionId, state.turnCount, opening ?? state.currentModel ?? '')
       state.currentBusinessId = crypto.randomUUID()
-      state.turnOpenedAt = this.now()
-    } else if (kind === 'conversation' && state.currentTurnId === '') {
+      state.turnOpenedAt = now
+    } else if (state.currentTurnId === '') {
       // A conversation whose first request carries no subscriber input still
       // belongs to a record; it keeps that record until a real prompt arrives.
-      // An auxiliary call opens none: it serves no subscriber turn, and the
-      // caller falls back to a per-request identity for it.
       state.turnCount += 1
-      state.currentTurnId = turnIdFor(sessionId, state.turnCount, '')
+      state.currentTurnId = turnIdFor(sessionId, state.turnCount, state.currentModel ?? '')
       state.currentBusinessId = crypto.randomUUID()
-      state.turnOpenedAt = this.now()
+      state.turnOpenedAt = now
     }
 
-    return state.currentTurnId
+    return {
+      requestSetId: state.currentTurnId,
+      chatRecordId: requestId,
+      businessId: state.currentBusinessId,
+      beginAt: state.turnOpenedAt,
+    }
+  }
+
+  /**
+   * Record id shared by every step of `sessionId`'s current turn.
+   *
+   * `null` means the request carries no session identity, so no conversation
+   * identity can be derived and the caller must fall back to a per-request id.
+   */
+  resolveTurnRecordId(
+    sessionId: string | undefined,
+    messages: readonly QoderWireMessage[],
+    kind: QoderCallKind = 'conversation',
+  ): string | null {
+    if (sessionId === undefined || sessionId.length === 0) return null
+    return this.resolveTurnIdentity(sessionId, messages, kind).requestSetId
   }
 
   /**
@@ -367,18 +416,8 @@ export class QoderTurnTracker {
     messages: readonly QoderWireMessage[],
     kind: QoderCallKind = 'conversation',
   ): { businessId: string; beginAt: number } {
-    if (sessionId !== undefined && sessionId.length > 0) {
-      this.resolveTurnRecordId(sessionId, messages, kind)
-      const state = this.sessions.get(sessionId)
-      if (state !== undefined && state.currentBusinessId !== '') {
-        // An auxiliary call reports a run of its own for exactly this request:
-        // adopting it would make the subscriber's own turn inherit the auxiliary
-        // call's record once that call returns.
-        if (kind === 'auxiliary') return { businessId: crypto.randomUUID(), beginAt: this.now() }
-        return { businessId: state.currentBusinessId, beginAt: state.turnOpenedAt }
-      }
-    }
-    return { businessId: crypto.randomUUID(), beginAt: this.now() }
+    const identity = this.resolveTurnIdentity(sessionId, messages, kind)
+    return { businessId: identity.businessId, beginAt: identity.beginAt }
   }
 
   /** Forget one session, e.g. when its transport is disposed. */
