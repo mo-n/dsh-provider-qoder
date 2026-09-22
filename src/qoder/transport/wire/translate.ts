@@ -1,6 +1,6 @@
 /** Translate provider-neutral DSH messages and tools into Qoder wire values. */
 
-import type { ContentBlock, ImageBlock, Message, ToolResultBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, ImageBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { QoderLlmError } from '../../errors.ts'
 import type { CosyCredentials } from './cosy.ts'
@@ -11,6 +11,19 @@ import type {
   QoderWireTool,
   QoderWireToolCall,
 } from './wire-types.ts'
+
+/** Legacy hosts wrap tool results in content blocks; current hosts use role: tool. */
+interface ToolResultBlock {
+  type: 'tool-result'
+  toolCallId?: string
+  content: readonly ContentBlock[]
+}
+
+interface QoderMessage {
+  role: QoderWireMessage["role"]
+  content: readonly (ContentBlock | ToolResultBlock)[]
+  source?: unknown
+}
 
 export type QoderImageAttachments = Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
 
@@ -46,43 +59,6 @@ function toolResultText(block: ToolResultBlock): string {
   return text
 }
 
-/**
- * Check message shapes without performing any provider I/O.
- *
- * Callers run this before resolving credentials so an invalid request never
- * consumes a Qoder subscription.
- */
-export function validateMessageShapes(messages: readonly Message[]): void {
-  for (const message of messages) {
-    const toolResults = message.content.filter((block): block is ToolResultBlock => block.type === 'tool-result')
-    if (toolResults.length > 0) {
-      if (message.role !== 'user' || toolResults.length !== message.content.length) {
-        throw unsupported('Qoder tool-result messages cannot contain sibling content or use a non-user role.')
-      }
-      for (const result of toolResults) toolResultText(result)
-      continue
-    }
-
-    for (const block of message.content) {
-      if (block.type === 'text') continue
-      if (block.type === 'image') {
-        if (message.role !== 'user') throw unsupported('Qoder image content is valid only in user messages.')
-        continue
-      }
-      if (block.type === 'tool-call') {
-        if (message.role !== 'assistant') {
-          throw unsupported('Qoder tool calls are valid only in assistant messages.')
-        }
-        continue
-      }
-      if (block.type === 'reasoning') {
-        continue
-      }
-      throw unsupported(`Qoder transport encountered unsupported block type: ${String((block as ContentBlock).type)}`)
-    }
-  }
-}
-
 /** Reject a batch that exceeds the deployment image policy before any upload work starts. */
 function enforceImageLimits(
   images: readonly ImageBlock[],
@@ -112,10 +88,17 @@ async function resolveImagePart(
   let image: RequestImageAttachment
   try {
     const limits = attachments.imageLimits
-    image = await attachments.readImageRequest(block.attachment, {
-      maxPixels: limits.maxImagePixels,
+    const { width, height } = block.attachment
+    const scale = Math.min(1, Math.sqrt(limits.maxImagePixels / (width * height)),
+      limits.maxImageDimension / width, limits.maxImageDimension / height)
+    const target = {
+      width: Math.max(1, Math.floor(width * scale)),
+      height: Math.max(1, Math.floor(height * scale)),
       maxBytes: limits.maxImageBytes,
-    }, signal)
+      // Older attachment services choose their own dimensions from this bound.
+      maxPixels: limits.maxImagePixels,
+    }
+    image = await attachments.readImageRequest(block.attachment, target, signal)
   } catch (error) {
     if (signal?.aborted) throw new QoderLlmError('Qoder image preparation was aborted.', 'ABORTED', { cause: error })
     if (error instanceof QoderLlmError) throw error
@@ -145,14 +128,29 @@ export function translateTools(tools: readonly ToolSchema[] | undefined): QoderW
   }))
 }
 
+function extractToolCallId(message: QoderMessage, result?: ToolResultBlock): string | undefined {
+  const candidate = (result as { toolCallId?: unknown; tool_call_id?: unknown; callId?: unknown; tool_use_id?: unknown })?.toolCallId
+    ?? (result as { tool_call_id?: unknown })?.tool_call_id
+    ?? (result as { callId?: unknown })?.callId
+    ?? (result as { tool_use_id?: unknown })?.tool_use_id
+    ?? (message as { tool_call_id?: unknown; toolCallId?: unknown; tool_use_id?: unknown }).tool_call_id
+    ?? (message as { toolCallId?: unknown }).toolCallId
+    ?? (message as { tool_use_id?: unknown }).tool_use_id
+    ?? ((message.source as { kind?: string; callId?: unknown })?.kind === 'tool'
+      ? (message.source as { callId?: unknown }).callId
+      : undefined)
+  return typeof candidate === 'string' && candidate.trim()
+    ? candidate.trim()
+    : (candidate !== undefined && candidate !== null ? String(candidate) : undefined)
+}
+
 export async function validateAndTranslateMessages(
-  messages: readonly Message[],
+  messages: readonly QoderMessage[],
   systemPrompt?: string,
   attachments?: QoderImageAttachments,
   signal?: AbortSignal,
   pipeline?: Pick<QoderTranslateContext, 'uploader' | 'credentials'> & { preserveThinking?: boolean },
 ): Promise<QoderWireMessage[]> {
-  validateMessageShapes(messages)
   const context: QoderTranslateContext = {
     attachments,
     signal,
@@ -203,12 +201,18 @@ export async function validateAndTranslateMessages(
     let hasImage = false
     const toolCalls: QoderWireToolCall[] = []
     for (const block of message.content) {
+      if (message.role === 'tool' && block.type !== 'text' && block.type !== 'image') {
+        throw unsupported(`Qoder tool results support text and images only; received ${block.type} content.`)
+      }
       if (block.type === 'text') {
         text += block.text
         if (message.role === 'user') userContent.push({ type: 'text', text: block.text })
         continue
       }
       if (block.type === 'image') {
+        if (message.role !== 'user' && message.role !== 'tool') {
+          throw unsupported('Qoder image content is valid only in user messages.')
+        }
         hasImage = true
         // Reserve the slot now so publication can proceed concurrently
         // without disturbing the author's content order.

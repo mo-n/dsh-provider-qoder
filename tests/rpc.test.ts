@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
+import type { QoderRpcHandler } from '../src/dsh/rpc.ts'
 import { createQoderRpcCaller } from '../src/client/rpc-client.ts'
 import { isQoderRpcEndpoint, isQoderRpcErrorCode } from '../src/dsh/rpc-channel.ts'
 import { registerQoderRpc, type QoderFetchRoute } from '../src/dsh/rpc.ts'
@@ -39,7 +39,7 @@ function rpcRequest(path: string, body?: string): Request {
 
 test('the settings RPC mounts both endpoints as POST routes below the shared API channel', () => {
   const { context, routes, removed } = captureConnection()
-  const handler: ConnectionRpcHandler = async () => ({ ok: true, value: {} })
+  const handler: QoderRpcHandler = async () => ({ ok: true, value: {} })
 
   const dispose = registerQoderRpc(context, handler)
 
@@ -79,7 +79,7 @@ test('a route keeps endpoint failures inside the envelope and reports bad reques
   const { context, routes } = captureConnection()
   registerQoderRpc(context, async (endpoint) => {
     if (endpoint === 'models') {
-      return { ok: false, error: { code: 'internal', message: 'no models', details: { issues: [] } } }
+      return { ok: false, error: { code: 'INTERNAL', message: 'no models', details: { issues: [] } } }
     }
     throw new Error('transport exploded')
   })
@@ -88,7 +88,7 @@ test('a route keeps endpoint failures inside the envelope and reports bad reques
   assert.equal(failure.status, 200)
   assert.deepEqual(await failure.json(), {
     ok: false,
-    error: { code: 'internal', message: 'no models', details: { issues: [] } },
+    error: { code: 'INTERNAL', message: 'no models', details: { issues: [] } },
   })
 
   const crash = await routes[0].fetch(rpcRequest('/api/qoder-subscription/account'))
@@ -119,7 +119,7 @@ test('a route returns an ABORTED envelope when the request is aborted', async ()
 })
 
 test('the settings RPC reports an unavailable Connection fetch registry', () => {
-  const handler: ConnectionRpcHandler = async () => ({ ok: true, value: {} })
+  const handler: QoderRpcHandler = async () => ({ ok: true, value: {} })
 
   assert.throws(
     () => registerQoderRpc({} as Context, handler),

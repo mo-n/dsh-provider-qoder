@@ -267,7 +267,7 @@ test('buildQoderRequestBody uses the resolved identity and configured model', as
     model: 'custom-model',
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Ping' }], source: { kind: 'user' } })],
     maxTokens: 4096,
-    sessionId: 'session-1',
+    sessionId: 'session-1' as GenerateOptions['sessionId'],
   } as GenerateOptions
   const body = await buildQoderRequestBody(options, 'user-42')
   assert.equal(body.session_type, 'qodercli')

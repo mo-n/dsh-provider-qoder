@@ -4,7 +4,6 @@ import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-web'
-import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
@@ -24,9 +23,10 @@ import {
   type QoderTransport,
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
-import { Config, modelsFor, resolveModels, type Config as QoderConfig } from './config.ts'
+import { Config, modelsFor, readConfig, resolveModels, type Config as QoderConfig, type LiveConfig } from './config.ts'
+import { bindQoderSettings } from './settings.ts'
 import { isQoderRpcEndpoint, type QoderRpcErrorCode } from './rpc-channel.ts'
-import { registerQoderRpc } from './rpc.ts'
+import { registerQoderRpc, type QoderRpcHandler } from './rpc.ts'
 
 export const name = 'provider-qoder'
 export const inject = ['llm', 'credentials', 'connection', 'attachments']
@@ -58,7 +58,8 @@ function publicError(code: QoderRpcErrorCode, message: string, details: object =
   }
 }
 
-export function apply(ctx: Context, config: QoderConfig = {}): void {
+export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void {
+  const config = readConfig(input)
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
   const initialRegion = config.region ?? 'global'
   const hasConfiguredModels = config.models !== undefined && config.models.length > 0
@@ -167,7 +168,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
   }
 
   ctx.inject(['settings'], (settingsCtx) => {
-    const scope = settingsCtx.settings.register(settingsNamespace, Config, {
+    const { scope, namespace } = bindQoderSettings(ctx, settingsCtx, input, {
       base: baseConfig,
       validate: (value) => {
         for (const region of Object.keys(value.modelsByRegion ?? {})) {
@@ -185,7 +186,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     const persistCatalog = async (region: QoderRegion): Promise<void> => {
       while (bindingActive && ctx.fiber.state !== fiberUnloading && ctx.fiber.state !== fiberDisposed) {
         if (!settingsCtx.settings.writable || discoveredCatalogs[region].length === 0) return
-        const snapshot = settingsCtx.settings.describe().find(section => section.ns === settingsNamespace)
+        const snapshot = settingsCtx.settings.describe().find(section => section.ns === namespace)
         if (snapshot === undefined) return
         const selected = modelsFor(snapshot.value as QoderConfig, region, legacyModelsRegion)
         // Compare the stored schema shape (including empty collection defaults) so
@@ -197,7 +198,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
         try {
           // Discovery is advisory. Never overwrite a user's concurrent model selection
           // or replay a stale snapshot of another region while persisting metadata.
-          await settingsCtx.settings.update(settingsNamespace, {
+          await settingsCtx.settings.update(namespace, {
             modelsByRegion: { [region]: enriched },
           }, snapshot.revision)
           return
@@ -273,7 +274,7 @@ export function apply(ctx: Context, config: QoderConfig = {}): void {
     }))
   })
 
-  const handler: ConnectionRpcHandler = async (endpoint, payload, signal) => {
+  const handler: QoderRpcHandler = async (endpoint, payload, signal) => {
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
 

@@ -59,6 +59,16 @@ export const Config: z<Config> = z.object({
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
 })
 
+// Export a live schema even on legacy hosts; apply unwraps it before registering
+// the plain schema with the legacy SettingsProvider.
+export type PluginConfig = Config
+export const PluginConfig = Config.volatile()
+export type LiveConfig = ReturnType<typeof PluginConfig>
+
+export function readConfig(value: Config | LiveConfig): Config {
+  return 'get' in value ? Config(structuredClone(value.get()) as Config | undefined) : value
+}
+
 export function resolveModels(models: readonly QoderCatalogModel[] | undefined): QoderCatalogModel[] {
   const resolved = models ?? defaultModels
   if (resolved.length === 0) throw new Error('provider-qoder: at least one model is required')

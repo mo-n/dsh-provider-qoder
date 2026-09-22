@@ -16,7 +16,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
-import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
+import type { QoderRpcResult } from './rpc-channel.ts'
+
+/** Qoder's internal dispatcher; Fetch-route authentication remains owned by Connection. */
+export type QoderRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<QoderRpcResult<unknown>>
 import { qoderRpcEndpoints, qoderRpcPath, type QoderRpcEndpoint } from './rpc-channel.ts'
 
 /**
@@ -54,7 +57,7 @@ export interface QoderRpcConnection {
  * @returns disposer removing every registered route.
  * @throws when Connection exposes no exact Fetch registry.
  */
-export function registerQoderRpc(ctx: Context, handler: ConnectionRpcHandler): () => void {
+export function registerQoderRpc(ctx: Context, handler: QoderRpcHandler): () => void {
   // The peer declaration narrows exact routes to GET/HEAD, so the service is
   // read through this module's shape instead of its own.
   const registry = (ctx as Context & { connection?: QoderRpcConnection }).connection?.fetch
@@ -82,7 +85,7 @@ export function registerQoderRpc(ctx: Context, handler: ConnectionRpcHandler): (
  */
 async function handleQoderRpcRequest(
   endpoint: QoderRpcEndpoint,
-  handler: ConnectionRpcHandler,
+  handler: QoderRpcHandler,
   request: Request,
 ): Promise<Response> {
   if (request.signal.aborted) {

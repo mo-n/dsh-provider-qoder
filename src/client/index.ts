@@ -45,7 +45,13 @@ interface QoderModelsFooterOwnerProps {
   children?: never
 }
 
-export const inject = ['slots', 'locale', 'remote', 'remote.credentials', 'settingsScope']
+export const inject = ['slots', 'locale', 'remote', 'remote.credentials']
+
+interface ModelForm {
+  getSnapshot(): QoderModelSettingsSnapshot
+  subscribe(listener: () => void): () => void
+  set(field: string, value: unknown): Promise<boolean | void>
+}
 
 type CredentialRemoteResponse<T> =
   | { ok: true; value: T }
@@ -66,13 +72,23 @@ const fill = (text: string, values?: Record<string, string | number>): string =>
 }
 
 export function apply(ctx: ClientContext): void {
+  ctx.inject(['settingsScope'], child => {
+    const scopes = (child as unknown as { settingsScope: { bind(spec: { namespace: string }): ModelForm } }).settingsScope
+    mount(child, scopes.bind({ namespace: settingsNamespace }))
+  })
+  ctx.inject(['configForms'], child => {
+    const forms = (child as unknown as { configForms: { get<T>(id: string): ModelForm } }).configForms
+    mount(child, forms.get<QoderModelSettingsSection>(settingsNamespace))
+  })
+}
+
+function mount(ctx: ClientContext, modelScope: ModelForm): void {
   ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'provider-qoder: credential copy')
 
   // The released rc.2 declarations predate this generated Remote namespace;
   // the current DSH client exposes it through the same runtime assembly.
   const credentials = (ctx.remote as unknown as { credentials: QoderCredentialsRemote }).credentials
   const rpc = createQoderRpcCaller()
-  const modelScope = ctx.settingsScope.bind<QoderModelSettingsSection>({ namespace: settingsNamespace })
 
   const operations: QoderCredentialOperations = {
     describe: async () => {
@@ -105,27 +121,24 @@ export function apply(ctx: ClientContext): void {
     storeModels: async (region, models) => {
       try {
         const current = modelScope.getSnapshot().value
-        await modelScope.set('modelsByRegion', {
+        return await modelScope.set('modelsByRegion', {
           ...current?.modelsByRegion,
           [region]: models,
-        })
-        return true
+        }) !== false
       } catch {
         return false
       }
     },
     storeRegion: async (region) => {
       try {
-        await modelScope.set('region', region)
-        return true
+        return await modelScope.set('region', region) !== false
       } catch {
         return false
       }
     },
     storeWebSearchMode: async (mode) => {
       try {
-        await modelScope.set('webSearchMode', mode)
-        return true
+        return await modelScope.set('webSearchMode', mode) !== false
       } catch {
         return false
       }
