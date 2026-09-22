@@ -11,7 +11,7 @@ This project is a community adapter plugin.
 
 - Configure subscription access via Qoder Personal Access Token (PAT).
 - Supports both Global (`global`) and China (`china`) services.
-- Discovers available models for your account, allows selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
+- Discovers available models for your account, allows selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service. When a model advertises more than one input-context tier, the tier is selectable per model.
 - Supports streaming responses, reasoning content, multimodality, search, tool calls, and multi-turn interactions.
 - View account information, quota, and reset dates in Settings.
 
@@ -48,12 +48,14 @@ Select the region matching your account, enter your Qoder PAT into the input box
 
 1. After saving the PAT and service region, click **Edit** again.
 2. Expand **Custom Settings** and click **Fetch Available Models**.
-3. Select the models you want to enable (keep at least one), then click **Save**.
+3. Select the models you want to enable (keep at least one). When a model offers more than one context tier, choose the tier in its **Context** selector.
 4. Select a Qoder model in the DSH model picker to start chatting.
 
 Fetching models uses the **saved PAT and service region**. If you switch accounts or regions, you need to fetch models again. The initial model catalog is only a candidate reference; actual available models are subject to account query results. Model multipliers, reasoning effort options, and image-input capability are provided by Qoder and may not be available for all models.
 
 The model picker refreshes Qoder metadata for enabled models when opened, with a five-minute cache after a successful fetch. When settings are writable, refreshed multipliers and capabilities are also synchronized to the saved catalog shown in **Custom Settings**, without enabling additional models. Failed refreshes retain the last known metadata.
+
+Choosing a context tier changes both the context budget DSH plans against and the tier a model request asks Qoder for; the tier marked **default** is the one Qoder would use on its own. The selector appears only for models that advertise more than one tier.
 
 ### 3. View Account & Quota
 

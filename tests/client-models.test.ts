@@ -36,3 +36,31 @@ test('fetched models default to selected while removed models remain visible as 
   assert.deepEqual(reconciled.selected, discovered)
   assert.deepEqual([...reconciled.unavailableIds], ['removed'])
 })
+
+test('a remembered context tier survives rediscovery and widens the budget', () => {
+  const contextOptions = {
+    small: { tokenCount: 200_000, isDefault: true },
+    large: { tokenCount: 1_000_000 },
+  }
+  const current = [{ id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large', contextOptions }]
+  const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 200_000, maxContextWindow: 1_000_000, contextOptions }]
+
+  const reconciled = reconcileQoderModels(current, discovered)
+
+  assert.equal(reconciled.selected[0].contextTier, 'large')
+  assert.equal(reconciled.selected[0].contextWindow, 1_000_000)
+  assert.equal(reconciled.unavailableIds.size, 0)
+})
+
+test('a context tier the provider stops advertising falls back to the default budget', () => {
+  const current = [{
+    id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large',
+    contextOptions: { small: { tokenCount: 200_000, isDefault: true }, large: { tokenCount: 1_000_000 } },
+  }]
+  const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextOptions: { small: { tokenCount: 200_000, isDefault: true } } }]
+
+  const reconciled = reconcileQoderModels(current, discovered)
+
+  assert.equal(reconciled.selected[0].contextTier, undefined)
+  assert.equal(reconciled.selected[0].contextWindow, 200_000)
+})
