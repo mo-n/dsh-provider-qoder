@@ -127,3 +127,20 @@ _Avoid_: remote API client, quota webhook, HTTP proxy
 **Qoder settings RPC error code**:
 A standardized diagnostic identifier (`NO_CREDENTIALS`, `UNAUTHENTICATED`, `UPSTREAM_ERROR`, `TIMEOUT`, `ABORTED`, `UNKNOWN_ENDPOINT`, or `INTERNAL`) carried in a settings RPC failure envelope to drive UI state without inspecting free-form message strings.
 _Avoid_: HTTP status mapping, ad-hoc string matching
+
+**Qoder agent run**:
+One execution of the agent for a single subscriber turn, from the prompt that opened it until the turn ends. It is the unit the Qoder service reports consumption against: every model request the run makes carries the same `business.id`, so one run appears in the Credits panel as one record whose duration and credits cover the whole turn.
+_Avoid_: request, step, conversation record, session
+
+**Qoder turn identity**:
+The request fields that attribute one model request to its conversation and agent run: `session_id` identifies the conversation, `request_set_id` identifies the run, and `request_id` (mirrored by `chat_record_id`) identifies that single request. The field that makes the service aggregate a turn is the run's `business.id`, not the conversation or request identifiers.
+_Avoid_: consumption id, record key, session token
+
+**Qoder auxiliary model call**:
+A model request the host makes for its own bookkeeping rather than for the subscriber's turn — session title and compaction summary — marked by `GenerateOptions.purpose`. It is routed through the same provider under the same session identity but with a message list of its own, so it reports a run of its own and must never open, claim, or displace a subscriber turn's record.
+_Avoid_: background request, internal call, hidden prompt
+
+**Qoder turn boundary**:
+The provider-level decision that separates one subscriber turn from the next, derived from the request history because the adapter sees no turn number. A turn is the multiset of user-role messages it has accounted for: a message the run has not seen opens the next turn, while host-appended context, transport-synthesized image markers, and anything an auxiliary call carries continue the open record.
+_Avoid_: message position, anchor text, step counter
+
