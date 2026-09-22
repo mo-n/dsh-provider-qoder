@@ -14,7 +14,7 @@ export class QoderLlmError extends LlmError {
 
 export function qoderHttpError(
   message: string,
-  response: { status: number; headers?: Pick<Headers, 'get'> },
+  response: { status: number; headers?: Pick<Headers, 'get'>; cause?: unknown },
 ): QoderLlmError {
   const { status } = response
   const code = status === 401 || status === 403
@@ -34,6 +34,7 @@ export function qoderHttpError(
     status,
     ...providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs },
     ...requestId === undefined ? {} : { requestId },
+    ...response.cause === undefined ? {} : { cause: response.cause },
   })
 }
 

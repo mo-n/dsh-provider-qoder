@@ -20,7 +20,7 @@ interface ToolResultBlock {
 }
 
 interface QoderMessage {
-  role: QoderWireMessage["role"]
+  role: string
   content: readonly (ContentBlock | ToolResultBlock)[]
   source?: unknown
 }
@@ -144,6 +144,23 @@ function extractToolCallId(message: QoderMessage, result?: ToolResultBlock): str
     : (candidate !== undefined && candidate !== null ? String(candidate) : undefined)
 }
 
+function consumeToolCallId(
+  message: QoderMessage,
+  result: ToolResultBlock | undefined,
+  pendingIds: string[],
+  fallbackIndex: number,
+): string {
+  const explicit = extractToolCallId(message, result)
+  if (explicit !== undefined) {
+    const idx = pendingIds.indexOf(explicit)
+    if (idx !== -1) {
+      pendingIds.splice(idx, 1)
+    }
+    return explicit
+  }
+  return pendingIds.shift() ?? `call_unknown_${fallbackIndex}`
+}
+
 export async function validateAndTranslateMessages(
   messages: readonly QoderMessage[],
   systemPrompt?: string,
@@ -159,6 +176,7 @@ export async function validateAndTranslateMessages(
   }
   const preserveThinking = pipeline?.preserveThinking ?? true
   const output: QoderWireMessage[] = []
+  let lastAssistantToolCallIds: string[] = []
 
   if (typeof systemPrompt === 'string' && systemPrompt.trim().length > 0) {
     output.push({ role: 'system', content: systemPrompt })
@@ -166,14 +184,14 @@ export async function validateAndTranslateMessages(
 
   for (const message of messages) {
     const toolResults = message.content.filter((block): block is ToolResultBlock => block.type === 'tool-result')
+    const nonToolBlocks = message.content.filter(block => block.type !== 'tool-result')
+
     if (toolResults.length > 0) {
-      if (message.role !== 'user' || toolResults.length !== message.content.length) {
-        throw unsupported('Qoder tool-result messages cannot contain sibling content or use a non-user role.')
-      }
       for (const result of toolResults) {
+        const callId = consumeToolCallId(message, result, lastAssistantToolCallIds, output.length)
         output.push({
           role: 'tool',
-          tool_call_id: String(result.toolCallId),
+          tool_call_id: callId,
           content: toolResultText(result),
         })
         const images = result.content.filter((block): block is ImageBlock => block.type === 'image')
@@ -191,8 +209,12 @@ export async function validateAndTranslateMessages(
           })
         }
       }
-      continue
+      if (nonToolBlocks.length === 0) {
+        continue
+      }
     }
+
+    const contentBlocks = toolResults.length > 0 ? nonToolBlocks : message.content
 
     let text = ''
     let reasoningText = ''
@@ -200,17 +222,17 @@ export async function validateAndTranslateMessages(
     const pendingImages: Array<{ slot: number; block: ImageBlock }> = []
     let hasImage = false
     const toolCalls: QoderWireToolCall[] = []
-    for (const block of message.content) {
+    for (const block of contentBlocks) {
       if (message.role === 'tool' && block.type !== 'text' && block.type !== 'image') {
         throw unsupported(`Qoder tool results support text and images only; received ${block.type} content.`)
       }
       if (block.type === 'text') {
         text += block.text
-        if (message.role === 'user') userContent.push({ type: 'text', text: block.text })
+        if (message.role === 'user' || toolResults.length > 0) userContent.push({ type: 'text', text: block.text })
         continue
       }
       if (block.type === 'image') {
-        if (message.role !== 'user' && message.role !== 'tool') {
+        if (message.role !== 'user' && message.role !== 'tool' && toolResults.length === 0) {
           throw unsupported('Qoder image content is valid only in user messages.')
         }
         hasImage = true
@@ -237,12 +259,40 @@ export async function validateAndTranslateMessages(
     if (message.role === 'assistant') {
       const hasReasoning = preserveThinking && reasoningText.length > 0
       if (!text && toolCalls.length === 0 && !hasReasoning) continue
+      if (toolCalls.length > 0) {
+        lastAssistantToolCallIds = toolCalls.map(tc => tc.id)
+      }
       output.push({
         role: 'assistant',
         content: text || ' ',
         ...toolCalls.length === 0 ? {} : { tool_calls: toolCalls },
         ...hasReasoning ? { reasoning_content: reasoningText } : {},
       })
+      continue
+    }
+
+    if ((message.role as string) === 'tool') {
+      const callId = consumeToolCallId(message, undefined, lastAssistantToolCallIds, output.length)
+      output.push({
+        role: 'tool',
+        tool_call_id: callId,
+        content: text,
+      })
+      if (pendingImages.length > 0) {
+        if (attachments !== undefined) {
+          enforceImageLimits(pendingImages.map(pending => pending.block), attachments)
+        }
+        output.push({
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `[${pendingImages.length} image${pendingImages.length === 1 ? '' : 's'} returned by the previous tool call]`,
+            },
+            ...await Promise.all(pendingImages.map(pending => resolveImagePart(pending.block, context))),
+          ],
+        })
+      }
       continue
     }
 
@@ -254,11 +304,21 @@ export async function validateAndTranslateMessages(
         userContent[pending.slot] = await resolveImagePart(pending.block, context)
       }))
     }
+
+    if (toolResults.length > 0 && !hasImage && text.trim().length === 0) {
+      continue
+    }
+
+    const wireRole = (toolResults.length > 0 ? 'user' : message.role) as 'system' | 'user' | 'assistant' | 'tool'
+    const wireToolCallId = wireRole === 'tool'
+      ? consumeToolCallId(message, undefined, lastAssistantToolCallIds, output.length)
+      : undefined
     output.push({
-      role: message.role,
+      role: wireRole,
       content: hasImage
         ? userContent.filter((part): part is QoderWireTextPart | QoderWireImagePart => part !== undefined)
         : text,
+      ...wireToolCallId ? { tool_call_id: wireToolCallId } : {},
     })
   }
 

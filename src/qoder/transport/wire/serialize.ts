@@ -3,7 +3,7 @@
 import crypto from 'node:crypto'
 import { contentHasImage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../../errors.ts'
-import { translateTools, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
+import { translateTools, validateAndTranslateMessages } from './translate.ts'
 import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './wire-types.ts'
 import type { QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
@@ -64,7 +64,6 @@ export function validateQoderRequestShape(
       'UNSUPPORTED_CONTENT',
     )
   }
-  validateMessageShapes(options.messages)
 }
 
 /** Translate a request whose shape has already been validated. */
@@ -183,7 +182,7 @@ export async function buildQoderRequestBody(
     },
     business: {
       product: 'cli',
-      version: '1.0.0',
+      version: '1.0.60',
       type: 'agent',
       stage: 'start',
       id: crypto.randomUUID(),
