@@ -4,10 +4,11 @@ import crypto from 'node:crypto'
 import { contentHasImage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../../errors.ts'
 import { translateTools, validateAndTranslateMessages } from './translate.ts'
-import type { QoderWireMessage, QoderWireRequest, QoderWireTool } from './wire-types.ts'
+import type { QoderWireMessage, QoderWireRequest } from './wire-types.ts'
 import type { QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
 import type { CosyCredentials } from './cosy.ts'
+import { QoderTurnTracker, type QoderCallKind } from './turn-identity.ts'
 
 function stableHash(prefix: string, ...inputs: string[]): string {
   const hash = crypto.createHash('sha256')
@@ -19,23 +20,63 @@ function stableHash(prefix: string, ...inputs: string[]): string {
   return hash.digest('hex').slice(0, 16)
 }
 
-function stableChatRecordId(
-  model: string,
+/**
+ * Turn identity shared by every request the process serves.
+ *
+ * Qoder's Credits panel aggregates consumption per agent run — the
+ * `business.id` a request reports — so every step of one turn must carry the
+ * same run identity while the next subscriber prompt opens a new one. The
+ * tracker owns that boundary; its mode decides which request field carries the
+ * turn id.
+ */
+export const qoderTurnTracker = new QoderTurnTracker({ mode: 'request-set' })
+
+/**
+ * Whether this request serves the subscriber's turn or the host's bookkeeping.
+ *
+ * The host marks an auxiliary call through `GenerateOptions.purpose`, and those
+ * calls carry a message list of their own under the same session identity. They
+ * must never move the open turn's boundary, or one subscriber prompt would
+ * report two consumption records.
+ */
+function callKind(options: GenerateOptions): QoderCallKind {
+  return options.purpose === undefined ? 'conversation' : 'auxiliary'
+}
+
+/**
+ * Turn id this request continues, or a per-request id when the request cannot
+ * be attributed to a conversation because it carries no session identity.
+ */
+function turnRecordId(options: GenerateOptions, messages: readonly QoderWireMessage[]): string {
+  return qoderTurnTracker.resolveTurnRecordId(
+    options.sessionId === undefined ? undefined : String(options.sessionId),
+    messages,
+    callKind(options),
+  ) ?? `qoder-request-${crypto.randomUUID()}`
+}
+
+/**
+ * `request_set_id` and `chat_record_id` for one request.
+ *
+ * The mode decides which of them carries the turn id; the other mirrors the
+ * official client, whose `chat_record_id` equals the request's own `request_id`
+ * and whose `request_set_id` stays on the agent run.
+ */
+function requestIdentity(
+  requestId: string,
+  options: GenerateOptions,
   messages: readonly QoderWireMessage[],
-  tools: readonly QoderWireTool[],
-  maxTokens: number,
-): string {
-  const hash = crypto.createHash('sha256')
-  hash.update('qoder-record')
-  hash.update('\0')
-  hash.update(model)
-  hash.update('\0')
-  hash.update(JSON.stringify(messages))
-  hash.update('\0')
-  hash.update(JSON.stringify(tools))
-  hash.update('\0')
-  hash.update(`mt=${maxTokens}`)
-  return hash.digest('hex').slice(0, 16)
+): { requestSetId: string; chatRecordId: string } {
+  const turnId = turnRecordId(options, messages)
+  switch (qoderTurnTracker.mode) {
+    case 'both':
+      return { requestSetId: turnId, chatRecordId: turnId }
+    case 'chat-record':
+      return { requestSetId: requestId, chatRecordId: turnId }
+    case 'request-set':
+    default:
+      return { requestSetId: turnId, chatRecordId: requestId }
+  }
 }
 
 /**
@@ -133,12 +174,22 @@ export async function buildQoderRequestBody(
   const sessionId = options.sessionId === undefined
     ? `${stablePart}-${crypto.randomUUID()}`
     : `${stablePart}-${String(options.sessionId)}`
-  const recordId = stableChatRecordId(modelKey, messages, tools, maxTokens)
+  // One request is one record id, exactly as the official client sends it, and
+  // one agent run is one `request_set_id` plus one `business.id`.
+  const requestId = crypto.randomUUID()
+  // The mode decides which field carries the turn id, mirroring the official
+  // client's identity model.
+  const identity = requestIdentity(requestId, options, messages)
+  const business = qoderTurnTracker.resolveBusinessId(
+    options.sessionId === undefined ? undefined : String(options.sessionId),
+    messages,
+    callKind(options),
+  )
 
   return {
-    request_id: crypto.randomUUID(),
-    request_set_id: recordId,
-    chat_record_id: recordId,
+    request_id: requestId,
+    request_set_id: identity.requestSetId,
+    chat_record_id: identity.chatRecordId,
     session_id: sessionId,
     stream: true,
     chat_task: 'FREE_INPUT',
@@ -185,9 +236,11 @@ export async function buildQoderRequestBody(
       version: '1.0.60',
       type: 'agent',
       stage: 'start',
-      id: crypto.randomUUID(),
+      // One agent run reports one business id for all of its requests, exactly
+      // as the official client does; the service aggregates consumption by it.
+      id: business.businessId,
       name: lastUserText.substring(0, 30),
-      begin_at: Date.now(),
+      begin_at: business.beginAt,
     },
   }
 }
