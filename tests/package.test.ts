@@ -12,8 +12,10 @@ import type {
   ResolvedCredential,
 } from '@deepseek-ai/dsh-credentials'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
-import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsProvider } from '@deepseek-ai/dsh-settings-legacy'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
+import { Config } from '../src/dsh/config.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
@@ -28,6 +30,10 @@ class MemorySettings extends SettingsProvider {
   protected persist(_ns: SettingsNamespace, _section: Record<string, unknown>): Promise<void> {
     return Promise.resolve()
   }
+}
+
+function memorySettings(ctx: Context): MemorySettings {
+  return ctx.settings as unknown as MemorySettings
 }
 
 class RecordingSettings extends MemorySettings {
@@ -92,7 +98,7 @@ test('package exports the expected plugin surface', () => {
   assert.equal(typeof plugin.Config, 'function')
   assert.equal('QoderAdapter' in plugin, false)
   assert.equal('fetchQoderModels' in plugin, false)
-  assert.equal('apiKeyEnv' in plugin.Config({}), false)
+  assert.equal('apiKeyEnv' in Config({}), false)
 })
 
 test('apply registers a valid adapter with the real DSH runtime', async () => {
@@ -195,16 +201,16 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
     assert.equal(prepared.context?.contextWindow, expected)
     assert.equal(prepared.config.reasoningEffort, undefined)
   }
-  const stored = ctx.settings.get(ns)
+  const stored = memorySettings(ctx).get(ns)
   assert.deepEqual((stored as plugin.Config).modelsByRegion?.global?.map(model => model.contextWindow), [200_000, 100_000])
   empty = true
   await assert.rejects(discover, /no enabled models/u)
-  assert.deepEqual(ctx.settings.get(ns), stored)
+  assert.deepEqual(memorySettings(ctx).get(ns), stored)
   assert.equal((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'large' })).context?.contextWindow, 200_000)
 })
 
 function normalizedCatalog(models: QoderCatalogModel[]) {
-  return plugin.Config({ modelsByRegion: { global: models } }).modelsByRegion?.global
+  return Config({ modelsByRegion: { global: models } }).modelsByRegion?.global
 }
 
 async function modelRuntime(config: plugin.Config) {
@@ -213,7 +219,7 @@ async function modelRuntime(config: plugin.Config) {
   await ctx.plugin(TestCredentials)
   await ctx.plugin(RecordingSettings).await()
   plugin.apply(ctx, config)
-  return { ctx, settings: ctx.settings as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace }
+  return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace }
 }
 
 /** Let background settings writes and their revision retries settle. */
@@ -231,7 +237,7 @@ test('automatic discovery persists rates without changing selection and refreshe
   const chosen = { id: 'chosen', name: 'Chosen name', contextWindow: 100_000, maxTokens: 4_096, priceFactor: 1 }
   const china = [{ id: 'china-model', name: 'China model', priceFactor: 7 }]
   const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: { global: [chosen], china } })
-  const stored = () => (ctx.settings.get(ns) as plugin.Config).modelsByRegion!
+  const stored = () => (memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion!
 
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
     ['chosen', 'Chosen name （2x）'],
@@ -303,7 +309,7 @@ test('settings edits do not persist fallback models before a successful discover
   await ctx.settings.update(ns, { webSearchMode: 'disabled' })
   await new Promise<void>(resolve => setImmediate(resolve))
   assert.equal(settings.writes.length, 1)
-  assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion, {})
+  assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion, {})
 })
 
 test('automatic discovery and settings persistence failures remain advisory', async (t) => {
@@ -320,7 +326,7 @@ test('automatic discovery and settings persistence failures remain advisory', as
   assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
   await drain()
   assert.equal(settings.writes.length, 1)
-  assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
+  assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
   await ctx.llm.listModels(QODER_PROVIDER_ID)
   await drain()
   assert.equal(discovery.mock.callCount(), 1)
@@ -329,7 +335,7 @@ test('automatic discovery and settings persistence failures remain advisory', as
   t.mock.timers.tick(300_000)
   assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
   await drain()
-  assert.deepEqual((ctx.settings.get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
+  assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
   assert.equal(settings.writes.length, 1)
 })
 
@@ -374,7 +380,7 @@ test('automatic discovery cannot overwrite a settings save already awaiting pers
   // conflict retry settle before reading the committed catalog.
   await drain()
 
-  const stored = ctx.settings.get(ns) as plugin.Config
+  const stored = memorySettings(ctx).get(ns) as plugin.Config
   assert.deepEqual(stored.modelsByRegion?.global, normalizedCatalog([{ ...chosen, priceFactor: 4 }]))
   assert.deepEqual(stored.modelsByRegion?.china, normalizedCatalog(china))
   assert.equal(stored.webSearchMode, 'disabled')
@@ -388,7 +394,7 @@ test('apply succeeds with default Config schema and empty models array', async (
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
-  const normalizedConfig = plugin.Config({})
+  const normalizedConfig = Config({})
   assert.deepEqual(normalizedConfig.models, [])
   plugin.apply(ctx, normalizedConfig)
   const models = await ctx.llm.listModels(QODER_PROVIDER_ID)
@@ -519,4 +525,3 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
   )
 
 })
-

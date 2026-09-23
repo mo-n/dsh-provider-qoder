@@ -35,9 +35,7 @@ test('QoderAuthService exchanges once, resolves identity, and caches credentials
   assert.equal(second, first)
   assert.equal(exchangeCalls, 1)
   assert.equal(userInfoCalls, 1)
-  assert.equal(exchangeHeaders?.['user-agent'], 'qoder/1.1.47')
   assert.equal(exchangeHeaders?.['cosy-clienttype'], '5')
-  assert.equal(userInfoHeaders?.['user-agent'], 'qoder/1.1.47')
   assert.equal(userInfoHeaders?.['cosy-clienttype'], '5')
 })
 

@@ -267,7 +267,7 @@ test('buildQoderRequestBody uses the resolved identity and configured model', as
     model: 'custom-model',
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Ping' }], source: { kind: 'user' } })],
     maxTokens: 4096,
-    sessionId: 'session-1',
+    sessionId: 'session-1' as GenerateOptions['sessionId'],
   } as GenerateOptions
   const body = await buildQoderRequestBody(options, 'user-42')
   assert.equal(body.session_type, 'qodercli')
@@ -524,3 +524,129 @@ test('validateQoderRequestShape rejects images for a non-vision model with no I/
   )
   assert.equal(reads, 0)
 })
+
+test('validateAndTranslateMessages preserves tool_call_id for direct tool role messages', async () => {
+  const toolMsg = {
+    id: 'msg-tool-1' as never,
+    role: 'tool' as const,
+    content: [{ type: 'text' as const, text: 'file contents' }],
+    tool_call_id: 'call-custom-99',
+    source: { kind: 'tool' as const, callId: ToolCallId('call-custom-99') },
+  } as unknown as Message
+  const translated = await validateAndTranslateMessages([toolMsg])
+  assert.deepEqual(translated, [
+    {
+      role: 'tool',
+      tool_call_id: 'call-custom-99',
+      content: 'file contents',
+    },
+  ])
+})
+
+test('validateAndTranslateMessages correlates missing tool_call_id from preceding assistant tool calls', async () => {
+  const callId = ToolCallId('call-auto-123')
+  const assistant = createAssistantMessage({
+    content: [
+      { type: 'tool-call', id: callId, name: 'read_file', arguments: '{"path":"a.txt"}' },
+    ],
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
+  })
+  const rawToolMsg = {
+    id: 'msg-tool-2' as never,
+    role: 'tool' as const,
+    content: [{ type: 'text' as const, text: 'file content without explicit id' }],
+    source: { kind: 'user' as const },
+  } as unknown as Message
+  const translated = await validateAndTranslateMessages([assistant, rawToolMsg])
+  assert.equal(translated.length, 2)
+  assert.equal(translated[1]?.role, 'tool')
+  assert.equal(translated[1]?.tool_call_id, 'call-auto-123')
+})
+
+test('validateAndTranslateMessages handles mixed explicit and inferred tool-call IDs without duplication', async () => {
+  const callA = ToolCallId('call-A')
+  const callB = ToolCallId('call-B')
+  const assistant = createAssistantMessage({
+    content: [
+      { type: 'tool-call', id: callA, name: 'toolA', arguments: '{}' },
+      { type: 'tool-call', id: callB, name: 'toolB', arguments: '{}' },
+    ],
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
+  })
+  // Result 1 specifies explicit call-A
+  const result1 = createToolResultMessage({
+    callId: callA,
+    content: [{ type: 'text', text: 'result A' }],
+    isError: false,
+  })
+  // Result 2 omits tool call id (triggers inference from queue)
+  const result2 = {
+    role: 'user' as const,
+    content: [
+      { type: 'tool-result' as const, content: [{ type: 'text' as const, text: 'result B' }] } as any,
+    ],
+  }
+
+  const translated = await validateAndTranslateMessages([assistant, result1, result2])
+  assert.equal(translated.length, 3)
+  assert.deepEqual(translated[1], {
+    role: 'tool',
+    tool_call_id: 'call-A',
+    content: 'result A',
+  })
+  // Result 2 must infer call-B, not duplicate call-A
+  assert.deepEqual(translated[2], {
+    role: 'tool',
+    tool_call_id: 'call-B',
+    content: 'result B',
+  })
+})
+
+test('validateAndTranslateMessages preserves sibling text alongside tool-result in the same message', async () => {
+  const callA = ToolCallId('call-1')
+  const assistant = createAssistantMessage({
+    content: [
+      { type: 'tool-call', id: callA, name: 'read_file', arguments: '{}' },
+    ],
+    source: { provider: 'dsh-provider-qoder', model: 'cmodel' },
+  })
+  // Message contains both tool-result AND sibling text instruction
+  const mixedMessage = {
+    role: 'user' as const,
+    content: [
+      {
+        type: 'tool-result' as const,
+        toolCallId: callA,
+        content: [{ type: 'text' as const, text: 'file content here' }],
+      },
+      {
+        type: 'text' as const,
+        text: 'Now please summarize the file.',
+      },
+    ],
+  }
+
+  const translated = await validateAndTranslateMessages([assistant, mixedMessage])
+  assert.deepEqual(translated, [
+    {
+      role: 'assistant',
+      content: ' ',
+      tool_calls: [{
+        id: 'call-1',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{}' },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'call-1',
+      content: 'file content here',
+    },
+    {
+      role: 'user',
+      content: 'Now please summarize the file.',
+    },
+  ])
+})
+
+

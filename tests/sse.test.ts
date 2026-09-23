@@ -343,7 +343,7 @@ test('parseQoderSse relays an upstream tool-calls reason without inventing a too
   assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'tool-calls')
 })
 
-test('parseQoderSse preserves explicit upstream error statuses', async () => {
+test('parseQoderSse preserves explicit upstream error statuses and surfaces details', async () => {
   await assert.rejects(async () => {
     for await (const _chunk of parseQoderSse(streamOf([
       `data: ${JSON.stringify({ statusCodeValue: 503, body: 'unavailable' })}`,
@@ -352,7 +352,23 @@ test('parseQoderSse preserves explicit upstream error statuses', async () => {
     error instanceof QoderLlmError
     && error.code === 'SERVER'
     && error.failure.status === 503
-    && error.message === 'Qoder service returned upstream error status 503.'
+    && error.message === 'Qoder service returned upstream error status 503: unavailable'
+  ))
+})
+
+test('parseQoderSse surfaces structured upstream error code and message from body', async () => {
+  await assert.rejects(async () => {
+    for await (const _chunk of parseQoderSse(streamOf([
+      `data: ${JSON.stringify({
+        statusCodeValue: 400,
+        body: JSON.stringify({ code: 'InvalidModel', message: 'model cmodel is not supported for this plan' }),
+      })}`,
+    ]))) continue
+  }, (error: Error) => (
+    error instanceof QoderLlmError
+    && error.code === 'INVALID_REQUEST'
+    && error.failure.status === 400
+    && error.message === 'Qoder service returned upstream error status 400: InvalidModel: model cmodel is not supported for this plan'
   ))
 })
 

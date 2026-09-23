@@ -107,7 +107,9 @@ export interface QoderWireRequest {
 
 export interface QoderSseEnvelope {
   statusCodeValue?: number
-  body?: string
+  statusCode?: number | string
+  message?: string
+  body?: unknown
 }
 
 export interface QoderInnerChunk {

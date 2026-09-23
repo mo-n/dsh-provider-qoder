@@ -89,7 +89,30 @@ export async function* streamQoderChat(
     })
     resetIdleTimer()
     if (!response.ok) {
-      throw qoderHttpError(`Qoder upstream service returned HTTP ${response.status}.`, response)
+      let bodyText = ''
+      try {
+        bodyText = (await response.text()).trim()
+      } catch {
+        // ignore body read failure
+      }
+      let detail = ''
+      if (bodyText) {
+        try {
+          const parsed = JSON.parse(bodyText) as Record<string, unknown>
+          const msg = typeof parsed.message === 'string' && parsed.message.trim() ? parsed.message.trim() : undefined
+          const code = typeof parsed.code === 'string' && parsed.code.trim() ? parsed.code.trim() : undefined
+          if (code && msg) detail = `: ${code}: ${msg}`
+          else if (msg) detail = `: ${msg}`
+          else detail = `: ${bodyText.slice(0, 300)}`
+        } catch {
+          detail = `: ${bodyText.slice(0, 300)}`
+        }
+      }
+      throw qoderHttpError(`Qoder upstream service returned HTTP ${response.status}${detail}.`, {
+        status: response.status,
+        headers: response.headers,
+        cause: bodyText || undefined,
+      })
     }
     if (!response.body) {
       throw new QoderLlmError('Qoder response contains no readable body stream.', 'EMPTY_RESPONSE')

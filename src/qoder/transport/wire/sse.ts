@@ -38,6 +38,37 @@ function malformed(message: string): QoderLlmError {
   return new QoderLlmError(message, 'MALFORMED_RESPONSE')
 }
 
+function extractErrorDetail(envelope: QoderSseEnvelope): string | undefined {
+  const raw = envelope.body ?? (envelope as Record<string, unknown>).message
+  if (!raw) return undefined
+  if (typeof raw !== 'string') return JSON.stringify(raw)
+  const trimmed = raw.trim()
+  try {
+    const parsed = JSON.parse(trimmed) as { code?: unknown; message?: unknown; error?: unknown; details?: unknown }
+    if (parsed && typeof parsed === 'object') {
+      let detailMsg: string | undefined
+      if (typeof parsed.details === 'string') {
+        try {
+          const inner = JSON.parse(parsed.details) as { error?: { message?: unknown }; message?: unknown }
+          if (typeof inner?.error?.message === 'string') detailMsg = inner.error.message.trim()
+          else if (typeof inner?.message === 'string') detailMsg = inner.message.trim()
+        } catch {
+          // Keep top-level message on unparseable details.
+        }
+      }
+      const msg = typeof parsed.message === 'string' ? parsed.message.trim() : undefined
+      const code = typeof parsed.code === 'string' ? parsed.code.trim() : undefined
+      const err = typeof parsed.error === 'string' ? parsed.error.trim() : undefined
+      const text = detailMsg || msg || err
+      if (code && text) return `${code}: ${text}`
+      return text || code || trimmed
+    }
+  } catch {
+    // Plain text content, return as-is.
+  }
+  return trimmed
+}
+
 function parseEnvelope(rawData: string): QoderSseEnvelope {
   let value: unknown
   try {
@@ -57,9 +88,13 @@ function parseEnvelope(rawData: string): QoderSseEnvelope {
     throw malformed('Qoder SSE envelope has an invalid status code.')
   }
   if (envelope.statusCodeValue !== undefined && envelope.statusCodeValue !== 200) {
+    const detail = extractErrorDetail(envelope)
+    const message = detail
+      ? `Qoder service returned upstream error status ${envelope.statusCodeValue}: ${detail}`
+      : `Qoder service returned upstream error status ${envelope.statusCodeValue}.`
     throw qoderHttpError(
-      `Qoder service returned upstream error status ${envelope.statusCodeValue}.`,
-      { status: envelope.statusCodeValue },
+      message,
+      { status: envelope.statusCodeValue, cause: envelope.body },
     )
   }
   if (envelope.body !== undefined && typeof envelope.body !== 'string') {
@@ -215,7 +250,7 @@ export async function* parseQoderSse(
         }
 
         const envelope = parseEnvelope(rawData)
-        const body = envelope.body?.trim()
+        const body = typeof envelope.body === 'string' ? envelope.body.trim() : ''
         if (!body) continue
         if (body === doneMarker) {
           sawDone = true

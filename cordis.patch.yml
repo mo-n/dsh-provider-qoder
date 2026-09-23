@@ -1,6 +1,6 @@
 # Adds only the Qoder provider plugin. Model selection remains user-owned.
 - insert:
-    - id: qoder-subscription
+    - id: provider-qoder
       name: 'dsh-provider-qoder'
 
 - id: web
