@@ -128,20 +128,26 @@ export function translateTools(tools: readonly ToolSchema[] | undefined): QoderW
   }))
 }
 
+/** Read a named property from an untyped object, returning it only if present. */
+function prop(obj: unknown, key: string): unknown {
+  return obj !== null && obj !== undefined && typeof obj === 'object'
+    ? (obj as Record<string, unknown>)[key]
+    : undefined
+}
+
+/** Coerce a candidate value to a non-empty string tool call id, or `undefined`. */
+function asCallId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
 function extractToolCallId(message: QoderMessage, result?: ToolResultBlock): string | undefined {
-  const candidate = (result as { toolCallId?: unknown; tool_call_id?: unknown; callId?: unknown; tool_use_id?: unknown })?.toolCallId
-    ?? (result as { tool_call_id?: unknown })?.tool_call_id
-    ?? (result as { callId?: unknown })?.callId
-    ?? (result as { tool_use_id?: unknown })?.tool_use_id
-    ?? (message as { tool_call_id?: unknown; toolCallId?: unknown; tool_use_id?: unknown }).tool_call_id
-    ?? (message as { toolCallId?: unknown }).toolCallId
-    ?? (message as { tool_use_id?: unknown }).tool_use_id
-    ?? ((message.source as { kind?: string; callId?: unknown })?.kind === 'tool'
-      ? (message.source as { callId?: unknown }).callId
-      : undefined)
-  return typeof candidate === 'string' && candidate.trim()
-    ? candidate.trim()
-    : (candidate !== undefined && candidate !== null ? String(candidate) : undefined)
+  // Check legacy DSH block, modern DSH message, wire-compat field, or tool source.
+  return asCallId(prop(result, 'toolCallId'))
+    ?? asCallId(prop(message, 'toolCallId'))
+    ?? asCallId(prop(message, 'tool_call_id'))
+    ?? asCallId(prop(message.source, 'kind') === 'tool' ? prop(message.source, 'callId') : undefined)
 }
 
 function consumeToolCallId(
