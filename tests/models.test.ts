@@ -119,6 +119,25 @@ test('rediscovery caps old input budgets and preserves smaller budgets', () => {
   }
 })
 
+test('qfmodel (Qwen3.8-Flash) defaults to 1M context tier when 1M option is available', () => {
+  const discovered = normalizeQoderModels({ assistant: [{
+    key: 'qfmodel', enable: true, display_name: 'Qwen3.8-Flash', context_config: {
+      '1M': { token_count: 1_000_000 },
+      '200K': { token_count: 200_000, is_default: true },
+      '400K': { token_count: 400_000 },
+    },
+  }] })
+  assert.equal(discovered[0].contextWindow, 1_000_000)
+  assert.equal(discovered[0].maxContextWindow, 1_000_000)
+  assert.equal(discovered[0].contextOptions?.['1M']?.isDefault, true)
+  assert.equal(discovered[0].contextOptions?.['200K']?.isDefault, undefined)
+
+  const configured = [{ id: 'qfmodel', name: 'Qwen3.8-Flash', contextWindow: 200_000 }]
+  const merged = mergeQoderDiscoveryMetadata(configured, discovered)
+  assert.equal(merged[0].contextWindow, 1_000_000)
+  assert.equal(merged[0].contextOptions?.['1M']?.isDefault, true)
+})
+
 test('catalog conflict diagnostics contain only conflict kinds', async () => {
   const warnings: unknown[] = []
   await fetchQoderModels({
