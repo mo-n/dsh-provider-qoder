@@ -54,6 +54,9 @@ export function reconcileQoderModels(
   const unavailable = known.filter(model => !availableIds.has(model.id))
   const previous = new Map(known.map(model => [model.id, model]))
   const reconciled = discovered.map(model => {
+    if (model.id === 'qfmodel' && (model.contextWindow === 1_000_000 || model.contextOptions?.['1M']?.tokenCount === 1_000_000)) {
+      return { ...model, contextWindow: 1_000_000 }
+    }
     const budget = previous.get(model.id)?.contextWindow
     return budget === undefined || model.contextWindow === undefined
       ? model

@@ -141,6 +141,10 @@ export function normalizeQoderModels(
     if (!id || seen.has(id)) continue
     seen.add(id)
     const contextOptions = contextOptionsOf(raw.context_config)
+    if (id === 'qfmodel' && contextOptions?.['1M']?.tokenCount === 1_000_000) {
+      for (const option of Object.values(contextOptions)) delete option.isDefault
+      contextOptions['1M'].isDefault = true
+    }
     const defaultOptions = Object.values(contextOptions ?? {}).filter(option => option.isDefault && option.tokenCount !== undefined)
     if (defaultOptions.length > 1) onConflict?.('context-defaults')
     const contextWindow = (defaultOptions.length === 1 ? defaultOptions[0].tokenCount : undefined)
@@ -189,6 +193,11 @@ export function mergeQoderDiscoveryMetadata(
     for (const key of discoveredMetadataKeys) delete merged[key]
     for (const key of discoveredMetadataKeys) {
       if (advertised[key] !== undefined) Object.assign(merged, { [key]: advertised[key] })
+    }
+    if (merged.id === 'qfmodel' && merged.contextOptions?.['1M']?.tokenCount === 1_000_000) {
+      for (const option of Object.values(merged.contextOptions)) delete option.isDefault
+      merged.contextOptions['1M'].isDefault = true
+      merged.contextWindow = 1_000_000
     }
     return merged
   })
