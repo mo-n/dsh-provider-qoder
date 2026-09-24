@@ -1,0 +1,20 @@
+name: Check Linked Issue
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  check-issue:
+    name: Check for Linked Issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for linked issue
+        uses: nearform-actions/github-action-check-linked-issues@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}

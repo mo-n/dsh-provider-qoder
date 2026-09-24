@@ -1,0 +1,35 @@
+name: "💡 Feature Request"
+description: "Suggest an idea or enhancement for this project"
+title: "[Feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature! Please provide context on the problem you are trying to solve.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem Statement / Use Case"
+      description: "Is your feature request related to a problem or limitation? Please describe."
+      placeholder: "Currently, when trying to ..., it is inconvenient because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Proposed Solution"
+      description: "Describe the solution or behavior you would like to see."
+      placeholder: "Add support for ..., or provide an API to ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives Considered"
+      description: "Have you considered any alternative solutions, workarounds, or reference implementations?"
+    validations:
+      required: false
