@@ -45,7 +45,8 @@ interface QoderModelsFooterOwnerProps {
   children?: never
 }
 
-export const inject = ['slots', 'locale', 'remote', 'remote.credentials', 'configForms']
+export const inject = ['slots', 'locale', 'remote', 'remote.credentials']
+
 
 interface ModelForm {
   getSnapshot(): QoderModelSettingsSnapshot
@@ -72,15 +73,26 @@ const fill = (text: string, values?: Record<string, string | number>): string =>
 }
 
 export function apply(ctx: ClientContext): void {
-  // dsh 0.1.7-rc.1: the alpha-era `settingsScope` service no longer exists and
-  // the settings document is reached through the `configForms` service — the
-  // same consumption path as the official settings-models client. The service
-  // must be declared on this static inject array: the dynamic client facade
-  // exposes only CTX_VERBS methods plus the services declared here, so a
-  // runtime `ctx.inject(['configForms'], …)` is rejected with
-  // `dynamic ctx does not expose "inject"`.
-  const forms = (ctx as unknown as { configForms: { get<T>(id: string): ModelForm } }).configForms
-  mount(ctx, forms.get<QoderModelSettingsSection>(settingsNamespace))
+  // Support both dsh >= 0.1.7 (`configForms`) and legacy dsh < 0.1.7 (`settingsScope`).
+  // In dynamic client facade (cordis-client-runner), `ctx.get(name)` performs
+  // optional service lookup without requiring declaration on static `inject`.
+  // Direct property access (`ctx.name`) on dynamic facade throws if not declared
+  // on static `inject`, so dynamic lookups must only go through `ctx.get()`.
+  // Keeping `configForms` and `settingsScope` off static `inject` prevents
+  // parking/pending failures across heterogeneous DSH host versions.
+  const configForms = ctx.get?.('configForms')
+  if (configForms) {
+    mount(ctx, configForms.get<QoderModelSettingsSection>(settingsNamespace))
+    return
+  }
+
+  const settingsScope = ctx.get?.('settingsScope')
+  if (settingsScope) {
+    mount(ctx, settingsScope.bind({ namespace: settingsNamespace }))
+    return
+  }
+
+  console.warn('[provider-qoder] Neither configForms nor settingsScope available; settings panel will not mount')
 }
 
 function mount(ctx: ClientContext, modelScope: ModelForm): void {
