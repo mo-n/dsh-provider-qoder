@@ -1,18 +1,24 @@
-# DSH Qoder 订阅插件
+# dsh-provider-qoder
+
+[![npm version](https://img.shields.io/npm/v/dsh-provider-qoder.svg?color=blue)](https://www.npmjs.com/package/dsh-provider-qoder)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![DSH Plugin](https://img.shields.io/badge/DSH-Plugin-6f42c1.svg)](https://github.com/mo-n/dsh-provider-qoder)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+
 
 [English](./README.md) | 简体中文
 
-`dsh-provider-qoder` 将你的 Qoder 订阅接入 DeepSeek Harness（DSH），支持文本与图片输入、流式文本、推理内容和工具调用，可选择国际版或中国区 Qoder 服务。
+在 DeepSeek Harness（DSH） 中使用 Qoder 订阅，支持多模态、联网搜索和工具调用，可选择国际版或中国区 Qoder 服务。
 
 插件负责认证和模型通信，工具执行、工作区操作及权限管理由 DSH 负责。
-本项目是社区适配插件。
+本项目是社区适配插件，与 Qoder、DeepSeek 官方均无关联。
 
 ## 功能
 
 - 通过 Qoder Personal Access Token（PAT，个人访问令牌）配置订阅访问。
 - 支持国际版（`global`）和中国区（`china`）服务。
 - 获取账号可用模型，选择启用的模型，并在服务返回相关信息时显示价格倍率和推理强度选项。
-- 支持流式回答、推理内容、多模态、搜索、工具调用及多轮交互。
+- 支持多模态、搜索以及工具调用。
 - 在设置中查看账号信息、额度和重置时间。
 
 ## 安装
@@ -55,60 +61,23 @@ dsh plugin --profile web add dsh-provider-qoder
 
 展开模型选择器时会自动刷新已启用 Qoder 模型的元数据，成功获取后缓存 5 分钟。设置可写时，更新后的倍率和能力信息也会同步到**自定义设置**显示的已保存目录，不会自动启用其他模型。刷新失败时保留最近一次成功获取的信息。
 
+<p align="center">
+  <img src="./assets/credentials-settings.png" alt="Qoder 凭据与模型配置" width="680" />
+</p>
+
 ### 3. 查看账号与额度
 
-打开 **设置 → Qoder** 查看账号和额度。
+打开 **设置 → Qoder** 查看账号额度，并可按需切换联网搜索策略：
 
-## 常见问题
+<p align="center">
+  <img src="./assets/account-quota.png" alt="Qoder 账号额度与搜索设置" width="650" />
+</p>
 
-### 插件无法启动，或凭据无法保存
 
-确认已重启安装插件的 profile，且该 profile 提供 DSH 托管凭据服务。如果提示存储不可写，需要在宿主侧配置可写的凭据存储。插件不会从环境变量读取 PAT。
-
-### 已保存 PAT，但获取模型或请求失败
-
-确认 PAT 有效且与已保存的服务区域匹配。修改后先保存，再获取模型。保存操作本身不会验证令牌。若账号额度已用尽，需先处理订阅额度问题。
-
-### 切换区域后，模型仍不可用
-
-Global 与 China 的模型目录会分别保存。切换区域不会自动替换 PAT，也不会自动重新获取该区域的模型；请先保存匹配区域的 PAT，再获取并保存所选区域的模型。
-
-### 请求是否会自动重试？
-
-模型生成重试由 DSH 管理。需要启用时，运行中的 profile 应包含 `@deepseek-ai/dsh-llm-retry`。插件使用 DSH 默认重试策略报告空响应、限流、服务端、超时和传输错误；认证、无效请求、取消、额度及协议格式错误默认不重试。Qoder transport 可以独立重试一次幂等的模型目录、订阅者资料或配额读取，但绝不会在内部重试模型生成 POST。
-
-## 从源码安装与开发
-
-在已安装 Git、Node.js 和 pnpm 的环境中执行。Node.js 需支持项目测试脚本使用的 `--experimental-strip-types` 和 `--test-isolation=none` 参数。
-
-```sh
-git clone https://github.com/mo-n/dsh-provider-qoder.git
-cd dsh-provider-qoder
-pnpm install --frozen-lockfile
-pnpm run build
-```
-
-将构建后的仓库目录安装到 DSH profile。以下路径为占位示例，请替换为实际绝对路径：
-
-```sh
-dsh plugin --profile web add /absolute/path/to/dsh-provider-qoder
-```
-
-重启 profile 后，按前文完成配置。若在 DSH 源码工作区中运行 CLI，可使用该工作区的 `pnpm dsh` 命令。
-
-开发时，在插件目录运行监听构建：
-
-```sh
-pnpm run dev
-```
-
-提交修改前运行：
-
-```sh
-pnpm run check
-```
-
-该命令运行模拟网络的非 UI 测试、构建 ESM 包与类型声明、检查构建产物并预览打包内容，不会发起真实 Qoder 模型请求或发布 npm 包。
+## 后续计划功能
+- [ ] 支持上下文窗口（Context Window）档位切换
+- [ ] 请求限流排队机制
+- [ ] 接入 Qoder 的 Protobuf 协议
 
 ## 参考项目
 
