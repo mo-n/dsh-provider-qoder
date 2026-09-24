@@ -47,6 +47,7 @@ interface QoderModelsFooterOwnerProps {
 
 export const inject = ['slots', 'locale', 'remote', 'remote.credentials']
 
+
 interface ModelForm {
   getSnapshot(): QoderModelSettingsSnapshot
   subscribe(listener: () => void): () => void
@@ -72,14 +73,26 @@ const fill = (text: string, values?: Record<string, string | number>): string =>
 }
 
 export function apply(ctx: ClientContext): void {
-  ctx.inject(['settingsScope'], child => {
-    const scopes = (child as unknown as { settingsScope: { bind(spec: { namespace: string }): ModelForm } }).settingsScope
-    mount(child, scopes.bind({ namespace: settingsNamespace }))
-  })
-  ctx.inject(['configForms'], child => {
-    const forms = (child as unknown as { configForms: { get<T>(id: string): ModelForm } }).configForms
-    mount(child, forms.get<QoderModelSettingsSection>(settingsNamespace))
-  })
+  // Support both dsh >= 0.1.7 (`configForms`) and legacy dsh < 0.1.7 (`settingsScope`).
+  // In dynamic client facade (cordis-client-runner), `ctx.get(name)` performs
+  // optional service lookup without requiring declaration on static `inject`.
+  // Direct property access (`ctx.name`) on dynamic facade throws if not declared
+  // on static `inject`, so dynamic lookups must only go through `ctx.get()`.
+  // Keeping `configForms` and `settingsScope` off static `inject` prevents
+  // parking/pending failures across heterogeneous DSH host versions.
+  const configForms = ctx.get?.('configForms')
+  if (configForms) {
+    mount(ctx, configForms.get<QoderModelSettingsSection>(settingsNamespace))
+    return
+  }
+
+  const settingsScope = ctx.get?.('settingsScope')
+  if (settingsScope) {
+    mount(ctx, settingsScope.bind({ namespace: settingsNamespace }))
+    return
+  }
+
+  console.warn('[provider-qoder] Neither configForms nor settingsScope available; settings panel will not mount')
 }
 
 function mount(ctx: ClientContext, modelScope: ModelForm): void {
