@@ -10,6 +10,7 @@ import type { QoderAccountInfo } from '../qoder/account.ts'
 import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
+import { QoderContextSelect } from './QoderContextSelect.tsx'
 import type {
   QoderCredentialOperations,
   QoderCredentialStatus,
@@ -28,6 +29,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
   interface SlotMap {
     'settings.models.footer': { kind: 'list'; scope: 'root'; owner: QoderModelsFooterOwnerProps }
+    'conversation.input.right': { kind: 'list'; scope: 'session' }
   }
 }
 
@@ -83,6 +85,20 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
   const credentials = (ctx.remote as unknown as { credentials: QoderCredentialsRemote }).credentials
   const rpc = createQoderRpcCaller()
 
+  let historyRegion: string | undefined
+  let historyRegionChanged = false
+  const readModelSnapshot = (): QoderModelSettingsSnapshot => {
+    const snapshot = modelScope.getSnapshot() as QoderModelSettingsSnapshot
+    if (snapshot.value) {
+      const region = snapshot.value.region ?? 'global'
+      if (historyRegion !== undefined && historyRegion !== region) historyRegionChanged = true
+      historyRegion = region
+    }
+    return snapshot
+  }
+  // request/context carries no region. Never reinterpret old capacity after a region switch.
+  readModelSnapshot()
+  ctx.effect(() => modelScope.subscribe(() => { readModelSnapshot() }), 'provider-qoder: context history region')
   const operations: QoderCredentialOperations = {
     describe: async () => {
       try {
@@ -109,15 +125,21 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
       }
     },
     getAccount: async (force) => await rpc.call<QoderAccountInfo>('account', { force }),
-    getModelSnapshot: () => modelScope.getSnapshot() as QoderModelSettingsSnapshot,
+    getModelSnapshot: readModelSnapshot,
+    canRestoreContextHistory: () => !historyRegionChanged,
     subscribeModels: listener => modelScope.subscribe(listener),
     storeModels: async (region, models) => {
       try {
         const current = modelScope.getSnapshot().value
-        return await modelScope.set('modelsByRegion', {
+        const clonedModels = models.map(m => ({
+          ...m,
+          ...m.contextOptions !== undefined ? { contextOptions: { ...m.contextOptions } } : {},
+        }))
+        const res = await modelScope.set('modelsByRegion', {
           ...current?.modelsByRegion,
-          [region]: models,
-        }) !== false
+          [region]: clonedModels,
+        })
+        return res !== false
       } catch {
         return false
       }
@@ -137,6 +159,14 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
       }
     },
     discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
+    setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region) => {
+      try {
+        const res = await rpc.call<{ success: boolean }>('sessionTier', { sessionId, modelId, tierKey, region })
+        return res.ok
+      } catch {
+        return false
+      }
+    },
 
     subscribe: (listener) => ctx.remote.$on('credentials/reference-updated', (ref: string) => {
       if (ref === qoderCredentialRef) listener()
@@ -167,4 +197,27 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     order: 15,
     inject: () => ({ operations, t, activeLocale }),
   }, QoderCredentialCard))
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+    name: 'conversation.input.right',
+    id: 'qoder-context-select',
+    order: 10,
+    inject: (sessionId: string) => {
+      let directory: unknown = undefined
+      try {
+        const modelDirectories = ctx.get('modelDirectories') as {
+          directoryFor(id: string): { store: unknown }
+        } | undefined
+        directory = sessionId && modelDirectories ? modelDirectories.directoryFor(sessionId)?.store : undefined
+      } catch {
+        // directoryFor resolution may throw if session scope is not ready yet
+      }
+      return {
+        sessionId,
+        directory,
+        operations,
+        t,
+        activeLocale,
+      }
+    },
+  }, QoderContextSelect))
 }

@@ -7,20 +7,27 @@ import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { createQoderTransport, type QoderTransportOptions } from '../src/qoder/transport/index.ts'
 
+import type { QoderAdapterOptions } from '../src/dsh/adapter.ts'
+
 interface TestAdapterOptions extends Omit<QoderTransportOptions, 'region'> {
   region?: QoderTransportOptions['region']
   models?: readonly QoderCatalogModel[]
+  sessions?: QoderAdapterOptions['sessions']
+  agents?: QoderAdapterOptions['agents']
 }
 
 function testAdapter(options: TestAdapterOptions): QoderAdapter {
-  const { models, ...transportOptions } = options
+  const { models, sessions, agents, ...transportOptions } = options
   const transport = createQoderTransport({
     ...transportOptions,
     region: options.region ?? 'global',
   })
   return new QoderAdapter({
     resolveTransport: () => transport,
+    region: () => options.region ?? 'global',
     models,
+    sessions,
+    agents,
   })
 }
 
@@ -156,6 +163,7 @@ test('QoderAdapter appends the advertised price factor to model display names', 
     models: [
       { id: 'priced', name: 'Priced', priceFactor: 1.6 },
       { id: 'free', name: 'Free', priceFactor: 0 },
+      { id: 'discounted', name: 'Discounted', priceFactor: 0.5, originalPriceFactor: 1 },
       { id: 'plain', name: 'Plain' },
     ],
     fetch: successfulFetch(),
@@ -163,7 +171,8 @@ test('QoderAdapter appends the advertised price factor to model display names', 
 
   assert.deepEqual((await adapter.listModels(QODER_PROVIDER_ID)).map(model => model.name), [
     'Priced （1.6x）',
-    'Free （0x）',
+    'Free （免费）',
+    'Discounted （0.5x（原 1x））',
     'Plain',
   ])
   assert.equal((await adapter.resolveModel(QODER_PROVIDER_ID, 'priced')).name, 'Priced （1.6x）')
@@ -427,4 +436,193 @@ test('QoderAdapter routes chat streaming to the configured region endpoint', asy
   })
   for await (const _chunk of globalAdapter.stream(request())) continue
   assert.ok(targetUrl.startsWith('https://api3.qoder.sh/'))
+})
+
+test('QoderAdapter widens the resolved context window for an explicit tier selection', async () => {
+  const adapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    models: [{
+      id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextTier: 'large',
+      contextOptions: {
+        small: { tokenCount: 200_000, isDefault: true },
+        large: { tokenCount: 1_000_000 },
+      },
+    }],
+    fetch: successfulFetch(),
+  })
+
+  const info = await adapter.resolveModel(QODER_PROVIDER_ID, 'tiered')
+  assert.equal(info.context?.contextWindow, 1_000_000)
+})
+
+test('QoderAdapter honors manual session tier override over global default', async () => {
+  const adapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    models: [{
+      id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large',
+      contextOptions: {
+        small: { tokenCount: 200_000, isDefault: true },
+        large: { tokenCount: 1_000_000 },
+      },
+    }],
+    agents: {
+      currentInitiator: () => ({ session: { id: 'session-manual' } }),
+    },
+    fetch: successfulFetch(),
+  })
+
+  adapter.setSessionTier('session-manual', 'tiered', 'small')
+  const info = await adapter.resolveModel(QODER_PROVIDER_ID, 'tiered')
+  assert.equal(info.context?.contextWindow, 200_000)
+
+  // Another session still resolves to global default (large / 1_000_000)
+  const defaultModel = adapter.resolveEffectiveModelForSession('tiered', 'session-other')
+  assert.equal(defaultModel?.contextTier, 'large')
+  assert.equal(defaultModel?.contextWindow, 1_000_000)
+})
+
+test('QoderAdapter falls back to historical requestContext tier for old sessions', async () => {
+  const adapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    models: [{
+      id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large',
+      contextOptions: {
+        small: { tokenCount: 200_000, isDefault: true },
+        large: { tokenCount: 1_000_000 },
+      },
+    }],
+    sessions: {
+      get: (id: string) => {
+        if (id === 'session-old') {
+          return {
+            requestContext: () => ({
+              provider: QODER_PROVIDER_ID,
+              model: 'tiered',
+              contextWindow: 200_000,
+            }),
+          }
+        }
+        return undefined
+      },
+    },
+    agents: {
+      currentInitiator: () => ({ session: { id: 'session-old' } }),
+    },
+    fetch: successfulFetch(),
+  })
+
+  const info = await adapter.resolveModel(QODER_PROVIDER_ID, 'tiered')
+  assert.equal(info.context?.contextWindow, 200_000)
+
+  // In stream, options.sessionId resolves the historical tier
+  const req: GenerateOptions = {
+    ...request(),
+    model: 'tiered',
+    sessionId: 'session-old' as unknown as GenerateOptions['sessionId'],
+  }
+  let chatBody: string | undefined
+  const fetchMock = successfulFetch((init) => {
+    chatBody = String(init?.body)
+  })
+  const streamingAdapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    models: [{
+      id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large',
+      contextOptions: {
+        small: { tokenCount: 200_000, isDefault: true },
+        large: { tokenCount: 1_000_000 },
+      },
+    }],
+    sessions: {
+      get: (id: string) => id === 'session-old' ? {
+        requestContext: () => ({ provider: QODER_PROVIDER_ID, model: 'tiered', contextWindow: 200_000 }),
+      } : undefined,
+    },
+    fetch: fetchMock,
+  })
+
+  const effective = streamingAdapter.resolveEffectiveModelForSession('tiered', 'session-old')
+  assert.equal(effective?.contextTier, 'small')
+  assert.equal(effective?.contextWindow, 200_000)
+  for await (const _chunk of streamingAdapter.stream(req)) continue
+  assert.ok(chatBody)
+  assert.ok(chatBody.length > 0)
+})
+
+test('prepared requests keep their budget, model and transport when the next request changes', async () => {
+  const models: QoderCatalogModel[] = [{ id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large', contextOptions: {
+    small: { tokenCount: 200_000, isDefault: true }, large: { tokenCount: 1_000_000 },
+  } }]
+  const sent: Array<{ region: string; budget?: number }> = []
+  const makeTransport = (region: string) => ({
+    stream: (_options: GenerateOptions, model?: QoderCatalogModel) => {
+      sent.push({ region, budget: model?.contextWindow })
+      return (async function* () {})()
+    },
+  }) as unknown as ReturnType<typeof createQoderTransport>
+  let region: 'global' | 'china' = 'global'
+  let transport = makeTransport(region)
+  const adapter = new QoderAdapter({ models, region: () => region, resolveTransport: () => transport,
+    agents: { currentInitiator: () => ({ session: { id: 's' } }) },
+  })
+  const prepared = await adapter.prepareCall(QODER_PROVIDER_ID, 'tiered')
+  adapter.setSessionTier('s', 'tiered', 'small', 'global')
+  const next = await adapter.prepareCall(QODER_PROVIDER_ID, 'tiered')
+  region = 'china'
+  transport = makeTransport(region)
+  assert.equal(adapter.getSessionTier('s', 'tiered'), undefined)
+  assert.equal(adapter.resolveEffectiveModelForSession('tiered', 's')?.contextWindow, 1_000_000)
+  assert.throws(() => adapter.setSessionTier('s', 'tiered', 'small', 'global'))
+  assert.throws(() => adapter.setSessionTier('s', 'tiered', 'missing', 'china'))
+  const options = { ...request(), model: 'tiered' }
+  for await (const _ of prepared.stream(options)) continue
+  for await (const _ of next.stream(options)) continue
+  assert.equal(prepared.model.context?.contextWindow, 1_000_000)
+  assert.equal(next.model.context?.contextWindow, 200_000)
+  assert.deepEqual(sent, [{ region: 'global', budget: 1_000_000 }, { region: 'global', budget: 200_000 }])
+})
+
+test('region changes never reinterpret unscoped historical capacity in another region', () => {
+  let region: 'global' | 'china' = 'global'
+  const model: QoderCatalogModel = { id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large', contextOptions: {
+    small: { tokenCount: 200_000 }, large: { tokenCount: 1_000_000, isDefault: true },
+  } }
+  const adapter = new QoderAdapter({
+    models: [model], region: () => region,
+    resolveTransport: () => ({} as ReturnType<typeof createQoderTransport>),
+    sessions: { get: () => ({ requestContext: () => ({ provider: QODER_PROVIDER_ID, model: 'tiered', contextWindow: 200_000 }) }) },
+  })
+  assert.equal(adapter.resolveEffectiveModelForSession('tiered', 's')?.contextWindow, 200_000)
+  adapter.setSessionTier('s', 'tiered', 'small')
+  region = 'china'
+  adapter.replaceModels([model])
+  assert.equal(adapter.resolveEffectiveModelForSession('tiered', 's')?.contextWindow, 1_000_000)
+  region = 'global'
+  adapter.replaceModels([model])
+  assert.equal(adapter.resolveEffectiveModelForSession('tiered', 's')?.contextWindow, 200_000)
+})
+
+test('request context diagnostics report the serialized tier before sending without private content', async () => {
+  const entries: unknown[][] = []
+  const adapter = testAdapter({
+    resolvePat: () => Promise.resolve('pt-token'),
+    region: 'china',
+    models: [{ id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextTier: 'large', contextOptions: {
+      small: { tokenCount: 200_000, isDefault: true }, large: { tokenCount: 1_000_000 },
+    } }],
+    logger: { debug: (...entry) => { entries.push(entry) } },
+    fetch: successfulFetch(() => {
+      assert.ok(entries.some(entry => entry[0] === '[Qoder Stream] Request context'))
+    }),
+  })
+  for await (const _ of adapter.stream({
+    ...request(), model: 'tiered', sessionId: 'diagnostic-session' as GenerateOptions['sessionId'], purpose: 'session-title',
+  })) continue
+  const details = entries.find(entry => entry[0] === '[Qoder Stream] Request context')?.[1] as Record<string, unknown>
+  assert.equal(typeof details.requestId, 'string')
+  assert.deepEqual(details, {
+    sessionId: 'diagnostic-session', requestId: details.requestId, model: 'tiered', region: 'china',
+    purpose: 'session-title', contextTier: 'large', context_length: 1_000_000,
+  })
+  assert.doesNotMatch(JSON.stringify(details), /Hello|pt-token|jt-token|user-42/)
 })

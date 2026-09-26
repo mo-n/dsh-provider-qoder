@@ -4,21 +4,44 @@ import {
   LlmAdapter,
   ReasoningEffortId,
   type GenerateOptions,
+  type PreparedAdapterCall,
   type LlmModelInfo,
   type LlmProviderInfo,
   type LlmResolvedModelInfo,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import { defaultModels, mergeQoderDiscoveryMetadata, type QoderCatalogModel } from '../qoder/catalog.ts'
+import {
+  contextTiersOf,
+  resolveContextTier,
+  defaultModels,
+  effectiveContextWindow,
+  formatModelRate,
+  mergeQoderDiscoveryMetadata,
+  type QoderCatalogModel,
+} from '../qoder/catalog.ts'
+import type { QoderRegion } from '../qoder/region.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 
+export interface QoderAdapterSessionStore {
+  get(id: string): {
+    requestContext(): { provider?: string; model?: string; contextWindow?: number } | undefined
+  } | undefined
+}
+
+export interface QoderAdapterAgentStore {
+  currentInitiator(): { session?: { id: string } } | undefined
+}
+
 export interface QoderAdapterOptions {
   resolveTransport: () => QoderTransport
+  region?: () => QoderRegion
   models?: readonly QoderCatalogModel[]
   providerId?: string
   providerName?: string
+  sessions?: QoderAdapterSessionStore
+  agents?: QoderAdapterAgentStore
   /**
    * Publish accepted automatic discoveries to the host's settings catalog.
    *
@@ -30,12 +53,13 @@ export interface QoderAdapterOptions {
 }
 
 function modelInfo(provider: string, model: QoderCatalogModel): LlmModelInfo {
+  const rate = formatModelRate(model, true)
   return {
     provider,
     id: model.id,
-    name: model.priceFactor === undefined
+    name: rate === undefined
       ? model.name
-      : `${model.name} （${model.priceFactor}x）`,
+      : `${model.name} （${rate}）`,
     description: model.description,
     inputModalities: model.supportsImages === true ? ['text', 'image'] : ['text'],
   }
@@ -53,6 +77,13 @@ export class QoderAdapter extends LlmAdapter {
     inflight?: Promise<void>
   }>()
 
+  private historyRegion: QoderRegion
+  private historyRegionChanged = false
+  private readonly region: () => QoderRegion
+  private readonly sessionTiers = new Map<string, string>()
+  private readonly sessions?: QoderAdapterSessionStore
+  private readonly agents?: QoderAdapterAgentStore
+
   constructor(options: QoderAdapterOptions) {
     super()
     this.resolveTransport = options.resolveTransport
@@ -60,6 +91,46 @@ export class QoderAdapter extends LlmAdapter {
     this.providerId = options.providerId ?? QODER_PROVIDER_ID
     this.providerName = options.providerName ?? 'Qoder'
     this.onModelsDiscovered = options.onModelsDiscovered
+    this.region = options.region ?? (() => 'global')
+    this.historyRegion = this.region()
+    this.sessions = options.sessions
+    this.agents = options.agents
+  }
+
+  setSessionTier(sessionId: string, modelId: string, tierKey: string, region = this.region()): void {
+    const model = this.effectiveModels().find(candidate => candidate.id === modelId)
+    if (region !== this.region() || !sessionId || !model
+      || !contextTiersOf(model).some(tier => tier.key === tierKey)
+      || (this.sessions && !this.sessions.get(sessionId))) {
+      throw new QoderLlmError('Invalid session context tier selection.', 'INVALID_REQUEST')
+    }
+    this.sessionTiers.set(JSON.stringify([region, sessionId, modelId]), tierKey)
+  }
+
+  getSessionTier(sessionId: string, modelId: string): string | undefined {
+    return this.sessionTiers.get(JSON.stringify([this.region(), sessionId, modelId]))
+  }
+
+  private observeRegion(): void {
+    if (this.region() !== this.historyRegion) {
+      this.historyRegionChanged = true
+      this.historyRegion = this.region()
+    }
+  }
+
+  resolveEffectiveModelForSession(modelId: string, sessionId?: string): QoderCatalogModel | undefined {
+    this.observeRegion()
+    const base = this.effectiveModels().find(candidate => candidate.id === modelId)
+    if (base === undefined) return undefined
+    if (sessionId) {
+      const manualTierKey = this.sessionTiers.get(JSON.stringify([this.region(), sessionId, modelId]))
+      const reqCtx = this.sessions?.get(sessionId)?.requestContext?.()
+      const historicalWindow = !this.historyRegionChanged && reqCtx?.provider === this.providerId && reqCtx.model === modelId
+        ? reqCtx.contextWindow : undefined
+      const tier = resolveContextTier(base, manualTierKey, historicalWindow)
+      if (tier) return { ...base, contextTier: tier.key, contextWindow: tier.tokenCount }
+    }
+    return base
   }
 
   override providerInfo(provider: string): LlmProviderInfo {
@@ -117,6 +188,7 @@ export class QoderAdapter extends LlmAdapter {
   }
 
   replaceModels(models: readonly QoderCatalogModel[]): void {
+    this.observeRegion()
     this.catalogModels = models
   }
 
@@ -136,15 +208,37 @@ export class QoderAdapter extends LlmAdapter {
     if (signal?.aborted) {
       return Promise.reject(new QoderLlmError('Qoder model resolution was aborted.', 'ABORTED'))
     }
-    const configured = this.effectiveModels().find(model => model.id === modelId)
+    const sessionId = this.agents?.currentInitiator()?.session?.id
+    const configured = this.resolveEffectiveModelForSession(modelId, sessionId)
+    return this.resolvedModel(provider, modelId, configured)
+  }
+
+  override prepareCall(provider: string, modelId: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    if (signal?.aborted) return Promise.reject(new QoderLlmError('Qoder model resolution was aborted.', 'ABORTED'))
+    const configured = this.resolveEffectiveModelForSession(modelId, this.agents?.currentInitiator()?.session?.id)
+    const snapshot = configured === undefined ? undefined : structuredClone(configured)
+    const transport = this.resolveTransport()
+    return this.resolvedModel(provider, modelId, snapshot).then(model => ({
+      model,
+      stream: options => {
+        if (options.provider !== this.providerId) {
+          throw new QoderLlmError(`Qoder adapter does not own provider "${options.provider}".`, 'INVALID_PROVIDER')
+        }
+        return transport.stream(options, snapshot)
+      },
+    }))
+  }
+
+  private resolvedModel(provider: string, modelId: string, configured?: QoderCatalogModel): Promise<LlmResolvedModelInfo> {
     if (configured === undefined) {
       return Promise.resolve({ provider, id: modelId, name: modelId, inputModalities: ['text'] })
     }
+    const contextWindow = effectiveContextWindow(configured)
     return Promise.resolve({
       ...modelInfo(provider, configured),
-      ...configured.contextWindow === undefined
+      ...contextWindow === undefined
         ? {}
-        : { context: { contextWindow: configured.contextWindow } },
+        : { context: { contextWindow } },
       ...configured.maxTokens === undefined
         ? {}
         : { defaultMaxTokens: configured.maxTokens },
@@ -169,7 +263,7 @@ export class QoderAdapter extends LlmAdapter {
     if (options.provider !== this.providerId) {
       throw new QoderLlmError(`Qoder adapter does not own provider "${options.provider}".`, 'INVALID_PROVIDER')
     }
-    const model = this.effectiveModels().find(candidate => candidate.id === (options.model || 'cmodel'))
+    const model = this.resolveEffectiveModelForSession(options.model || 'cmodel', options.sessionId)
     return this.resolveTransport().stream(options, model)
   }
 }

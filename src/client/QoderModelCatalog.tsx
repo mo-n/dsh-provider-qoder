@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react'
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import {
+  formatRateFactor,
+  type QoderCatalogModel,
+} from '../qoder/catalog.ts'
 import {
   reconcileQoderModels,
   type QoderCredentialOperations,
@@ -53,6 +56,19 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
     onChange(source.filter(model => nextSelected.has(model.id) && !unavailableIds.has(model.id)))
   }
 
+  const renderRate = (model: QoderCatalogModel): string => {
+    if (model.isFree || model.priceFactor === 0) return t('modelRateFree')
+    if (model.priceFactor === undefined) return t('modelRateUnknown')
+    const current = formatRateFactor(model.priceFactor)
+    if (model.originalPriceFactor !== undefined && model.originalPriceFactor > model.priceFactor) {
+      return t('modelRateDiscount', {
+        value: current,
+        original: formatRateFactor(model.originalPriceFactor),
+      })
+    }
+    return t('modelRate', { value: current })
+  }
+
   return (
     <section className={css.modelCatalog} aria-label={t('modelsTitle')}>
       <div className={css.modelCatalogHead}>
@@ -74,22 +90,22 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
         {displayedModels.map(model => {
           const unavailable = unavailableIds.has(model.id)
           return (
-            <label className={`${css.modelChoice} ${unavailable ? css.modelUnavailable : ''}`} key={model.id}>
-              <input
-                type="checkbox"
-                checked={!unavailable && selectedIds.has(model.id)}
-                disabled={disabled || unavailable}
-                onChange={event => { toggleModel(model.id, event.currentTarget.checked) }}
-              />
-              <span className={css.modelChoiceName}>{model.name}</span>
-              <span className={css.modelRate}>
-                {model.priceFactor === undefined
-                  ? t('modelRateUnknown')
-                  : t('modelRate', { value: model.priceFactor })}
-              </span>
-              <code>{model.id}</code>
-              {unavailable ? <span className={css.modelBadge}>{t('modelUnavailable')}</span> : null}
-            </label>
+            <div className={`${css.modelChoice} ${unavailable ? css.modelUnavailable : ''}`} key={model.id}>
+              <label className={css.modelChoiceHead}>
+                <input
+                  type="checkbox"
+                  checked={!unavailable && selectedIds.has(model.id)}
+                  disabled={disabled || unavailable}
+                  onChange={event => { toggleModel(model.id, event.currentTarget.checked) }}
+                />
+                <span className={css.modelChoiceName}>{model.name}</span>
+                <span className={css.modelRate}>
+                  {renderRate(model)}
+                </span>
+                <code>{model.id}</code>
+                {unavailable ? <span className={css.modelBadge}>{t('modelUnavailable')}</span> : null}
+              </label>
+            </div>
           )
         })}
       </div>

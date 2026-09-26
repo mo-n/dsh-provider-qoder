@@ -99,6 +99,7 @@ export interface QoderWireRequest {
   parameters: {
     max_tokens: number
     reasoning_effort?: string
+    context_length?: number
   }
   chat_context: QoderChatContext
   model_config: QoderModelConfig

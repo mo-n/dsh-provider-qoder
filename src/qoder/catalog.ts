@@ -8,6 +8,11 @@ export interface QoderCatalogModel {
   contextWindow?: number
   /** Largest known capacity, independent of the effective input budget. */
   maxContextWindow?: number
+  /**
+   * Provider-owned key of the context tier the subscriber selected. Absent means
+   * the provider default tier decides the effective input budget.
+   */
+  contextTier?: string
   maxTokens?: number
   source?: string
   isReasoning?: boolean
@@ -19,6 +24,8 @@ export interface QoderCatalogModel {
   }>
   defaultReasoningEffort?: string
   priceFactor?: number
+  originalPriceFactor?: number
+  isFree?: boolean
   contextOptions?: Record<string, { tokenCount?: number; isDefault?: boolean }>
   supportsImages?: boolean
 }
@@ -34,6 +41,13 @@ interface QoderModelEntry {
   thinking_config?: unknown
   source?: unknown
   price_factor?: unknown
+  priceFactor?: unknown
+  original_price_factor?: unknown
+  originPriceFactor?: unknown
+  is_free?: unknown
+  isFree?: unknown
+  tags?: unknown
+  promotion?: unknown
   is_vl?: unknown
 }
 
@@ -45,6 +59,8 @@ const discoveredMetadataKeys = [
   'reasoningEfforts',
   'defaultReasoningEffort',
   'priceFactor',
+  'originalPriceFactor',
+  'isFree',
   'contextOptions',
   'maxContextWindow',
   'supportsImages',
@@ -152,7 +168,22 @@ export function normalizeQoderModels(
     )
     const isReasoning = thinkingDefault(raw.thinking_config, raw.is_reasoning === true, onConflict)
     const priceFactor = typeof raw.price_factor === 'number' && Number.isFinite(raw.price_factor) && raw.price_factor >= 0
-      ? raw.price_factor : undefined
+      ? raw.price_factor
+      : (typeof raw.priceFactor === 'number' && Number.isFinite(raw.priceFactor) && raw.priceFactor >= 0 ? raw.priceFactor : undefined)
+    const rawOriginalPrice = typeof raw.original_price_factor === 'number' && Number.isFinite(raw.original_price_factor) && raw.original_price_factor >= 0
+      ? raw.original_price_factor
+      : (typeof raw.originPriceFactor === 'number' && Number.isFinite(raw.originPriceFactor) && raw.originPriceFactor >= 0
+        ? raw.originPriceFactor
+        : undefined)
+    const promotionPrice = (typeof raw.promotion === 'object' && raw.promotion !== null
+      && (raw.promotion as { active?: unknown }).active === true
+      && typeof (raw.promotion as { before_promotion_price_factor?: unknown }).before_promotion_price_factor === 'number')
+      ? (raw.promotion as { before_promotion_price_factor: number }).before_promotion_price_factor
+      : undefined
+    const originalPriceFactor = rawOriginalPrice ?? promotionPrice
+    const isFree = raw.is_free === true || raw.isFree === true
+      || (Array.isArray(raw.tags) && raw.tags.includes('limited_time_free'))
+      || priceFactor === 0
     const reasoning = reasoningEffortsOf(raw.thinking_config)
     models.push({
       id,
@@ -167,10 +198,110 @@ export function normalizeQoderModels(
       ...reasoning.efforts === undefined ? {} : { reasoningEfforts: reasoning.efforts },
       ...reasoning.defaultEffort === undefined ? {} : { defaultReasoningEffort: reasoning.defaultEffort },
       ...priceFactor === undefined ? {} : { priceFactor },
+      ...originalPriceFactor === undefined ? {} : { originalPriceFactor },
+      ...isFree ? { isFree: true } : {},
       ...contextOptions === undefined ? {} : { contextOptions },
     })
   }
   return models
+}
+
+export interface ContextTierOption {
+  key: string
+  tokenCount: number
+  isDefault: boolean
+}
+
+/**
+ * Provider-advertised context tiers of one model, smallest first. A tier without
+ * a usable capacity cannot be selected and is dropped.
+ */
+export function contextTiersOf(model: Pick<QoderCatalogModel, 'contextOptions'>): ContextTierOption[] {
+  const options = model.contextOptions
+  if (options === undefined) return []
+  return Object.entries(options).flatMap(([key, value]) => {
+    const tokenCount = value.tokenCount
+    return typeof tokenCount === 'number' && Number.isFinite(tokenCount) && tokenCount > 0
+      ? [{ key, tokenCount, isDefault: value.isDefault === true }]
+      : []
+  }).sort((left, right) => left.tokenCount - right.tokenCount)
+}
+
+/** Resolve a usable selection consistently for the composer and adapter. */
+export function resolveContextTier(model: QoderCatalogModel, manualTier?: string, historicalWindow?: number): ContextTierOption | undefined {
+  const tiers = contextTiersOf(model)
+  return tiers.find(tier => tier.key === manualTier)
+    ?? tiers.find(tier => tier.tokenCount === historicalWindow)
+    ?? tiers.find(tier => tier.key === model.contextTier)
+    ?? tiers.find(tier => tier.tokenCount === model.contextWindow)
+    ?? (model.contextWindow === undefined ? tiers.find(tier => tier.isDefault) : undefined)
+}
+
+/** Compact capacity label, e.g. `200K` or `1M`. */
+export function formatContextTokens(tokenCount: number): string {
+  if (tokenCount >= 1_000_000) {
+    const millions = tokenCount / 1_000_000
+    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`
+  }
+  if (tokenCount >= 1_000) {
+    const thousands = tokenCount / 1_000
+    return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`
+  }
+  return String(tokenCount)
+}
+
+/** Format a price factor number to string (e.g. 1 -> '1', 1.6 -> '1.6', 0.5 -> '0.5', 1.25 -> '1.25'). */
+export function formatRateFactor(value: number): string {
+  const rounded = Number(value.toFixed(2))
+  return String(rounded)
+}
+
+/**
+ * Format model price factor / rate string.
+ * - Free models or price factor 0: '免费' or 'Free'
+ * - Promotional models: '0.5x（原 1x）' or '0.5x (was 1x)'
+ * - Standard models: '1x'
+ */
+export function formatModelRate(
+  model: Pick<QoderCatalogModel, 'priceFactor' | 'originalPriceFactor' | 'isFree'>,
+  isZh = true,
+): string | undefined {
+  if (model.isFree || model.priceFactor === 0) {
+    return isZh ? '免费' : 'Free'
+  }
+  if (model.priceFactor === undefined) return undefined
+  const current = `${formatRateFactor(model.priceFactor)}x`
+  if (model.originalPriceFactor !== undefined && model.originalPriceFactor > model.priceFactor) {
+    const orig = `${formatRateFactor(model.originalPriceFactor)}x`
+    return isZh ? `${current}（原 ${orig}）` : `${current} (was ${orig})`
+  }
+  return current
+}
+
+/**
+ * The provider-advertised context tier the subscriber selected, when the
+ * provider still advertises that tier with a usable capacity.
+ */
+export function selectedContextTier(
+  model: Pick<QoderCatalogModel, 'contextTier' | 'contextOptions'>,
+): { key: string; tokenCount: number } | undefined {
+  const key = model.contextTier
+  if (typeof key !== 'string' || key.length === 0) return undefined
+  const tokenCount = positiveNumber(model.contextOptions?.[key]?.tokenCount)
+  return tokenCount === undefined ? undefined : { key, tokenCount }
+}
+
+/**
+ * Effective input budget carried to DSH for one catalog entry.
+ *
+ * A selected tier is an explicit subscriber decision, so it outranks the
+ * provider default tier and may widen the budget beyond it; without a selection
+ * the entry keeps its stored budget.
+ */
+export function effectiveContextWindow(
+  model: Pick<QoderCatalogModel, 'contextWindow' | 'contextTier' | 'contextOptions'>,
+): number | undefined {
+  return selectedContextTier(model)?.tokenCount ?? model.contextWindow
 }
 
 export function mergeQoderDiscoveryMetadata(
@@ -180,15 +311,35 @@ export function mergeQoderDiscoveryMetadata(
   const catalog = new Map(discovered.map(model => [model.id, model]))
   return configured.map((model) => {
     const advertised = catalog.get(model.id)
-    if (advertised === undefined) return { ...model }
-
-    const merged = { ...model }
-    if (advertised.contextWindow !== undefined) {
-      merged.contextWindow = Math.min(model.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
+    if (advertised === undefined) {
+      return {
+        ...model,
+        ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
+      }
     }
+
+    const merged: QoderCatalogModel = { ...model }
     for (const key of discoveredMetadataKeys) delete merged[key]
     for (const key of discoveredMetadataKeys) {
-      if (advertised[key] !== undefined) Object.assign(merged, { [key]: advertised[key] })
+      if (advertised[key] !== undefined) {
+        const val = advertised[key]
+        Object.assign(merged, {
+          [key]: key === 'contextOptions' && typeof val === 'object' && val !== null
+            ? { ...val }
+            : val,
+        })
+      }
+    }
+    // The selection is resolved after the refreshed tier options land: a selected
+    // tier is an explicit subscriber decision and outranks the provider default.
+    const tier = selectedContextTier(merged)
+    if (tier !== undefined) {
+      merged.contextWindow = tier.tokenCount
+      return merged
+    }
+    delete merged.contextTier
+    if (advertised.contextWindow !== undefined) {
+      merged.contextWindow = Math.min(model.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
     }
     return merged
   })

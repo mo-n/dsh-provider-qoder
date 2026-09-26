@@ -1,5 +1,5 @@
 import type { QoderAccountInfo } from '../qoder/account.ts'
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import { selectedContextTier, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderRpcResult } from '../dsh/rpc-channel.ts'
@@ -10,12 +10,14 @@ export interface QoderCredentialOperations {
   store(value: string): Promise<boolean>
   remove(): Promise<boolean>
   getAccount(force?: boolean): Promise<QoderAccountResult | undefined>
+  canRestoreContextHistory?(): boolean
   getModelSnapshot(): QoderModelSettingsSnapshot
   subscribeModels(listener: () => void): () => void
   storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<boolean>
   storeRegion(region: QoderRegion): Promise<boolean>
   storeWebSearchMode(mode: QoderWebSearchMode): Promise<boolean>
   discoverModels(): Promise<QoderModelDiscoveryResult>
+  setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<boolean>
   subscribe(listener: () => void): () => void
 }
 
@@ -49,13 +51,35 @@ export function reconcileQoderModels(
   discovered: readonly QoderCatalogModel[],
 ): QoderModelReconciliation {
   const availableIds = new Set(discovered.map(model => model.id))
-  const unavailable = known.filter(model => !availableIds.has(model.id))
+  const unavailable = known.filter(model => !availableIds.has(model.id)).map(model => ({
+    ...model,
+    ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
+  }))
   const previous = new Map(known.map(model => [model.id, model]))
   const reconciled = discovered.map(model => {
-    const budget = previous.get(model.id)?.contextWindow
+    const remembered = previous.get(model.id)
+    if (remembered === undefined) {
+      return {
+        ...model,
+        ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
+      }
+    }
+    // A remembered tier selection is an explicit subscriber decision: carry it
+    // over while the provider still advertises that tier, and let it widen the
+    // budget instead of being capped by the provider default.
+    const carried = selectedContextTier({
+      contextTier: remembered.contextTier,
+      contextOptions: model.contextOptions ?? remembered.contextOptions,
+    })
+    const options = model.contextOptions ?? remembered.contextOptions
+    const clonedOptions = options !== undefined ? { contextOptions: { ...options } } : {}
+    if (carried !== undefined) {
+      return { ...model, ...clonedOptions, contextTier: carried.key, contextWindow: carried.tokenCount }
+    }
+    const budget = remembered.contextWindow
     return budget === undefined || model.contextWindow === undefined
-      ? model
-      : { ...model, contextWindow: Math.min(budget, model.contextWindow) }
+      ? { ...model, ...clonedOptions }
+      : { ...model, ...clonedOptions, contextWindow: Math.min(budget, model.contextWindow) }
   })
   return {
     catalog: [...reconciled, ...unavailable],

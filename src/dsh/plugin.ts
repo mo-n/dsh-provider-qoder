@@ -122,8 +122,11 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   const adapter = new QoderAdapter({
     resolveTransport: () => activeTransport,
     models: initial.models,
+    region: () => activeTransportConfig.region,
     providerId: providerQoder,
     providerName: 'Qoder',
+    sessions: ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined,
+    agents: ctx.get('agents') as import('./adapter.ts').QoderAdapterAgentStore | undefined,
     onModelsDiscovered: (transport, models) => {
       if (transport !== activeTransport || ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
       const region = activeTransportConfig.region
@@ -286,6 +289,18 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
 
     if (endpoint === 'models') {
       return await executeRpc('discover Qoder models', () => discoverModels(signal))
+    }
+
+    if (endpoint === 'sessionTier') {
+      const data = payload as { sessionId?: string; modelId?: string; tierKey?: string; region?: QoderRegion }
+      if (typeof data?.sessionId === 'string' && typeof data?.modelId === 'string' && typeof data?.tierKey === 'string' && (data.region === 'global' || data.region === 'china')) {
+        const { sessionId, modelId, tierKey, region } = data
+        return await executeRpc('select session context tier', async () => {
+          adapter.setSessionTier(sessionId, modelId, tierKey, region)
+          return { success: true }
+        })
+      }
+      return publicError('INTERNAL', 'Invalid sessionTier payload')
     }
 
     const force = typeof payload === 'object' && payload !== null && 'force' in payload
