@@ -22,7 +22,6 @@ import type { QoderSearchClient } from '../qoder/transport/search.ts'
 import type { QoderWebSearchMode } from './config.ts'
 
 export const QODER_SEARCH_PROVIDER_ID = 'qoder'
-export const QODER_MODEL_PROVIDER_ROUTE = QODER_PROVIDER_ID
 
 export interface QoderSearchProviderOptions {
   ctx: Context
@@ -64,7 +63,7 @@ export class QoderSearchProvider implements WebSearchProvider {
     const agent = agentsService?.currentInitiator?.()
     const defaultModelService = this.ctx.get('agentDefaultModel') as unknown as { get?: () => { provider?: string } }
     const providerRoute = agent?.options?.provider ?? defaultModelService?.get?.()?.provider
-    const isQoderActive = providerRoute === QODER_MODEL_PROVIDER_ROUTE
+    const isQoderActive = providerRoute === QODER_PROVIDER_ID
 
     // If mode is 'always' or the active model is Qoder, execute via Qoder Center
     if (mode === 'always' || isQoderActive) {
@@ -84,7 +83,7 @@ export class QoderSearchProvider implements WebSearchProvider {
     }
 
     throw new WebError(
-      `Current model provider is "${providerRoute ?? 'unknown'}" rather than "${QODER_MODEL_PROVIDER_ROUTE}", `
+      `Current model provider is "${providerRoute ?? 'unknown'}" rather than "${QODER_PROVIDER_ID}", `
       + 'and no fallback web search provider is available. Switch to a Qoder model or configure an ambient search provider.',
       'WEB_PROVIDER_UNAVAILABLE',
     )

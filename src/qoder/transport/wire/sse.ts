@@ -11,7 +11,7 @@ import { QoderThinkingParser, type QoderContentSegment } from './thinking.ts'
 import type { QoderInnerChunk, QoderSseEnvelope } from './wire-types.ts'
 
 const doneMarker = '[DONE]'
-export const defaultMaxSseBufferChars = 2 * 1024 * 1024
+const defaultMaxSseBufferChars = 2 * 1024 * 1024
 
 export interface QoderSseOptions {
   onActivity?: () => void

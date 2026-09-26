@@ -27,9 +27,6 @@ export const qoderRegionEndpoints: Record<QoderRegion, QoderRegionEndpoints> = {
 /** Signed path of the center image upload route; it never carries an `/algo` prefix. */
 export const qoderImageUploadPath = '/api/v2/image/upload'
 
-export const qoderGlobalBaseUrl = qoderRegionEndpoints.global.baseUrl
-export const qoderGlobalOpenApiUrl = qoderRegionEndpoints.global.openApiUrl
-
 export function resolveQoderEndpoints(region: QoderRegion = 'global'): QoderRegionEndpoints {
   return qoderRegionEndpoints[region] ?? qoderRegionEndpoints.global
 }

@@ -313,16 +313,12 @@ export async function validateAndTranslateMessages(
       continue
     }
 
-    const wireRole = (toolResults.length > 0 ? 'user' : message.role) as 'system' | 'user' | 'assistant' | 'tool'
-    const wireToolCallId = wireRole === 'tool'
-      ? consumeToolCallId(message, undefined, lastAssistantToolCallIds, output.length)
-      : undefined
+    const wireRole = (toolResults.length > 0 ? 'user' : message.role) as 'system' | 'user'
     output.push({
       role: wireRole,
       content: hasImage
         ? userContent.filter((part): part is QoderWireTextPart | QoderWireImagePart => part !== undefined)
         : text,
-      ...wireToolCallId ? { tool_call_id: wireToolCallId } : {},
     })
   }
 

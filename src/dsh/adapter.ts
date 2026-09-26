@@ -14,9 +14,6 @@ import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 
-export { defaultMaxTokens, defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
-export { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs } from '../qoder/transport/index.ts'
-
 export interface QoderAdapterOptions {
   resolveTransport: () => QoderTransport
   models?: readonly QoderCatalogModel[]

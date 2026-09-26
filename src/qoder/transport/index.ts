@@ -42,7 +42,6 @@ export function createQoderTransport(options: QoderTransportOptions): QoderTrans
   return new DefaultQoderTransport(options)
 }
 
-export { QoderSearchClient, defaultSearchTimeoutMs } from './search.ts'
+export { QoderSearchClient } from './search.ts'
 export type { QoderSearchClientOptions } from './search.ts'
-export { getQoderWebSearchUrl, qoderWebSearchPath } from './endpoints.ts'
 
