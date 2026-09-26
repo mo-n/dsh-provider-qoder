@@ -15,7 +15,7 @@ import { defaultMaxJsonBytes, readLimitedText } from './request.ts'
 import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBody } from './wire/encoding.ts'
 
-export const defaultSearchTimeoutMs = 30_000
+const defaultSearchTimeoutMs = 30_000
 
 export interface QoderSearchClientOptions {
   fetch?: typeof fetch

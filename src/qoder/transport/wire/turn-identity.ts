@@ -181,16 +181,6 @@ function qoderMessageOrigin(message: QoderWireMessage): QoderMessageOrigin {
   return injectedContextOpenings.some(opening => text.startsWith(opening)) ? 'injected' : 'prompt'
 }
 
-/**
- * Whether one user-role message is host context rather than subscriber input.
- *
- * Exported for the offline audit that checks the opening list against real
- * transcripts, so the list cannot silently drift from what the host appends.
- */
-export function isInjectedQoderContext(message: QoderWireMessage): boolean {
-  return qoderMessageOrigin(message) !== 'prompt'
-}
-
 /** Stable record id of one session turn. */
 function turnIdFor(sessionId: string, turnCount: number, anchor: string): string {
   return crypto.createHash('sha256')

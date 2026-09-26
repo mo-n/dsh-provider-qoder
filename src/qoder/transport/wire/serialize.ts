@@ -89,7 +89,7 @@ export function translateQoderMessages(
   )
 }
 
-export async function validateQoderRequest(
+async function validateQoderRequest(
   options: GenerateOptions,
   model?: QoderCatalogModel,
   attachments?: QoderImageAttachments,
