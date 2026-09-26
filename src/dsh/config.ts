@@ -21,12 +21,13 @@ export interface Config {
   webSearchMode?: QoderWebSearchMode
 }
 
-const catalogModel: z<QoderCatalogModel> = z.object({
+const catalogModel = z.object({
   id: z.string().required(),
   name: z.string().required(),
   description: z.string(),
   contextWindow: z.number().step(1).min(1),
   maxContextWindow: z.number().step(1).min(1),
+  contextTier: z.string(),
   maxTokens: z.number().step(1).min(1),
   source: z.string(),
   isReasoning: z.boolean(),
@@ -38,12 +39,14 @@ const catalogModel: z<QoderCatalogModel> = z.object({
   })),
   defaultReasoningEffort: z.string(),
   priceFactor: z.number().min(0),
+  originalPriceFactor: z.number().min(0),
+  isFree: z.boolean(),
   supportsImages: z.boolean(),
   contextOptions: z.dict(z.object({
     tokenCount: z.number().step(1).min(1),
     isDefault: z.boolean(),
   })),
-})
+}) as z<QoderCatalogModel>
 
 const modelsByRegionSchema = z.dict(z.array(catalogModel)) as z<QoderModelsByRegion>
 
@@ -58,7 +61,7 @@ export const Config: z<Config> = z.object({
 
 // DSH profile configuration is live; direct apply calls can also pass plain config.
 export type PluginConfig = Config
-export const PluginConfig = Config.volatile()
+export const PluginConfig = typeof Config.volatile === 'function' ? Config.volatile() : Config
 export type LiveConfig = ReturnType<typeof PluginConfig>
 
 export function readConfig(value: Config | LiveConfig): Config {

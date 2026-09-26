@@ -38,7 +38,7 @@ function rpcRequest(path: string, body?: string): Request {
   })
 }
 
-test('the settings RPC mounts both endpoints as POST routes below the shared API channel', () => {
+test('the settings RPC mounts all endpoints as POST routes below the shared API channel', () => {
   const { context, routes, removed } = captureConnection()
   const handler: QoderRpcHandler = async () => ({ ok: true, value: {} })
 
@@ -47,13 +47,18 @@ test('the settings RPC mounts both endpoints as POST routes below the shared API
   assert.deepEqual(routes.map(route => route.path), [
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
+    '/api/qoder-subscription/sessionTier',
   ])
-  assert.deepEqual(routes.map(route => [...route.methods]), [['POST'], ['POST']])
-  assert.deepEqual(routes.map(route => route.requestBody), ['buffered', 'buffered'])
+  assert.deepEqual(routes.map(route => [...route.methods]), [['POST'], ['POST'], ['POST']])
+  assert.deepEqual(routes.map(route => route.requestBody), ['buffered', 'buffered', 'buffered'])
   assert.ok(routes.every(route => typeof route.fetch === 'function'))
 
   dispose()
-  assert.deepEqual(removed, ['/api/qoder-subscription/account', '/api/qoder-subscription/models'])
+  assert.deepEqual(removed, [
+    '/api/qoder-subscription/account',
+    '/api/qoder-subscription/models',
+    '/api/qoder-subscription/sessionTier',
+  ])
 })
 
 test('a registered route decodes the request payload and encodes the handler result', async () => {

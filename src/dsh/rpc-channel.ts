@@ -14,10 +14,17 @@ export const qoderRpcChannel = '/qoder-subscription'
  */
 export const qoderRpcApiPath = `/api${qoderRpcChannel}`
 
-/** Endpoints the account card and the model catalog call. */
-export const qoderRpcEndpoints = ['account', 'models'] as const
+/** Endpoints the account card, the model catalog, and the composer context select call. */
+export const qoderRpcEndpoints = ['account', 'models', 'sessionTier'] as const
 
 export type QoderRpcEndpoint = (typeof qoderRpcEndpoints)[number]
+
+export interface QoderSessionTierPayload {
+  region: import('../qoder/region.ts').QoderRegion
+  sessionId: string
+  modelId: string
+  tierKey: string
+}
 
 /** Absolute Fetch-route path of one endpoint. */
 export function qoderRpcPath(endpoint: QoderRpcEndpoint): string {

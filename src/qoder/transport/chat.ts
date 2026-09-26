@@ -64,6 +64,17 @@ export async function* streamQoderChat(
   }
 
   try {
+    const markedTiers = Object.entries(request.model_config.context_config ?? {})
+      .filter(([, tier]) => tier.is_default === true)
+    dependencies.logger?.debug?.('[Qoder Stream] Request context', redactLogValue({
+      sessionId: options.sessionId ?? null,
+      requestId: request.request_id,
+      model: request.model_config.key,
+      region: dependencies.region,
+      purpose: options.purpose ?? 'chat',
+      contextTier: markedTiers.length === 1 ? markedTiers[0][0] : null,
+      context_length: request.parameters.context_length ?? null,
+    }))
     const response = await dependencies.fetch(chatUrl, {
       method: 'POST',
       headers: {

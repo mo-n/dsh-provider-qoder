@@ -1,11 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { QoderLlmError } from '../src/qoder/errors.ts'
+import { Config } from '../src/dsh/config.ts'
 import { fetchQoderModels } from '../src/qoder/transport/catalog-reader.ts'
 import {
+  contextTiersOf,
+  effectiveContextWindow,
+  formatContextTokens,
+  formatModelRate,
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
   normalizeQoderModels,
+  selectedContextTier,
 } from '../src/qoder/catalog.ts'
 
 const payload = {
@@ -304,3 +310,99 @@ test('fetchQoderModels rejects oversized catalog responses', async () => {
     })) as typeof fetch,
   }), (error: Error) => error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE')
 })
+
+test('an explicit context tier outranks the provider default and survives rediscovery', () => {
+  const discovered = normalizeQoderModels({ assistant: [{
+    key: 'model', enable: true,
+    context_config: {
+      small: { token_count: 200_000, is_default: true },
+      large: { token_count: 1_000_000 },
+    },
+  }] })
+  assert.equal(discovered[0].contextWindow, 200_000)
+  assert.equal(selectedContextTier(discovered[0]), undefined)
+  assert.equal(effectiveContextWindow(discovered[0]), 200_000)
+
+  const selected = { ...discovered[0], contextTier: 'large', contextWindow: 1_000_000 }
+  assert.deepEqual(selectedContextTier(selected), { key: 'large', tokenCount: 1_000_000 })
+  assert.equal(effectiveContextWindow(selected), 1_000_000)
+
+  const merged = mergeQoderDiscoveryMetadata([selected], discovered)
+  assert.equal(merged[0].contextTier, 'large')
+  assert.equal(merged[0].contextWindow, 1_000_000)
+  assert.equal(hasSameQoderDiscoveryMetadata(merged, mergeQoderDiscoveryMetadata(merged, discovered)), true)
+})
+
+test('a context tier selection is dropped once the provider stops advertising it', () => {
+  const selected = [{
+    id: 'model', name: 'Model', contextWindow: 1_000_000, contextTier: 'large',
+    contextOptions: { small: { tokenCount: 200_000, isDefault: true }, large: { tokenCount: 1_000_000 } },
+  }]
+  const narrowed = normalizeQoderModels({ assistant: [{
+    key: 'model', enable: true,
+    context_config: { small: { token_count: 200_000, is_default: true } },
+  }] })
+
+  const merged = mergeQoderDiscoveryMetadata(selected, narrowed)
+
+  assert.equal(merged[0].contextTier, undefined)
+  assert.equal(merged[0].contextWindow, 200_000)
+})
+
+test('contextTiersOf extracts and sorts tiers smallest first', () => {
+  const tiers = contextTiersOf({
+    contextOptions: {
+      large: { tokenCount: 1_000_000 },
+      small: { tokenCount: 200_000, isDefault: true },
+      invalid: { tokenCount: -1 },
+    },
+  })
+  assert.deepEqual(tiers, [
+    { key: 'small', tokenCount: 200_000, isDefault: true },
+    { key: 'large', tokenCount: 1_000_000, isDefault: false },
+  ])
+})
+
+test('formatContextTokens formats thousands and millions cleanly', () => {
+  assert.equal(formatContextTokens(128_000), '128K')
+  assert.equal(formatContextTokens(200_000), '200K')
+  assert.equal(formatContextTokens(1_000_000), '1M')
+  assert.equal(formatContextTokens(1_500_000), '1.5M')
+  assert.equal(formatContextTokens(500), '500')
+})
+
+test('formatModelRate formats free, promotional, and standard rates in zh and en', () => {
+  assert.equal(formatModelRate({ isFree: true }, true), '免费')
+  assert.equal(formatModelRate({ isFree: true }, false), 'Free')
+  assert.equal(formatModelRate({ priceFactor: 0 }, true), '免费')
+  assert.equal(formatModelRate({ priceFactor: 0 }, false), 'Free')
+  assert.equal(formatModelRate({ priceFactor: 1 }, true), '1x')
+  assert.equal(formatModelRate({ priceFactor: 1.6 }, true), '1.6x')
+  assert.equal(formatModelRate({ priceFactor: 0.5, originalPriceFactor: 1 }, true), '0.5x（原 1x）')
+  assert.equal(formatModelRate({ priceFactor: 0.5, originalPriceFactor: 1 }, false), '0.5x (was 1x)')
+  assert.equal(formatModelRate({}), undefined)
+})
+
+test('mergeQoderDiscoveryMetadata detaches deeply frozen models with contextOptions before Config validation', () => {
+  const frozenModels = Object.freeze([
+    Object.freeze({
+      id: 'tiered',
+      name: 'Tiered',
+      contextWindow: 1_000_000,
+      contextTier: '1M',
+      contextOptions: Object.freeze({
+        '200K': Object.freeze({ tokenCount: 200_000, isDefault: false }),
+        '1M': Object.freeze({ tokenCount: 1_000_000, isDefault: true }),
+      }),
+    }),
+  ])
+
+  const merged = mergeQoderDiscoveryMetadata(frozenModels, [])
+  assert.equal(merged[0].contextTier, '1M')
+  assert.equal(merged[0].contextOptions?.['1M']?.tokenCount, 1_000_000)
+  assert.equal(Object.isFrozen(merged[0].contextOptions), false)
+
+  const validatedAfterMerge = Config({ modelsByRegion: { global: merged } })
+  assert.equal(validatedAfterMerge.modelsByRegion?.global?.[0].contextTier, '1M')
+})
+

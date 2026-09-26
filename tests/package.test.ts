@@ -31,7 +31,7 @@ function mergeSettings(base: Record<string, unknown>, patch: Record<string, unkn
     merged[key] = value !== null && typeof value === 'object' && !Array.isArray(value)
       && previous !== null && typeof previous === 'object' && !Array.isArray(previous)
       ? mergeSettings(previous as Record<string, unknown>, value as Record<string, unknown>)
-      : value
+      : structuredClone(value)
   }
   return merged
 }
@@ -334,7 +334,7 @@ test('automatic discovery persists rates without changing selection and refreshe
   assert.equal(settings.writes.length, 1)
   t.mock.timers.tick(1)
   advertised = [{ ...advertised[0], priceFactor: 0 }]
-  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
   await drain()
   assert.equal(stored().global?.[0].priceFactor, 0)
 
@@ -498,6 +498,7 @@ test('apply mounts the settings RPC on the connection Fetch registry', async () 
   assert.deepEqual(registeredPaths, [
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
+    '/api/qoder-subscription/sessionTier',
   ])
 })
 
@@ -580,5 +581,92 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
       return true
     },
   )
+})
 
+test('a stored context tier widens the context window reported to DSH', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  applyWithSettings(ctx, {
+    modelsByRegion: {
+      global: [{
+        id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextTier: 'large',
+        contextOptions: {
+          small: { tokenCount: 200_000, isDefault: true },
+          large: { tokenCount: 1_000_000 },
+        },
+      }],
+    },
+  })
+
+  const prepared = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'tiered' })
+  assert.equal(prepared.context?.contextWindow, 1_000_000)
+})
+
+test('the settings round-trip keeps a context tier selection', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  applyWithSettings(ctx, {})
+  await ctx.fiber.await()
+  const ns = 'provider-qoder' as SettingsNamespace
+
+  await ctx.settings.update(ns, {
+    modelsByRegion: {
+      global: [{
+        id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large',
+        contextOptions: {
+          small: { tokenCount: 200_000, isDefault: true },
+          large: { tokenCount: 1_000_000 },
+        },
+      }],
+    },
+  })
+
+  const stored = memorySettings(ctx).get(ns) as plugin.Config
+  assert.equal(stored.modelsByRegion?.global?.[0].contextTier, 'large')
+  assert.equal(
+    (await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'tiered' })).context?.contextWindow,
+    1_000_000,
+  )
+})
+
+test('the settings service tolerates updates with frozen models containing contextOptions', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  applyWithSettings(ctx, {})
+  await ctx.fiber.await()
+  const ns = 'provider-qoder' as SettingsNamespace
+
+  const frozenModels = Object.freeze([{
+    id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: '1M',
+    contextOptions: Object.freeze({
+      '200K': Object.freeze({ tokenCount: 200_000, isDefault: false }),
+      '1M': Object.freeze({ tokenCount: 1_000_000, isDefault: true }),
+    }),
+  }])
+
+  await ctx.settings.update(ns, {
+    modelsByRegion: {
+      global: frozenModels,
+    },
+  })
+
+  const stored = memorySettings(ctx).get(ns) as plugin.Config
+  assert.equal(stored.modelsByRegion?.global?.[0].contextTier, '1M')
+
+  // Updating again with the frozen resolved snapshot value must not throw Cannot assign to read only property '1M'
+  await ctx.settings.update(ns, {
+    modelsByRegion: {
+      global: stored.modelsByRegion!.global!,
+    },
+  })
+  assert.equal(
+    (await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'tiered' })).context?.contextWindow,
+    1_000_000,
+  )
 })

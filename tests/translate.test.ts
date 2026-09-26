@@ -649,4 +649,46 @@ test('validateAndTranslateMessages preserves sibling text alongside tool-result 
   ])
 })
 
+test('an explicit context tier selects the request tier and clears the other markers', async () => {
+  const [model] = normalizeQoderModels({ assistant: [{
+    key: 'model', enable: true,
+    context_config: {
+      small: { token_count: 200_000, is_default: true },
+      large: { token_count: 1_000_000 },
+    },
+  }] })
+  const body = await buildQoderRequestBody({
+    provider: 'qoder-official', model: 'model',
+    messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
+  }, 'user-test', undefined, { ...model, contextTier: 'large' })
+
+  assert.deepEqual(body.model_config.context_config, {
+    small: { token_count: 200_000, is_default: false },
+    large: { token_count: 1_000_000, is_default: true },
+  })
+  assert.equal(body.parameters.context_length, 1_000_000)
+})
+
+test('an explicit context tier selects a tier the provider left ambiguous', async () => {
+  const [model] = normalizeQoderModels({ assistant: [{
+    key: 'model', enable: true,
+    context_config: {
+      small: { token_count: 200_000, is_default: true },
+      large: { token_count: 1_000_000, is_default: true },
+    },
+  }] })
+  assert.equal(model.contextWindow, 180_000)
+
+  const body = await buildQoderRequestBody({
+    provider: 'qoder-official', model: 'model',
+    messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
+  }, 'user-test', undefined, { ...model, contextTier: 'small' })
+
+  assert.deepEqual(body.model_config.context_config, {
+    small: { token_count: 200_000, is_default: true },
+    large: { token_count: 1_000_000, is_default: false },
+  })
+  assert.equal(body.parameters.context_length, 200_000)
+})
+
 

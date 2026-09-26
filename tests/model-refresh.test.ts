@@ -139,8 +139,8 @@ test('a failed discovery notification does not discard fresh runtime metadata', 
       throw new Error('settings unavailable')
     },
   })
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /0x/u)
+  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
+  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
   assert.equal(notifications, 1)
 })
 
