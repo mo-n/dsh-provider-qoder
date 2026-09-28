@@ -96,3 +96,71 @@ test('composer keeps projection hook order stable across unresolved, foreign, si
     assert.equal(output !== null, current?.provider === QODER_PROVIDER_ID && current.model === 'a')
   }
 })
+
+test('model catalog renders context tier select and propagates default tier changes', async () => {
+  const filename = new URL('../src/client/QoderModelCatalog.tsx', import.meta.url)
+  const source = ts.transpileModule(await readFile(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+  }).outputText
+  const require = createRequire(filename)
+  const exports: Record<string, (props: object) => unknown> = {}
+  runInNewContext(source, {
+    exports,
+    require: (id: string) => id === 'react' ? {
+      useMemo: (fn: () => unknown) => fn(),
+      useState: (value: unknown) => [value, () => {}],
+      useRef: (value: unknown) => ({ current: value }),
+      useEffect: () => {},
+    } : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) } : require(id),
+  })
+
+  const tieredModel: QoderCatalogModel = {
+    id: 'tiered', name: 'Tiered', contextWindow: 200_000,
+    contextOptions: {
+      small: { tokenCount: 200_000, isDefault: true },
+      large: { tokenCount: 1_000_000 },
+    },
+  }
+  const singleModel: QoderCatalogModel = {
+    id: 'single', name: 'Single', contextWindow: 100_000,
+  }
+
+  let changedModels: QoderCatalogModel[] = []
+  type VNode = { type: unknown; props: Record<string, unknown> }
+  const vdom = exports.QoderModelCatalog({
+    operations: { discoverModels: async () => ({ ok: true, value: [] }) },
+    models: [tieredModel, singleModel],
+    disabled: false,
+    onChange: (models: QoderCatalogModel[]) => { changedModels = models },
+    t: (key: string, values?: Record<string, string | number>) => key === 'modelRate' ? `${values?.value}x` : key,
+  }) as VNode
+
+  const children = vdom.props.children as VNode[]
+  const modelList = children.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelList'))
+  assert.ok(modelList)
+  const choices = modelList.props.children as VNode[]
+  assert.equal(choices.length, 2)
+
+  // Tiered model has modelTier select
+  const tieredChoice = choices[0].props.children as (VNode | null)[]
+  const tierSection = tieredChoice.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelTier'))
+  assert.ok(tierSection)
+  const tierSelect = (tierSection.props.children as VNode[]).find(c => c.type === 'select')
+  assert.ok(tierSelect)
+  assert.equal(tierSelect.props.value, 'small')
+
+  // Single model has no tier select
+  const singleChoice = choices[1].props.children as (VNode | null)[]
+  const singleTierSection = singleChoice.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelTier'))
+  assert.equal(singleTierSection, undefined)
+
+  // Selecting a new tier triggers onChange with updated model
+  const selectHandler = tierSelect.props.onChange as (event: { currentTarget: { value: string } }) => void
+  selectHandler({ currentTarget: { value: 'large' } })
+  assert.equal(changedModels.length, 2)
+  assert.equal(changedModels[0].id, 'tiered')
+  assert.equal(changedModels[0].contextTier, 'large')
+  assert.equal(changedModels[0].contextWindow, 1_000_000)
+  assert.equal(changedModels[1].id, 'single')
+})
+
