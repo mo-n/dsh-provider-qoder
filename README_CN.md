@@ -75,7 +75,6 @@ dsh plugin --profile web add dsh-provider-qoder
 
 
 ## 后续计划功能
-- [ ] 支持上下文窗口（Context Window）档位切换
 - [ ] 请求限流排队机制
 - [ ] 接入 Qoder 的 Protobuf 协议
 

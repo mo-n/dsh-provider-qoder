@@ -72,7 +72,6 @@ Open **Settings → Qoder** to view account and quota details, and configure the
 
 ## Upcoming Features
 
-- [ ] Context window tier switching
 - [ ] Request rate-limiting queue mechanism
 - [ ] Connect with Qoder's Protobuf protocol
 

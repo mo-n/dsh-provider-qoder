@@ -18,6 +18,8 @@ interface QoderModelCatalogProps extends Pick<QoderCredentialInjected, 't'> {
   operations: Pick<QoderCredentialOperations, 'discoverModels'>
   models: QoderCatalogModel[]
   disabled: boolean
+  fetchDisabled?: boolean
+  hideTitle?: boolean
   onChange(models: QoderCatalogModel[]): void
 }
 
@@ -26,7 +28,7 @@ export function validateModelCatalog(models: readonly QoderCatalogModel[]): Qode
 }
 
 export function QoderModelCatalog(props: QoderModelCatalogProps) {
-  const { operations, models, disabled, onChange, t } = props
+  const { operations, models, disabled, fetchDisabled, hideTitle, onChange, t } = props
   const [fetching, setFetching] = useState(false)
   const [failure, setFailure] = useState<string | undefined>()
   const [catalog, setCatalog] = useState<QoderCatalogModel[] | undefined>()
@@ -92,15 +94,17 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
 
   return (
     <section className={css.modelCatalog} aria-label={t('modelsTitle')}>
-      <div className={css.modelCatalogHead}>
-        <div>
-          <strong className={css.modelCatalogTitle}>{t('modelsTitle')}</strong>
-          <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: models.length })}</p>
-        </div>
+      <div className={hideTitle ? css.modelCatalogHeadCompact : css.modelCatalogHead}>
+        {!hideTitle ? (
+          <div>
+            <strong className={css.modelCatalogTitle}>{t('modelsTitle')}</strong>
+            <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: models.length })}</p>
+          </div>
+        ) : null}
         <button
           type="button"
           className={css.linkButton}
-          disabled={disabled || fetching}
+          disabled={disabled || fetching || Boolean(fetchDisabled)}
           onClick={() => { void fetchModels() }}
         >
           {fetching ? t('modelsFetching') : t('modelsFetch')}
