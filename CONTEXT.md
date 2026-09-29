@@ -37,7 +37,7 @@ A provider-advertised input-context capacity option for a Qoder model. The provi
 _Avoid_: output token limit, maximum context as default
 
 **Qoder transport**:
-The provider-side capability that owns all communication with Qoder: authenticating a subscriber, discovering models, reading subscriber profile and quota, translating model requests, and returning model stream events. It does not own agent tools or workspace operations.
+The provider-side capability that owns Qoder authentication, model discovery, subscriber account reads, model requests, image publication, and web search. It does not own agent tools or workspace operations.
 _Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK
 
 **Qoder multimodal input**:
@@ -63,14 +63,6 @@ _Avoid_: visible answer, tool output, chain-of-thought configuration
 **Qoder reasoning effort**:
 An optional, model-specific reasoning level explicitly advertised by Qoder and selected for a conversation. Its identifiers are provider-owned; absence means Qoder chooses its default behavior.
 _Avoid_: synthetic off switch, token budget, global reasoning level
-
-**Quick validation release**:
-The first public release whose purpose is to prove that DSH can use a Qoder subscription for streaming text, reasoning, and tool-driven model turns.
-_Avoid_: MVP, feature-complete release
-
-**Public release**:
-A distributable plugin release intended for installation by Qoder subscribers beyond the maintainers' own machines.
-_Avoid_: local prototype, internal build
 
 **Qoder subscriber profile**:
 The verified identity details (user ID, display name, and email) associated with the authenticated Qoder subscription.
@@ -109,38 +101,29 @@ The provider-level mechanism that retains prior assistant reasoning content and 
 _Avoid_: thinking cache, scratchpad replay
 
 **Qoder web search**:
-The provider-side web discovery capability that executes queries against the Qoder center service's search route authorized by the subscriber's COSY credentials.
+The provider-side web discovery capability available through a Qoder subscription.
 _Avoid_: external search, Google search, crawler
-
-**Qoder search route**:
-The center-hosted API path (`/api/v1/webSearch/oneSearch`) that accepts query parameters and emits structured search results across service regions.
-_Avoid_: unifiedSearch, search proxy
 
 **Initiator-aware search routing**:
 The provider-level mechanism that inspects the initiating agent's active model provider and routes queries to Qoder when a Qoder model is active, delegating to an ambient search provider otherwise.
 _Avoid_: static search provider, fixed search binding
 
 **Qoder settings RPC**:
-The loopback exchange that answers the Qoder cards' model-catalog and subscriber-account reads from the host, carried as Connection exact Fetch routes on the shared `/api` channel using standard `ConnectionRpcResult` envelopes (`{ ok: true, value }` or `{ ok: false, error: { code, message } }`), rather than as a dedicated RPC channel or an ad-hoc REST endpoint.
+The exchange between Qoder settings cards and the host that supplies model catalog and subscriber account data.
 _Avoid_: remote API client, quota webhook, HTTP proxy
 
-**Qoder settings RPC error code**:
-A standardized diagnostic identifier (`NO_CREDENTIALS`, `UNAUTHENTICATED`, `UPSTREAM_ERROR`, `TIMEOUT`, `ABORTED`, `UNKNOWN_ENDPOINT`, or `INTERNAL`) carried in a settings RPC failure envelope to drive UI state without inspecting free-form message strings.
-_Avoid_: HTTP status mapping, ad-hoc string matching
-
 **Qoder agent run**:
-One execution of the agent for a single subscriber turn, from the prompt that opened it until the turn ends. It is the unit the Qoder service reports consumption against: every model request the run makes carries the same `business.id`, so one run appears in the Credits panel as one record whose duration and credits cover the whole turn.
+One execution of the agent for a single subscriber turn, from the prompt that opened it until the turn ends. Qoder reports consumption for the run as a whole.
 _Avoid_: request, step, conversation record, session
 
 **Qoder turn identity**:
-The request fields that attribute one model request to its conversation and agent run: `session_id` identifies the conversation, `request_set_id` identifies the run, and `request_id` (mirrored by `chat_record_id`) identifies that single request. The field that makes the service aggregate a turn is the run's `business.id`, not the conversation or request identifiers.
+The attribution of a Qoder model request to its conversation, agent run, and individual request. See ADR-0009 for the wire fields and aggregation key.
 _Avoid_: consumption id, record key, session token
 
 **Qoder auxiliary model call**:
-A model request the host makes for its own bookkeeping rather than for the subscriber's turn — session title and compaction summary — marked by `GenerateOptions.purpose`. It is routed through the same provider under the same session identity but with a message list of its own, so it reports a run of its own and must never open, claim, or displace a subscriber turn's record.
+A model request the host makes for its own bookkeeping, such as a session title or compaction summary. It has its own run and does not change a subscriber turn's identity.
 _Avoid_: background request, internal call, hidden prompt
 
 **Qoder turn boundary**:
-The provider-level decision that separates one subscriber turn from the next, derived from the request history because the adapter sees no turn number. A turn is the multiset of user-role messages it has accounted for: a message the run has not seen opens the next turn, while host-appended context, transport-synthesized image markers, and anything an auxiliary call carries continue the open record.
+The point at which a new subscriber prompt begins another agent run. See ADR-0009 for how the provider determines this from request history.
 _Avoid_: message position, anchor text, step counter
-

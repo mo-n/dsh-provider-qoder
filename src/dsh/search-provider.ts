@@ -18,15 +18,13 @@ import {
   type WebSearchResult,
 } from '@deepseek-ai/dsh-web'
 import type { QoderTransport } from '../qoder/transport/index.ts'
-import type { QoderSearchClient } from '../qoder/transport/search.ts'
 import type { QoderWebSearchMode } from './config.ts'
 
 export const QODER_SEARCH_PROVIDER_ID = 'qoder'
 
 export interface QoderSearchProviderOptions {
   ctx: Context
-  resolveTransport?: () => QoderTransport
-  searchClient?: QoderSearchClient
+  resolveTransport: () => QoderTransport
   getWebSearchMode: () => QoderWebSearchMode
   fallbackProvider?: WebSearchProvider
 }
@@ -35,15 +33,13 @@ export class QoderSearchProvider implements WebSearchProvider {
   readonly id = QODER_SEARCH_PROVIDER_ID
 
   private readonly ctx: Context
-  private readonly resolveTransport?: () => QoderTransport
-  private readonly searchClient?: QoderSearchClient
+  private readonly resolveTransport: () => QoderTransport
   private readonly getWebSearchMode: () => QoderWebSearchMode
   private readonly fallbackProvider?: WebSearchProvider
 
   constructor(options: QoderSearchProviderOptions) {
     this.ctx = options.ctx
     this.resolveTransport = options.resolveTransport
-    this.searchClient = options.searchClient
     this.getWebSearchMode = options.getWebSearchMode
     this.fallbackProvider = options.fallbackProvider
   }
@@ -67,13 +63,7 @@ export class QoderSearchProvider implements WebSearchProvider {
 
     // If mode is 'always' or the active model is Qoder, execute via Qoder Center
     if (mode === 'always' || isQoderActive) {
-      if (this.resolveTransport !== undefined) {
-        return this.resolveTransport().searchWeb(request, signal)
-      }
-      if (this.searchClient !== undefined) {
-        return this.searchClient.search(request, signal)
-      }
-      throw new WebError('No Qoder transport configured for web search.', 'WEB_PROVIDER_ERROR')
+      return this.resolveTransport().searchWeb(request, signal)
     }
 
     // Otherwise (mode is 'auto' and active model is non-Qoder), delegate to fallback provider

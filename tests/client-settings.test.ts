@@ -38,6 +38,7 @@ test('client settings mounts through configForms and reports rejected writes', a
   }
   let accepted: boolean | undefined
   const writes: unknown[] = []
+  const registeredSlots: string[] = []
   const form = {
     getSnapshot: () => ({ value: { modelsByRegion: {} } }),
     subscribe: () => () => {},
@@ -53,13 +54,15 @@ test('client settings mounts through configForms and reports rejected writes', a
     remote: { credentials: {} },
     slots: {
       inject: (_name: string, callback: () => void) => callback(),
-      register: (spec: { inject(): { operations: typeof operations } }) => {
+      register: (spec: { name: string; inject(): { operations: typeof operations } }) => {
+        registeredSlots.push(spec.name)
         operations = spec.inject().operations
       },
     },
   }
   plugin.apply(ctx)
   assert.equal(namespace, 'provider-qoder')
+  assert.deepEqual(registeredSlots, ['settings.section', 'settings.models.footer', 'conversation.input.right'])
   assert.equal(await operations.storeRegion('china'), true)
   accepted = false
   assert.equal(await operations.storeRegion('global'), false)
@@ -101,4 +104,3 @@ test('client settings uses declared services on guarded context', async () => {
   })
   assert.equal(mounted, true)
 })
-

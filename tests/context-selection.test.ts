@@ -25,8 +25,8 @@ test('returning from B after restart uses A default, not B capacity', () => {
 
 test('scoped catalogs never fall back to another region or repopulate an empty catalog', () => {
   const section = { modelsByRegion: { global: [model] } }
-  assert.ok(!modelsOf(section, 'china', 'global').some(candidate => candidate.id === model.id))
-  assert.deepEqual(modelsOf({ ...section, modelsByRegion: { china: [] } }, 'china', 'global'), [])
+  assert.ok(!modelsOf(section, 'china').some(candidate => candidate.id === model.id))
+  assert.deepEqual(modelsOf({ ...section, modelsByRegion: { china: [] } }, 'china'), [])
 })
 
 test('tier write failures preserve defaults and report partial success explicitly', async () => {
@@ -38,14 +38,14 @@ test('tier write failures preserve defaults and report partial success explicitl
     setSessionTier: async () => allowSession,
     storeModels: async () => { saved++; return allowDefaults },
   }
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small', 'global'), 'session-failed')
+  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'session-failed')
   assert.equal(saved, 0)
   allowSession = true
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small', 'global'), 'default-failed')
+  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'default-failed')
   allowDefaults = true
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small', 'global'), 'saved')
+  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'saved')
   operations.setSessionTier = async () => { throw new Error('offline') }
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small', 'global'), 'session-failed')
+  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'session-failed')
   assert.equal(saved, 2)
 })
 
@@ -57,7 +57,7 @@ test('default update reads fresh models after session acknowledgement', async ()
     getModelSnapshot: () => ({ value: { modelsByRegion: { global: snapshot } } }) as QoderModelSettingsSnapshot,
     setSessionTier: async () => { snapshot = [...snapshot, newcomer]; return true },
     storeModels: async (_region, models) => { stored = models; return true },
-  }, 's', 'global', 'a', 'small', 'global')
+  }, 's', 'global', 'a', 'small')
   assert.equal(result, 'saved')
   assert.equal(stored[0].contextTier, 'small')
   assert.equal(stored[1], newcomer)
@@ -163,4 +163,3 @@ test('model catalog renders context tier select and propagates default tier chan
   assert.equal(changedModels[0].contextWindow, 1_000_000)
   assert.equal(changedModels[1].id, 'single')
 })
-

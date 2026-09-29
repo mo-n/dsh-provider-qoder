@@ -6,6 +6,7 @@ import { getQoderWebSearchUrl, qoderWebSearchPath } from '../src/qoder/transport
 import { QoderSearchClient } from '../src/qoder/transport/search.ts'
 import { QoderSearchProvider, QODER_SEARCH_PROVIDER_ID } from '../src/dsh/search-provider.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
+import type { QoderTransport } from '../src/qoder/transport/index.ts'
 import type { CosyCredentials } from '../src/qoder/transport/wire/cosy.ts'
 
 import { qoderEncodeBody } from '../src/qoder/transport/wire/encoding.ts'
@@ -173,12 +174,12 @@ test('QoderSearchProvider routes based on initiator agent provider and mode', as
   }
 
   let qoderSearchCalled = false
-  const mockSearchClient = {
-    search: async () => {
+  const mockTransport = {
+    searchWeb: async () => {
       qoderSearchCalled = true
       return { sources: [{ url: 'https://qoder.sh' }], truncated: false }
     },
-  } as unknown as QoderSearchClient
+  } as unknown as QoderTransport
 
   let fallbackSearchCalled = false
   const mockFallbackProvider: WebSearchProvider = {
@@ -194,7 +195,7 @@ test('QoderSearchProvider routes based on initiator agent provider and mode', as
 
   const provider = new QoderSearchProvider({
     ctx,
-    searchClient: mockSearchClient,
+    resolveTransport: () => mockTransport,
     getWebSearchMode: () => mode,
     fallbackProvider: mockFallbackProvider,
   })
@@ -239,7 +240,7 @@ test('QoderSearchProvider routes based on initiator agent provider and mode', as
   )
 })
 
-test('QoderSearchProvider delegates to resolveTransport when configured', async () => {
+test('QoderSearchProvider routes Qoder search through transport', async () => {
   const ctx = new Context()
   ;(ctx as unknown as Record<string, unknown>).agents = {
     currentInitiator: () => ({
@@ -318,6 +319,7 @@ test('QoderSearchProvider dynamically resolves fallback from web.searchProviders
 
   const provider = new QoderSearchProvider({
     ctx,
+    resolveTransport: () => { throw new Error('Unexpected Qoder search') },
     getWebSearchMode: () => 'auto',
   })
 
@@ -325,5 +327,3 @@ test('QoderSearchProvider dynamically resolves fallback from web.searchProviders
   assert.equal(fallbackCalled, true)
   assert.equal(result.sources[0].url, 'https://fallback.deepseek.com')
 })
-
-

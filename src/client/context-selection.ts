@@ -7,7 +7,7 @@ export function isQoderProvider(provider?: string): boolean {
   return [QODER_PROVIDER_ID, 'qoder-official', 'qoder', 'qoder-subscription'].includes(provider ?? '')
 }
 
-export function modelsOf(section: QoderModelSettingsSection | undefined, region: QoderRegion, _legacyRegion?: QoderRegion): QoderCatalogModel[] {
+export function modelsOf(section: QoderModelSettingsSection | undefined, region: QoderRegion): QoderCatalogModel[] {
   const scoped = section?.modelsByRegion?.[region]
   if (scoped !== undefined) return scoped
   return defaultModels.map(model => ({ ...model }))
@@ -29,7 +29,6 @@ export async function saveContextSelection(
   region: QoderRegion,
   modelId: string,
   tierKey: string,
-  legacyRegion: QoderRegion,
 ): Promise<'saved' | 'session-failed' | 'default-failed'> {
   try {
     if (!await operations.setSessionTier?.(sessionId, modelId, tierKey, region)) return 'session-failed'
@@ -37,7 +36,7 @@ export async function saveContextSelection(
     return 'session-failed'
   }
   try {
-    const models = modelsOf(operations.getModelSnapshot().value, region, legacyRegion)
+    const models = modelsOf(operations.getModelSnapshot().value, region)
     const model = models.find(candidate => candidate.id === modelId)
     const tier = model && contextTiersOf(model).find(candidate => candidate.key === tierKey)
     if (!tier) return 'default-failed'

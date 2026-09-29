@@ -4,29 +4,26 @@
 
 The deliverable is the root ESM package, `dsh-provider-qoder`: a DSH extension that lets users access their Qoder subscription.
 
-- `src/` contains the production extension. `adapter.ts` owns provider behavior; `translate.ts`, `serialize.ts`, and `sse.ts` handle protocol conversion and streaming.
-- `pi-provider-qoder/` is a temporary reference for the reverse-engineered Qoder authentication, API, signing, model, usage, and streaming behavior.
-- `dsh-codex-subscription/` is a temporary reference for DSH plugin integration, OAuth coordination, settings UI, quota reporting, tests, packaging, and diagnostics.
+- `src/dsh/` owns DSH registration, configuration, credentials, settings RPC, and provider integration.
+- `src/qoder/` owns Qoder models, account data, and transport. `src/qoder/transport/wire/` handles protocol conversion and streaming.
+- `src/client/` contains the settings and context-tier UI. `tests/` contains root package tests.
 
-Do not add runtime dependencies on the references or implement production changes inside them. Port needed behavior into the root with tests. Both directories may be deleted after feature parity. Follow their local instructions when running them.
+Keep production behavior and tests in the root package. Do not copy secrets, cached credentials, or generated output from reference implementations.
 
 ## Architecture Direction
 
-Separate DSH registration, configuration, and credentials from Qoder transport logic. Treat the Pi provider as protocol evidence, not the desired public API; adapt it to the DSH conventions demonstrated by the Codex plugin. Never copy secrets, cached credentials, or generated output.
+Separate DSH registration, configuration, and credentials from Qoder transport logic. DSH owns the agent loop and tools; Qoder transport owns provider authentication and upstream communication.
 
 ## Build, Test, and Development Commands
 
-The root has no npm scripts and depends on DSH workspace peers; validate it from its host DSH workspace. These reference checks help while porting:
+The root package has its own scripts and pinned development dependencies. From the repository root, run:
 
 ```sh
-cd pi-provider-qoder && npm ci
-npm run check && npm run lint && npm test && npm run build
-
-cd dsh-codex-subscription && pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile
 pnpm run check
 ```
 
-The subscription `check` command runs tests, builds, and verifies its package tarball.
+`check` builds, typechecks, runs tests, and verifies the package contents with `pnpm pack --dry-run`. Use `pnpm run dev` for a watch build.
 
 ## Coding Style & Naming Conventions
 

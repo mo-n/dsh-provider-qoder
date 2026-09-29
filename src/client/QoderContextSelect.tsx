@@ -32,7 +32,6 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<{ key: string; message: 'contextSelectFailed' | 'contextDefaultFailed' } | null>(null)
   const saving = useRef(false)
-  const legacyRegion = useRef<QoderRegion | undefined>(undefined)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   const directoryState = useSyncExternalStore(
@@ -81,8 +80,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
   if (!current) return null
 
   const region: QoderRegion = modelSnapshot?.value?.region === 'china' ? 'china' : 'global'
-  if (legacyRegion.current === undefined && modelSnapshot?.value) legacyRegion.current = region
-  const models = modelsOf(modelSnapshot?.value, region, legacyRegion.current ?? region)
+  const models = modelsOf(modelSnapshot?.value, region)
 
   const currentModelId = current.model.includes('/') ? current.model.split('/')[1] : current.model
   const currentProviderId = current.provider ?? (current.model.includes('/') ? current.model.split('/')[0] : undefined)
@@ -108,7 +106,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
     setPending(true)
     setError(null)
     try {
-      const result = await saveContextSelection(operations, sessionId, region, activeModel.id, tierKey, legacyRegion.current ?? region)
+      const result = await saveContextSelection(operations, sessionId, region, activeModel.id, tierKey)
       if (result !== 'session-failed') setManualTiers(prev => ({ ...prev, [sessionKey]: tierKey }))
       if (result !== 'saved') setError({ key: sessionKey, message: result === 'session-failed' ? 'contextSelectFailed' : 'contextDefaultFailed' })
     } finally {
@@ -179,4 +177,3 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
     </div>
   )
 }
-
