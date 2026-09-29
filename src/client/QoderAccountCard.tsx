@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
+import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
+import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderCredentialInjected, QoderCredentialStatus } from './credential-operations.ts'
 import { resolveLocalizedText } from './locales.ts'
+import { QoderModelCatalog, validateModelCatalog } from './QoderModelCatalog.tsx'
 import css from './QoderCredentialCard.module.css'
 
 export type QoderAccountCardProps = SettingsSectionOwnerProps & QoderCredentialInjected
@@ -32,6 +35,24 @@ function formatResetDate(dateStr?: string): string | undefined {
   })
 }
 
+function modelsOf(value: unknown, selectedRegion?: QoderRegion): QoderCatalogModel[] {
+  if (typeof value !== 'object' || value === null) return defaultModels.map(model => ({ ...model }))
+  const section = value as {
+    region?: unknown
+    modelsByRegion?: Partial<Record<QoderRegion, unknown>>
+  }
+  const region = selectedRegion ?? (section.region === 'china' ? 'china' : 'global')
+  const scoped = section.modelsByRegion?.[region]
+  if (Array.isArray(scoped)) return scoped as QoderCatalogModel[]
+  return defaultModels.map(model => ({ ...model }))
+}
+
+function regionOf(value: unknown): QoderRegion {
+  if (typeof value !== 'object' || value === null) return 'global'
+  const region = (value as { region?: unknown }).region
+  return region === 'china' ? 'china' : 'global'
+}
+
 /**
  * Settings card for the Qoder subscription: credential state, subscriber
  * profile, and every quota block the provider reports.
@@ -41,6 +62,7 @@ export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCa
   const [accountState, setAccountState] = useState<AccountViewState>({ status: 'idle' })
   const [refreshing, setRefreshing] = useState(false)
   const [credentialRevision, setCredentialRevision] = useState(0)
+  const [modelSaveError, setModelSaveError] = useState<string | undefined>()
   const latestAccountRequest = useRef(0)
   const modelSnapshot = useSyncExternalStore(
     operations.subscribeModels,
@@ -152,7 +174,13 @@ export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCa
   }
 
   const renderAccount = () => {
-    if (!configured) return <p className={css.hint}>{t('accountCredentialHint')}</p>
+    if (!configured) {
+      return (
+        <div className={css.accountSection}>
+          <p className={css.accountEmptyText}>{t('accountCredentialHint')}</p>
+        </div>
+      )
+    }
     if (accountState.status === 'loading') {
       return <div className={css.accountSection}><p className={css.accountLoadingText}>{t('accountLoading')}</p></div>
     }
@@ -290,6 +318,55 @@ export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCa
     )
   }
 
+  const currentRegion = regionOf(modelSnapshot.value)
+  const currentModels = modelsOf(modelSnapshot.value, currentRegion)
+  const canModifyModels = modelSnapshot.status === 'ready' && modelSnapshot.writable
+
+  const handleModelsChange = async (models: QoderCatalogModel[]) => {
+    if (!canModifyModels) return
+    setModelSaveError(undefined)
+    const failure = validateModelCatalog(models)
+    if (failure) {
+      setModelSaveError(t(failure))
+      return
+    }
+    const saved = await operations.storeModels(currentRegion, models)
+    if (!saved) {
+      setModelSaveError(t('saveFailed'))
+    }
+  }
+
+  const renderModelCatalogSection = () => {
+    return (
+      <details className={css.customized}>
+        <summary className={css.customizedSummary}>
+          <span>{t('modelsTitle')}</span>
+          <span className={css.modelSummaryBadge}>
+            {t('modelsEnabled', { count: currentModels.length })}
+          </span>
+        </summary>
+        <div className={css.customizedBody}>
+          {modelSnapshot.status === 'loading'
+            ? <p className={css.hint}>{t('modelsLoading')}</p>
+            : modelSnapshot.status === 'unavailable'
+              ? <p className={css.error}>{t('modelsUnavailable')}</p>
+              : (
+                <QoderModelCatalog
+                  operations={operations}
+                  models={currentModels}
+                  disabled={!canModifyModels}
+                  fetchDisabled={!configured}
+                  hideTitle
+                  t={t}
+                  onChange={(models) => { void handleModelsChange(models) }}
+                />
+              )}
+          {modelSaveError ? <p className={css.error} role="alert">{modelSaveError}</p> : null}
+        </div>
+      </details>
+    )
+  }
+
   return (
     <section className={css.credential} aria-label={t('accountTitle')}>
       <div className={css.head}>
@@ -300,6 +377,7 @@ export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCa
       </div>
       {renderAccount()}
       {renderWebSearchSection()}
+      {renderModelCatalogSection()}
     </section>
   )
 }
