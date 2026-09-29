@@ -1,0 +1,59 @@
+name: DSH compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.7.0
+
+      - name: Build and test against DSH 0.1.7-rc.2
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run check
+          pnpm peers check
+
+      - name: Select DSH 0.2.0-rc.1 test dependencies
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const path = 'package.json'
+          const manifest = JSON.parse(readFileSync(path, 'utf8'))
+          for (const [name, version] of Object.entries(manifest.devDependencies)) {
+            if (name.startsWith('@deepseek-ai/dsh-') && version === '0.1.7-rc.2') {
+              manifest.devDependencies[name] = '0.2.0-rc.1'
+            }
+          }
+          writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n')
+          NODE
+
+      - name: Test the same build against DSH 0.2.0-rc.1
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm run typecheck
+          pnpm test
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          import { evaluatePluginCompatibility, getDshRuntimeVersion } from '@deepseek-ai/dsh-app-boot'
+          assert.equal(getDshRuntimeVersion(), '0.2.0-rc.1')
+          assert.equal(evaluatePluginCompatibility(JSON.parse(readFileSync('package.json', 'utf8'))), undefined)
+          NODE

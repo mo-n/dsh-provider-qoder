@@ -25,8 +25,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 You will need a running DSH Web environment, an active Qoder subscription, and a PAT matching the selected service region. The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
 
-This package's dependency ranges are DSH packages `>=0.1.2-rc.1 <0.2`, Cordis `>=4.0.2 <5`, and React `^18.2.0`. The settings UI also depends on the host providing remote credential endpoints and settings slots—please use a DSH version equipped with these interfaces; the ranges above do not imply that every version has been tested.
-
+This package supports DSH `>=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0`, Cordis `>=4.0.4 <5`, and React `^18.2.0`.
 ### Install from npm
 
 Run in your terminal:
