@@ -23,7 +23,7 @@ import {
   type QoderTransport,
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
-import { Config, modelsFor, readConfig, resolveModels, type Config as QoderConfig, type LiveConfig } from './config.ts'
+import { Config, modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } from './config.ts'
 import { bindQoderSettings } from './settings.ts'
 import { isQoderRpcEndpoint, type QoderRpcErrorCode } from './rpc-channel.ts'
 import { registerQoderRpc, type QoderRpcHandler } from './rpc.ts'
@@ -62,18 +62,15 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   const config = readConfig(input)
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
   const initialRegion = config.region ?? 'global'
-  const hasConfiguredModels = config.models !== undefined && config.models.length > 0
   const baseConfig: QoderConfig = {
     region: initialRegion,
     modelsByRegion: { ...config.modelsByRegion },
-    ...hasConfiguredModels ? { models: resolveModels(config.models) } : {},
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
     responseHeaderTimeoutMs: config.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
     preserveThinking: config.preserveThinking ?? true,
     webSearchMode: config.webSearchMode ?? 'auto',
   }
   let current = (): QoderConfig => baseConfig
-  let legacyModelsRegion = initialRegion
   let persistDiscoveredModels = async (_region: QoderRegion): Promise<void> => {}
   const discoveredCatalogs: Record<QoderRegion, readonly QoderCatalogModel[]> = {
     global: [],
@@ -101,10 +98,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     const region = value.region ?? 'global'
     return {
       region,
-      models: mergeQoderDiscoveryMetadata(
-        modelsFor(value, region, legacyModelsRegion),
-        discoveredCatalogs[region],
-      ),
+      models: mergeQoderDiscoveryMetadata(modelsFor(value, region), discoveredCatalogs[region]),
       streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
       responseHeaderTimeoutMs: value.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
       preserveThinking: value.preserveThinking ?? true,
@@ -175,11 +169,10 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
             throw new Error(`provider-qoder: unsupported model catalog region "${region}"`)
           }
         }
-        modelsFor(value, 'global', legacyModelsRegion)
-        modelsFor(value, 'china', legacyModelsRegion)
+        modelsFor(value, 'global')
+        modelsFor(value, 'china')
       },
     })
-    legacyModelsRegion = scope.get().region ?? initialRegion
     current = () => scope.get()
     let bindingActive = true
     const persistCatalog = async (region: QoderRegion): Promise<void> => {
@@ -187,7 +180,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
         if (!settingsCtx.settings.writable || discoveredCatalogs[region].length === 0) return
         const snapshot = settingsCtx.settings.describe().find(section => section.ns === namespace)
         if (snapshot === undefined) return
-        const selected = modelsFor(snapshot.value as QoderConfig, region, legacyModelsRegion)
+        const selected = modelsFor(snapshot.value as QoderConfig, region)
         // Compare the stored schema shape (including empty collection defaults) so
         // an unchanged catalog does not trigger another settings write on every read.
         const enriched = modelsFor(Config({
@@ -209,17 +202,6 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     }
     persistDiscoveredModels = persistCatalog
     refreshAdapter()
-
-    const loaded = scope.get()
-    const loadedRegion = loaded.region ?? 'global'
-    if (loaded.models !== undefined && loaded.models.length > 0
-      && loaded.modelsByRegion?.[loadedRegion] === undefined) {
-      void scope.update({
-        modelsByRegion: {
-          [loadedRegion]: resolveModels(loaded.models),
-        },
-      }).catch(error => logger?.error?.('[Qoder Settings] Failed to migrate model catalog', logError(error)))
-    }
 
     scope.watch(async () => {
       if (!bindingActive || ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
