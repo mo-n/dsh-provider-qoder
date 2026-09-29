@@ -22,8 +22,6 @@ export interface QoderCredentialOperations {
 export interface QoderModelSettingsSection {
   region?: QoderRegion
   modelsByRegion?: Partial<Record<QoderRegion, QoderCatalogModel[]>>
-  /** @deprecated Migrated to modelsByRegion. */
-  models?: QoderCatalogModel[]
   webSearchMode?: QoderWebSearchMode
 }
 
