@@ -12,6 +12,7 @@ import type {
   ResolvedCredential,
 } from '@deepseek-ai/dsh-credentials'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
+import type { WebSearchProvider, WebSearchRequest } from '@deepseek-ai/dsh-web'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
 import { Config, type LiveConfig } from '../src/dsh/config.ts'
@@ -554,33 +555,68 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
   ctx.provide('connection', { fetch: { register: () => () => {} } } as any)
   ctx.provide('attachments', {} as any)
 
-  let originalSearchCalled = false
+  let ambientCalls = 0
+  let registeredProvider: WebSearchProvider | undefined
   const fakeWeb = {
     searchProviders: new Map(),
-    registerSearchProvider: () => () => {},
-    search: async () => {
-      originalSearchCalled = true
+    registerSearchProvider: (provider: WebSearchProvider) => {
+      registeredProvider = provider
+      return () => {}
+    },
+    search: async (_request: WebSearchRequest, _signal?: AbortSignal) => {
+      ambientCalls++
       return { sources: [{ url: 'https://fallback.com' }], truncated: false }
     },
   }
+  const originalSearch = fakeWeb.search
   ctx.provide('web', fakeWeb as any)
 
+  let currentProvider = QODER_PROVIDER_ID
+  let mode: 'auto' | 'always' | 'disabled' = 'auto'
   ;(ctx as unknown as Record<string, unknown>).agents = {
     currentInitiator: () => ({
-      options: { provider: QODER_PROVIDER_ID },
+      options: { provider: currentProvider },
     }),
   }
 
-  applyWithSettings(ctx, { webSearchMode: 'auto' })
-  await ctx.fiber.await()
+  const fiber = ctx.plugin({ name: plugin.name, inject: plugin.inject, apply: plugin.apply }, {
+    get: () => ({ webSearchMode: mode }),
+  } as LiveConfig)
+  await fiber.await()
+  assert.ok(registeredProvider)
+  assert.notEqual(fakeWeb.search, originalSearch)
 
-  await assert.rejects(
-    () => ctx.web.search({ query: 'hello' }),
-    (err: unknown) => {
-      assert.equal(originalSearchCalled, false)
-      return true
-    },
-  )
+  let qoderCalls = 0
+  const controller = new AbortController()
+  registeredProvider.search = async (request, signal) => {
+    assert.equal(request.query, 'hello')
+    assert.equal(signal, controller.signal)
+    qoderCalls++
+    return { sources: [{ url: 'https://qoder.sh' }], truncated: false }
+  }
+  const qoderResult = await ctx.web.search({ query: 'hello' }, controller.signal)
+  assert.equal(qoderResult.sources[0].url, 'https://qoder.sh')
+  assert.equal(qoderCalls, 1)
+  assert.equal(ambientCalls, 0)
+
+  currentProvider = 'deepseek-official'
+  const ambientResult = await ctx.web.search({ query: 'hello' })
+  assert.equal(ambientResult.sources[0].url, 'https://fallback.com')
+  assert.equal(qoderCalls, 1)
+  assert.equal(ambientCalls, 1)
+
+  mode = 'always'
+  const forcedResult = await ctx.web.search({ query: 'hello' }, controller.signal)
+  assert.equal(forcedResult.sources[0].url, 'https://qoder.sh')
+  assert.equal(qoderCalls, 2)
+
+  mode = 'disabled'
+  const disabledResult = await ctx.web.search({ query: 'hello' })
+  assert.equal(disabledResult.sources[0].url, 'https://fallback.com')
+  assert.equal(ambientCalls, 2)
+
+  await fiber.dispose()
+  assert.equal(fakeWeb.search, originalSearch)
 })
 
 test('a stored context tier widens the context window reported to DSH', async () => {

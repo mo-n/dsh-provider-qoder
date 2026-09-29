@@ -240,6 +240,26 @@ test('QoderSearchProvider routes based on initiator agent provider and mode', as
   )
 })
 
+test('QoderSearchProvider caps direct results to maxResults', async () => {
+  const ctx = new Context()
+  const sources = [1, 2, 3].map(index => ({ url: `https://result-${index}.example` }))
+  const provider = new QoderSearchProvider({
+    ctx,
+    resolveTransport: () => ({
+      searchWeb: async () => ({ sources, truncated: false }),
+    }) as unknown as QoderTransport,
+    getWebSearchMode: () => 'always',
+  })
+
+  const limited = await provider.search({ query: 'limits', maxResults: 2 })
+  assert.deepEqual(limited.sources, sources.slice(0, 2))
+  assert.equal(limited.truncated, true)
+
+  const unlimited = await provider.search({ query: 'limits' })
+  assert.deepEqual(unlimited.sources, sources)
+  assert.equal(unlimited.truncated, false)
+})
+
 test('QoderSearchProvider routes Qoder search through transport', async () => {
   const ctx = new Context()
   ;(ctx as unknown as Record<string, unknown>).agents = {

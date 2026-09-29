@@ -22,6 +22,18 @@ import type { QoderWebSearchMode } from './config.ts'
 
 export const QODER_SEARCH_PROVIDER_ID = 'qoder'
 
+export function initiatingModelProvider(ctx: Context): string | undefined {
+  const agentsService = ctx.get('agents')
+    ?? (ctx as unknown as { agents?: { currentInitiator?: () => { options?: { provider?: string } } } }).agents
+  const agent = agentsService?.currentInitiator?.()
+  const defaultModelService = ctx.get('agentDefaultModel') as unknown as { get?: () => { provider?: string } }
+  return agent?.options?.provider ?? defaultModelService?.get?.()?.provider
+}
+
+export function shouldUseQoderSearch(mode: QoderWebSearchMode, provider?: string): boolean {
+  return mode === 'always' || (mode === 'auto' && provider === QODER_PROVIDER_ID)
+}
+
 export interface QoderSearchProviderOptions {
   ctx: Context
   resolveTransport: () => QoderTransport
@@ -54,16 +66,14 @@ export class QoderSearchProvider implements WebSearchProvider {
       throw new WebError('Qoder web search is disabled in settings.', 'WEB_PROVIDER_UNAVAILABLE')
     }
 
-    const agentsService = this.ctx.get('agents')
-      ?? (this.ctx as unknown as { agents?: { currentInitiator?: () => { options?: { provider?: string } } } }).agents
-    const agent = agentsService?.currentInitiator?.()
-    const defaultModelService = this.ctx.get('agentDefaultModel') as unknown as { get?: () => { provider?: string } }
-    const providerRoute = agent?.options?.provider ?? defaultModelService?.get?.()?.provider
-    const isQoderActive = providerRoute === QODER_PROVIDER_ID
+    const providerRoute = initiatingModelProvider(this.ctx)
 
     // If mode is 'always' or the active model is Qoder, execute via Qoder Center
-    if (mode === 'always' || isQoderActive) {
-      return this.resolveTransport().searchWeb(request, signal)
+    if (shouldUseQoderSearch(mode, providerRoute)) {
+      const result = await this.resolveTransport().searchWeb(request, signal)
+      // The transparent route calls this provider directly, bypassing WebRuntime's result cap.
+      if (request.maxResults === undefined || result.sources.length <= request.maxResults) return result
+      return { ...result, sources: result.sources.slice(0, request.maxResults), truncated: true }
     }
 
     // Otherwise (mode is 'auto' and active model is non-Qoder), delegate to fallback provider

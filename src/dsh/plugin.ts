@@ -7,7 +7,7 @@ import type {} from '@deepseek-ai/dsh-web'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
-import { QoderSearchProvider } from './search-provider.ts'
+import { initiatingModelProvider, QoderSearchProvider, shouldUseQoderSearch } from './search-provider.ts'
 import {
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
@@ -335,29 +335,18 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     // ctx.web.search always routes to Qoder even if the host profile configured
     // a different fixed searchProvider (e.g. deepseek-official).
     if (typeof webCtx.web.search === 'function') {
-      const originalSearch = webCtx.web.search.bind(webCtx.web)
+      const originalSearch = webCtx.web.search
       webCtx.effect(() => {
-        webCtx.web.search = async (request, signal) => {
+        const routedSearch: typeof originalSearch = async (request, signal) => {
           const mode = resolveConfig().webSearchMode ?? 'auto'
-          if (mode === 'disabled') {
-            return originalSearch(request, signal)
-          }
-
-          const agentsService = ctx.get('agents')
-            ?? (ctx as unknown as { agents?: { currentInitiator?: () => { options?: { provider?: string } } } }).agents
-          const agent = agentsService?.currentInitiator?.()
-          const defaultModelService = ctx.get('agentDefaultModel') as unknown as { get?: () => { provider?: string } }
-          const providerRoute = agent?.options?.provider ?? defaultModelService?.get?.()?.provider
-          const isQoderActive = providerRoute === providerQoder
-
-          if (mode === 'always' || isQoderActive) {
+          if (mode !== 'disabled' && shouldUseQoderSearch(mode, initiatingModelProvider(ctx))) {
             return searchProvider.search(request, signal)
           }
-
-          return originalSearch(request, signal)
+          return originalSearch.call(webCtx.web, request, signal)
         }
+        webCtx.web.search = routedSearch
         return () => {
-          webCtx.web.search = originalSearch
+          if (webCtx.web.search === routedSearch) webCtx.web.search = originalSearch
         }
       }, 'provider-qoder: transparent web search router')
     }
