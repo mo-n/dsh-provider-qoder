@@ -41,7 +41,7 @@ jobs:
           NODE
 
       - name: Install package managers
-        run: npm install --global pnpm@12.3.1 npm@11
+        run: npm install --global pnpm@11.7.0 npm@11
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

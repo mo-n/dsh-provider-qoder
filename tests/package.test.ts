@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type {
   CredentialInfo,
@@ -12,22 +12,96 @@ import type {
   ResolvedCredential,
 } from '@deepseek-ai/dsh-credentials'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
-import { SettingsProvider } from '@deepseek-ai/dsh-settings-legacy'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
 import { Config } from '../src/dsh/config.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 
-class MemorySettings extends SettingsProvider {
-  readonly writable = true
+interface MemorySection {
+  schema: typeof Config
+  base: plugin.Config
+  value: plugin.Config
+  revision: number
+  validate: (value: plugin.Config) => void
+  watchers: Set<() => void | Promise<void>>
+}
 
-  protected load(): Promise<Record<string, unknown>> {
-    return Promise.resolve({})
+function mergeSettings(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const merged = { ...base }
+  for (const [key, value] of Object.entries(patch)) {
+    const previous = merged[key]
+    merged[key] = value !== null && typeof value === 'object' && !Array.isArray(value)
+      && previous !== null && typeof previous === 'object' && !Array.isArray(previous)
+      ? mergeSettings(previous as Record<string, unknown>, value as Record<string, unknown>)
+      : value
+  }
+  return merged
+}
+
+/** In-memory settings seam for package integration tests; no retired DSH runtime is installed. */
+class MemorySettings extends Service {
+  readonly writable = true
+  private readonly sections = new Map<SettingsNamespace, MemorySection>()
+  private readonly queues = new Map<SettingsNamespace, Promise<void>>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'settings')
   }
 
-  protected persist(_ns: SettingsNamespace, _section: Record<string, unknown>): Promise<void> {
+  register(
+    ns: SettingsNamespace,
+    schema: typeof Config,
+    options: { base: plugin.Config; validate(value: plugin.Config): void },
+  ) {
+    const section: MemorySection = {
+      schema,
+      base: options.base,
+      value: schema(options.base),
+      revision: 0,
+      validate: options.validate,
+      watchers: new Set(),
+    }
+    section.validate(section.value)
+    this.sections.set(ns, section)
+    return {
+      get: () => section.value,
+      update: (patch: object) => this.update(ns, patch),
+      watch: (listener: () => void | Promise<void>) => {
+        section.watchers.add(listener)
+        return () => { section.watchers.delete(listener) }
+      },
+    }
+  }
+
+  get(ns: SettingsNamespace): plugin.Config | undefined {
+    return this.sections.get(ns)?.value
+  }
+
+  describe() {
+    return [...this.sections].map(([ns, section]) => ({ ns, value: section.value, revision: section.revision }))
+  }
+
+  update(ns: SettingsNamespace, patch: object, expectedRevision?: number): Promise<void> {
+    const section = this.sections.get(ns)
+    if (section === undefined) return Promise.reject(new Error(`Unknown settings namespace: ${ns}`))
+    const pending = (this.queues.get(ns) ?? Promise.resolve()).then(async () => {
+      if (expectedRevision !== undefined && expectedRevision !== section.revision) {
+        throw new SettingsConflictError(ns, expectedRevision, section.revision)
+      }
+      const next = section.schema(mergeSettings(section.value as Record<string, unknown>, patch as Record<string, unknown>))
+      section.validate(next)
+      await this.persist(ns, next)
+      section.value = next
+      section.revision += 1
+      for (const watcher of section.watchers) void Promise.resolve().then(watcher)
+    })
+    this.queues.set(ns, pending.catch(() => {}))
+    return pending
+  }
+
+  protected persist(_ns: SettingsNamespace, _section: plugin.Config): Promise<void> {
     return Promise.resolve()
   }
 }
@@ -40,8 +114,8 @@ class RecordingSettings extends MemorySettings {
   readonly writes: Record<string, unknown>[] = []
   onPersist?: () => Promise<void>
 
-  protected override async persist(_ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
-    this.writes.push(section)
+  protected override async persist(_ns: SettingsNamespace, section: plugin.Config): Promise<void> {
+    this.writes.push(section as Record<string, unknown>)
     await this.onPersist?.()
   }
 }
