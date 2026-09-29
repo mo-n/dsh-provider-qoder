@@ -304,6 +304,27 @@ export function effectiveContextWindow(
   return selectedContextTier(model)?.tokenCount ?? model.contextWindow
 }
 
+/** Carry subscriber context choices only while the refreshed catalog supports them. */
+export function mergeAdvertisedContext(
+  remembered: QoderCatalogModel,
+  advertised: QoderCatalogModel,
+  updated: QoderCatalogModel,
+): QoderCatalogModel {
+  const merged = { ...updated }
+  delete merged.contextOptions
+  delete merged.contextTier
+  if (advertised.contextOptions !== undefined) merged.contextOptions = { ...advertised.contextOptions }
+
+  const tier = selectedContextTier({ contextTier: remembered.contextTier, contextOptions: merged.contextOptions })
+  if (tier !== undefined) {
+    merged.contextTier = tier.key
+    merged.contextWindow = tier.tokenCount
+  } else if (advertised.contextWindow !== undefined) {
+    merged.contextWindow = Math.min(remembered.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
+  }
+  return merged
+}
+
 export function mergeQoderDiscoveryMetadata(
   configured: readonly QoderCatalogModel[],
   discovered: readonly QoderCatalogModel[],
@@ -330,18 +351,7 @@ export function mergeQoderDiscoveryMetadata(
         })
       }
     }
-    // The selection is resolved after the refreshed tier options land: a selected
-    // tier is an explicit subscriber decision and outranks the provider default.
-    const tier = selectedContextTier(merged)
-    if (tier !== undefined) {
-      merged.contextWindow = tier.tokenCount
-      return merged
-    }
-    delete merged.contextTier
-    if (advertised.contextWindow !== undefined) {
-      merged.contextWindow = Math.min(model.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
-    }
-    return merged
+    return mergeAdvertisedContext(model, advertised, merged)
   })
 }
 

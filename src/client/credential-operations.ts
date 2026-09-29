@@ -1,5 +1,5 @@
 import type { QoderAccountInfo } from '../qoder/account.ts'
-import { defaultModels, selectedContextTier, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { defaultModels, mergeAdvertisedContext, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderRpcResult } from '../dsh/rpc-channel.ts'
@@ -73,22 +73,7 @@ export function reconcileQoderModels(
         ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
       }
     }
-    // A remembered tier selection is an explicit subscriber decision: carry it
-    // over while the provider still advertises that tier, and let it widen the
-    // budget instead of being capped by the provider default.
-    const carried = selectedContextTier({
-      contextTier: remembered.contextTier,
-      contextOptions: model.contextOptions ?? remembered.contextOptions,
-    })
-    const options = model.contextOptions ?? remembered.contextOptions
-    const clonedOptions = options !== undefined ? { contextOptions: { ...options } } : {}
-    if (carried !== undefined) {
-      return { ...model, ...clonedOptions, contextTier: carried.key, contextWindow: carried.tokenCount }
-    }
-    const budget = remembered.contextWindow
-    return budget === undefined || model.contextWindow === undefined
-      ? { ...model, ...clonedOptions }
-      : { ...model, ...clonedOptions, contextWindow: Math.min(budget, model.contextWindow) }
+    return mergeAdvertisedContext(remembered, model, model)
   })
   return {
     catalog: [...reconciled, ...unavailable],
