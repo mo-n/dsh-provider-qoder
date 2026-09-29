@@ -1,4 +1,4 @@
-/** DSH configuration schema and region-scoped model catalog migration rules. */
+/** DSH configuration schema and region-scoped model catalog selection. */
 
 import z from '@deepseek-ai/schemastery'
 import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
@@ -15,8 +15,6 @@ export type QoderWebSearchMode = 'auto' | 'always' | 'disabled'
 export interface Config {
   region?: QoderRegion
   modelsByRegion?: QoderModelsByRegion
-  /** @deprecated Migrated to modelsByRegion for the selected region. */
-  models?: QoderCatalogModel[]
   streamIdleTimeoutMs?: number
   responseHeaderTimeoutMs?: number
   preserveThinking?: boolean
@@ -52,7 +50,6 @@ const modelsByRegionSchema = z.dict(z.array(catalogModel)) as z<QoderModelsByReg
 export const Config: z<Config> = z.object({
   region: z.union(['global', 'china'] as const).default('global'),
   modelsByRegion: modelsByRegionSchema.default({}),
-  models: z.array(catalogModel),
   streamIdleTimeoutMs: z.number().step(1).min(1).default(defaultStreamIdleTimeoutMs),
   responseHeaderTimeoutMs: z.number().step(1).min(1).default(defaultResponseHeaderTimeoutMs),
   preserveThinking: z.boolean().default(true),
@@ -80,15 +77,6 @@ export function resolveModels(models: readonly QoderCatalogModel[] | undefined):
   })
 }
 
-export function modelsFor(
-  config: Config,
-  region: QoderRegion,
-  legacyModelsRegion: QoderRegion = config.region ?? 'global',
-): QoderCatalogModel[] {
-  const scoped = config.modelsByRegion?.[region]
-  if (scoped !== undefined) return resolveModels(scoped)
-  if (legacyModelsRegion === region && config.models !== undefined && config.models.length > 0) {
-    return resolveModels(config.models)
-  }
-  return resolveModels(defaultModels)
+export function modelsFor(config: Config, region: QoderRegion): QoderCatalogModel[] {
+  return resolveModels(config.modelsByRegion?.[region])
 }

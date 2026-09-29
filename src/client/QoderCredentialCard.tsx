@@ -17,15 +17,12 @@ function modelsOf(value: unknown, selectedRegion?: QoderRegion): QoderCatalogMod
   if (typeof value !== 'object' || value === null) return []
   const section = value as {
     region?: unknown
-    models?: unknown
     modelsByRegion?: Partial<Record<QoderRegion, unknown>>
   }
   const region = selectedRegion ?? (section.region === 'china' ? 'china' : 'global')
   const scoped = section.modelsByRegion?.[region]
   if (Array.isArray(scoped)) return scoped as QoderCatalogModel[]
-  return region === (section.region === 'china' ? 'china' : 'global') && Array.isArray(section.models)
-    ? section.models as QoderCatalogModel[]
-    : defaultModels.map(model => ({ ...model }))
+  return defaultModels.map(model => ({ ...model }))
 }
 
 function regionOf(value: unknown): QoderRegion {

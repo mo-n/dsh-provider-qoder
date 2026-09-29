@@ -228,20 +228,20 @@ test('settings reject an invalid live catalog before committing it', async () =>
   assert.deepEqual(memorySettings(ctx).get(ns), previous)
 })
 
-test('legacy model configuration is scoped to its selected region', async () => {
+test('model configuration is scoped to its selected region', async () => {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
   applyWithSettings(ctx, {
     region: 'china',
-    models: [{ id: 'legacy-china', name: 'Legacy China' }],
+    modelsByRegion: { china: [{ id: 'china-only', name: 'China Only' }] },
   })
 
-  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), ['legacy-china'])
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), ['china-only'])
   await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'global' })
   assert.ok((await ctx.llm.listModels(QODER_PROVIDER_ID)).some(model => model.id === 'cmodel'))
-  assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID)).some(model => model.id === 'legacy-china'), false)
+  assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID)).some(model => model.id === 'china-only'), false)
 })
 
 test('discovery reconciles runtime and stored budgets and a failed discovery preserves them', async (t) => {
@@ -466,28 +466,6 @@ test('automatic discovery cannot overwrite a settings save already awaiting pers
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
     ['chosen', 'User renamed （4x）'],
   ])
-})
-
-test('apply succeeds with default Config schema and empty models array', async () => {
-  const ctx = new Context()
-  await ctx.plugin(LlmRuntime)
-  await ctx.plugin(TestCredentials)
-  await ctx.plugin(MemorySettings).await()
-  const normalizedConfig = Config({})
-  assert.deepEqual(normalizedConfig.models, [])
-  applyWithSettings(ctx, normalizedConfig)
-  const models = await ctx.llm.listModels(QODER_PROVIDER_ID)
-  assert.ok(models.length > 0)
-  assert.ok(models.some(model => model.id === 'cmodel'))
-
-  const ctxEmptyModels = new Context()
-  await ctxEmptyModels.plugin(LlmRuntime)
-  await ctxEmptyModels.plugin(TestCredentials)
-  await ctxEmptyModels.plugin(MemorySettings).await()
-  applyWithSettings(ctxEmptyModels, { models: [] })
-  const fallbackModels = await ctxEmptyModels.llm.listModels(QODER_PROVIDER_ID)
-  assert.ok(fallbackModels.length > 0)
-  assert.ok(fallbackModels.some(model => model.id === 'cmodel'))
 })
 
 test('apply mounts the settings RPC on the connection Fetch registry', async () => {
