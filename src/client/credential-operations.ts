@@ -1,5 +1,5 @@
 import type { QoderAccountInfo } from '../qoder/account.ts'
-import { selectedContextTier, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { defaultModels, selectedContextTier, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderRpcResult } from '../dsh/rpc-channel.ts'
@@ -27,6 +27,15 @@ export interface QoderModelSettingsSection {
   webSearchMode?: QoderWebSearchMode
 }
 
+export function regionOf(value: unknown): QoderRegion {
+  if (typeof value !== 'object' || value === null) return 'global'
+  return (value as { region?: unknown }).region === 'china' ? 'china' : 'global'
+}
+
+export function modelsOf(section: QoderModelSettingsSection | undefined, region: QoderRegion): QoderCatalogModel[] {
+  const scoped = section?.modelsByRegion?.[region]
+  return Array.isArray(scoped) ? scoped : defaultModels.map(model => ({ ...model }))
+}
 
 export interface QoderModelSettingsSnapshot {
   status: 'loading' | 'ready' | 'unavailable'

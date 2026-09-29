@@ -3,8 +3,8 @@ import { contextTiersOf, formatContextTokens, resolveContextTier } from '../qode
 import type { QoderRegion } from '../qoder/region.ts'
 import { QODER_PROVIDER_ID } from '../dsh/provider.ts'
 import type { QoderCredentialCopy } from './locales.ts'
-import type { QoderCredentialOperations } from './credential-operations.ts'
-import { historicalContextWindow, isQoderProvider, modelsOf, saveContextSelection } from './context-selection.ts'
+import { modelsOf, regionOf, type QoderCredentialOperations } from './credential-operations.ts'
+import { historicalContextWindow, isQoderProvider, saveContextSelection } from './context-selection.ts'
 import css from './QoderContextSelect.module.css'
 
 export interface ModelDirectorySnapshot {
@@ -79,7 +79,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
 
   if (!current) return null
 
-  const region: QoderRegion = modelSnapshot?.value?.region === 'china' ? 'china' : 'global'
+  const region: QoderRegion = regionOf(modelSnapshot?.value)
   const models = modelsOf(modelSnapshot?.value, region)
 
   const currentModelId = current.model.includes('/') ? current.model.split('/')[1] : current.model

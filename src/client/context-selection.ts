@@ -1,16 +1,10 @@
-import { contextTiersOf, defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { contextTiersOf } from '../qoder/catalog.ts'
 import { QODER_PROVIDER_ID } from '../dsh/provider.ts'
 import type { QoderRegion } from '../qoder/region.ts'
-import type { QoderCredentialOperations, QoderModelSettingsSection } from './credential-operations.ts'
+import { modelsOf, type QoderCredentialOperations } from './credential-operations.ts'
 
 export function isQoderProvider(provider?: string): boolean {
   return [QODER_PROVIDER_ID, 'qoder-official', 'qoder', 'qoder-subscription'].includes(provider ?? '')
-}
-
-export function modelsOf(section: QoderModelSettingsSection | undefined, region: QoderRegion): QoderCatalogModel[] {
-  const scoped = section?.modelsByRegion?.[region]
-  if (scoped !== undefined) return scoped
-  return defaultModels.map(model => ({ ...model }))
 }
 
 export interface ModelIdentity {

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
-import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
-import type { QoderRegion } from '../qoder/region.ts'
+import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
-import type { QoderCredentialInjected, QoderCredentialStatus } from './credential-operations.ts'
+import { modelsOf, regionOf, type QoderCredentialInjected, type QoderCredentialStatus } from './credential-operations.ts'
 import { resolveLocalizedText } from './locales.ts'
 import { QoderModelCatalog, validateModelCatalog } from './QoderModelCatalog.tsx'
 import css from './QoderCredentialCard.module.css'
@@ -33,24 +32,6 @@ function formatResetDate(dateStr?: string): string | undefined {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function modelsOf(value: unknown, selectedRegion?: QoderRegion): QoderCatalogModel[] {
-  if (typeof value !== 'object' || value === null) return defaultModels.map(model => ({ ...model }))
-  const section = value as {
-    region?: unknown
-    modelsByRegion?: Partial<Record<QoderRegion, unknown>>
-  }
-  const region = selectedRegion ?? (section.region === 'china' ? 'china' : 'global')
-  const scoped = section.modelsByRegion?.[region]
-  if (Array.isArray(scoped)) return scoped as QoderCatalogModel[]
-  return defaultModels.map(model => ({ ...model }))
-}
-
-function regionOf(value: unknown): QoderRegion {
-  if (typeof value !== 'object' || value === null) return 'global'
-  const region = (value as { region?: unknown }).region
-  return region === 'china' ? 'china' : 'global'
 }
 
 /**

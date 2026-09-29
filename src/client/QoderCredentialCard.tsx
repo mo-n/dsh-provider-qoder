@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
 import type { QoderRegion } from '../qoder/region.ts'
-import type { QoderCredentialInjected, QoderCredentialStatus } from './credential-operations.ts'
+import { regionOf, type QoderCredentialInjected, type QoderCredentialStatus } from './credential-operations.ts'
 import css from './QoderCredentialCard.module.css'
 
 export type QoderCredentialCardProps = QoderCredentialInjected
@@ -10,12 +10,6 @@ type ViewState =
   | { status: 'loading' }
   | { status: 'failed' }
   | { status: 'ready'; info: QoderCredentialStatus }
-
-function regionOf(value: unknown): QoderRegion {
-  if (typeof value !== 'object' || value === null) return 'global'
-  const region = (value as { region?: unknown }).region
-  return region === 'china' ? 'china' : 'global'
-}
 
 export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps) {
   const [state, setState] = useState<ViewState>({ status: 'loading' })

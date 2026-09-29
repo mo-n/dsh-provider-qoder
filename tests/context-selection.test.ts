@@ -4,10 +4,10 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
-import { historicalContextWindow, isQoderProvider, modelsOf, saveContextSelection } from '../src/client/context-selection.ts'
+import { historicalContextWindow, isQoderProvider, saveContextSelection } from '../src/client/context-selection.ts'
 import { resolveContextTier, type QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
-import type { QoderModelSettingsSnapshot } from '../src/client/credential-operations.ts'
+import { modelsOf, regionOf, type QoderModelSettingsSnapshot } from '../src/client/credential-operations.ts'
 
 const model: QoderCatalogModel = {
   id: 'a', name: 'A', contextTier: 'large', contextWindow: 1_000_000,
@@ -25,6 +25,8 @@ test('returning from B after restart uses A default, not B capacity', () => {
 
 test('scoped catalogs never fall back to another region or repopulate an empty catalog', () => {
   const section = { modelsByRegion: { global: [model] } }
+  assert.equal(regionOf({ region: 'china' }), 'china')
+  assert.equal(regionOf({ region: 'unknown' }), 'global')
   assert.ok(!modelsOf(section, 'china').some(candidate => candidate.id === model.id))
   assert.deepEqual(modelsOf({ ...section, modelsByRegion: { china: [] } }, 'china'), [])
 })
