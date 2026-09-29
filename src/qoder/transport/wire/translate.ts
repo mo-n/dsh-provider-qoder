@@ -95,8 +95,6 @@ async function resolveImagePart(
       width: Math.max(1, Math.floor(width * scale)),
       height: Math.max(1, Math.floor(height * scale)),
       maxBytes: limits.maxImageBytes,
-      // Older attachment services choose their own dimensions from this bound.
-      maxPixels: limits.maxImagePixels,
     }
     image = await attachments.readImageRequest(block.attachment, target, signal)
   } catch (error) {

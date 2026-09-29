@@ -59,8 +59,7 @@ export const Config: z<Config> = z.object({
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
 })
 
-// Export a live schema even on legacy hosts; apply unwraps it before registering
-// the plain schema with the legacy SettingsProvider.
+// DSH profile configuration is live; direct apply calls can also pass plain config.
 export type PluginConfig = Config
 export const PluginConfig = Config.volatile()
 export type LiveConfig = ReturnType<typeof PluginConfig>

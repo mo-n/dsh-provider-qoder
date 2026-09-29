@@ -15,36 +15,11 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-client-connection'
 import type { QoderRpcResult } from './rpc-channel.ts'
 
 /** Qoder's internal dispatcher; Fetch-route authentication remains owned by Connection. */
 export type QoderRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<QoderRpcResult<unknown>>
 import { qoderRpcEndpoints, qoderRpcPath, type QoderRpcEndpoint } from './rpc-channel.ts'
-
-/**
- * One exact Fetch route as Connection exposes it.
- *
- * The released peer declarations still restrict exact routes to `GET`/`HEAD`
- * without a body mode, while the runtime accepts browser-driven `POST` routes
- * (DSH's own `/api/session/uploadFileBinary` is one). The shape is therefore
- * restated here instead of imported from the peer types.
- */
-export interface QoderFetchRoute {
-  path: string
-  methods: readonly string[]
-  requestBody: 'buffered' | 'streaming'
-  fetch: (request: Request) => Promise<Response>
-}
-
-interface QoderFetchRegistry {
-  register(route: QoderFetchRoute): unknown
-}
-
-/** The part of the Connection service this module depends on. */
-export interface QoderRpcConnection {
-  fetch?: QoderFetchRegistry
-}
 
 /**
  * Mount every Qoder settings endpoint on the shared API channel.
@@ -58,9 +33,7 @@ export interface QoderRpcConnection {
  * @throws when Connection exposes no exact Fetch registry.
  */
 export function registerQoderRpc(ctx: Context, handler: QoderRpcHandler): () => void {
-  // The peer declaration narrows exact routes to GET/HEAD, so the service is
-  // read through this module's shape instead of its own.
-  const registry = (ctx as Context & { connection?: QoderRpcConnection }).connection?.fetch
+  const registry = ctx.connection?.fetch
   if (typeof registry?.register !== 'function') {
     throw new Error('provider-qoder: connection exposes no exact Fetch route registry')
   }
@@ -72,7 +45,7 @@ export function registerQoderRpc(ctx: Context, handler: QoderRpcHandler): () => 
   }))
   return () => {
     for (const dispose of disposers) {
-      if (typeof dispose === 'function') (dispose as () => unknown)()
+      void dispose()
     }
   }
 }

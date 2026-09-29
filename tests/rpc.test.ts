@@ -1,25 +1,26 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Context } from '@deepseek-ai/cordis'
+import type { ConnectionFetchRoute } from '@deepseek-ai/dsh-client-connection'
 import type { QoderRpcHandler } from '../src/dsh/rpc.ts'
 import { createQoderRpcCaller } from '../src/client/rpc-client.ts'
 import { isQoderRpcEndpoint, isQoderRpcErrorCode } from '../src/dsh/rpc-channel.ts'
-import { registerQoderRpc, type QoderFetchRoute } from '../src/dsh/rpc.ts'
+import { registerQoderRpc } from '../src/dsh/rpc.ts'
 
 interface Capture {
   context: Context
-  routes: QoderFetchRoute[]
+  routes: ConnectionFetchRoute[]
   removed: string[]
 }
 
 /** Capture every route the host half registers, standing in for Connection. */
 function captureConnection(): Capture {
-  const routes: QoderFetchRoute[] = []
+  const routes: ConnectionFetchRoute[] = []
   const removed: string[] = []
   const context = {
     connection: {
       fetch: {
-        register: (route: QoderFetchRoute) => {
+        register: (route: ConnectionFetchRoute) => {
           routes.push(route)
           return () => { removed.push(route.path) }
         },

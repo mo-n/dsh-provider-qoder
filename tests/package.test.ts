@@ -14,18 +14,14 @@ import type {
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
-import { Config } from '../src/dsh/config.ts'
+import { Config, type LiveConfig } from '../src/dsh/config.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 
 interface MemorySection {
-  schema: typeof Config
-  base: plugin.Config
   value: plugin.Config
   revision: number
-  validate: (value: plugin.Config) => void
-  watchers: Set<() => void | Promise<void>>
 }
 
 function mergeSettings(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
@@ -40,39 +36,23 @@ function mergeSettings(base: Record<string, unknown>, patch: Record<string, unkn
   return merged
 }
 
-/** In-memory settings seam for package integration tests; no retired DSH runtime is installed. */
+/** In-memory settings seam for package integration tests. */
 class MemorySettings extends Service {
   readonly writable = true
   private readonly sections = new Map<SettingsNamespace, MemorySection>()
   private readonly queues = new Map<SettingsNamespace, Promise<void>>()
+  private readonly hostContext: Context
+  private ownerContext: Context | undefined
 
   constructor(ctx: Context) {
     super(ctx, 'settings')
+    this.hostContext = ctx
+    this.setConfig({})
   }
 
-  register(
-    ns: SettingsNamespace,
-    schema: typeof Config,
-    options: { base: plugin.Config; validate(value: plugin.Config): void },
-  ) {
-    const section: MemorySection = {
-      schema,
-      base: options.base,
-      value: schema(options.base),
-      revision: 0,
-      validate: options.validate,
-      watchers: new Set(),
-    }
-    section.validate(section.value)
-    this.sections.set(ns, section)
-    return {
-      get: () => section.value,
-      update: (patch: object) => this.update(ns, patch),
-      watch: (listener: () => void | Promise<void>) => {
-        section.watchers.add(listener)
-        return () => { section.watchers.delete(listener) }
-      },
-    }
+  setConfig(config: plugin.Config, owner?: Context): void {
+    this.ownerContext = owner
+    this.sections.set('provider-qoder' as SettingsNamespace, { value: Config(config), revision: 0 })
   }
 
   get(ns: SettingsNamespace): plugin.Config | undefined {
@@ -90,12 +70,14 @@ class MemorySettings extends Service {
       if (expectedRevision !== undefined && expectedRevision !== section.revision) {
         throw new SettingsConflictError(ns, expectedRevision, section.revision)
       }
-      const next = section.schema(mergeSettings(section.value as Record<string, unknown>, patch as Record<string, unknown>))
-      section.validate(next)
+      const next = Config(mergeSettings(section.value as Record<string, unknown>, patch as Record<string, unknown>))
+      const owner = this.ownerContext ?? this.hostContext
+      owner.waterfall(owner.fiber, 'internal/config', next, () => next)
       await this.persist(ns, next)
       section.value = next
       section.revision += 1
-      for (const watcher of section.watchers) void Promise.resolve().then(watcher)
+      const emit = this.hostContext.emit.bind(this.hostContext) as (event: string) => void
+      emit('loader/volatile-update')
     })
     this.queues.set(ns, pending.catch(() => {}))
     return pending
@@ -108,6 +90,12 @@ class MemorySettings extends Service {
 
 function memorySettings(ctx: Context): MemorySettings {
   return ctx.settings as unknown as MemorySettings
+}
+
+function applyWithSettings(ctx: Context, config: plugin.Config = {}): void {
+  const settings = memorySettings(ctx)
+  settings.setConfig(config, ctx)
+  plugin.apply(ctx, { get: () => settings.get('provider-qoder' as SettingsNamespace) } as LiveConfig)
 }
 
 class RecordingSettings extends MemorySettings {
@@ -180,7 +168,7 @@ test('apply registers a valid adapter with the real DSH runtime', async () => {
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
-  plugin.apply(ctx, {})
+  applyWithSettings(ctx, {})
   assert.equal(
     ctx.llm.listConfigurableProviders().some(provider => provider.provider === QODER_PROVIDER_ID),
     false,
@@ -223,12 +211,29 @@ test('apply registers a valid adapter with the real DSH runtime', async () => {
 
 })
 
+test('settings reject an invalid live catalog before committing it', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  applyWithSettings(ctx)
+  await ctx.fiber.await()
+  const ns = 'provider-qoder' as SettingsNamespace
+  const previous = memorySettings(ctx).get(ns)
+
+  await assert.rejects(
+    ctx.settings.update(ns, { modelsByRegion: { unsupported: [{ id: 'invalid', name: 'Invalid' }] } }),
+    /unsupported model catalog region/u,
+  )
+  assert.deepEqual(memorySettings(ctx).get(ns), previous)
+})
+
 test('legacy model configuration is scoped to its selected region', async () => {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
-  plugin.apply(ctx, {
+  applyWithSettings(ctx, {
     region: 'china',
     models: [{ id: 'legacy-china', name: 'Legacy China' }],
   })
@@ -260,7 +265,7 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(MemorySettings).await()
-  plugin.apply(ctx, { modelsByRegion: { global: [
+  applyWithSettings(ctx, { modelsByRegion: { global: [
     { id: 'large', name: 'Large', contextWindow: 1_000_000 },
     { id: 'small', name: 'Small', contextWindow: 100_000 },
   ] } })
@@ -292,7 +297,7 @@ async function modelRuntime(config: plugin.Config) {
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(RecordingSettings).await()
-  plugin.apply(ctx, config)
+  applyWithSettings(ctx, config)
   return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace }
 }
 
@@ -470,7 +475,7 @@ test('apply succeeds with default Config schema and empty models array', async (
   await ctx.plugin(MemorySettings).await()
   const normalizedConfig = Config({})
   assert.deepEqual(normalizedConfig.models, [])
-  plugin.apply(ctx, normalizedConfig)
+  applyWithSettings(ctx, normalizedConfig)
   const models = await ctx.llm.listModels(QODER_PROVIDER_ID)
   assert.ok(models.length > 0)
   assert.ok(models.some(model => model.id === 'cmodel'))
@@ -479,7 +484,7 @@ test('apply succeeds with default Config schema and empty models array', async (
   await ctxEmptyModels.plugin(LlmRuntime)
   await ctxEmptyModels.plugin(TestCredentials)
   await ctxEmptyModels.plugin(MemorySettings).await()
-  plugin.apply(ctxEmptyModels, { models: [] })
+  applyWithSettings(ctxEmptyModels, { models: [] })
   const fallbackModels = await ctxEmptyModels.llm.listModels(QODER_PROVIDER_ID)
   assert.ok(fallbackModels.length > 0)
   assert.ok(fallbackModels.some(model => model.id === 'cmodel'))
@@ -555,7 +560,7 @@ test('apply registers QoderSearchProvider with ctx.web when web service is provi
   }
   ctx.provide('web', fakeWeb as any)
 
-  plugin.apply(ctx, { webSearchMode: 'auto' })
+  applyWithSettings(ctx, { webSearchMode: 'auto' })
   await ctx.fiber.await()
 
   assert.ok(registeredSearchProvider)
@@ -587,7 +592,7 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
     }),
   }
 
-  plugin.apply(ctx, { webSearchMode: 'auto' })
+  applyWithSettings(ctx, { webSearchMode: 'auto' })
   await ctx.fiber.await()
 
   await assert.rejects(

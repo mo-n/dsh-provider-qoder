@@ -169,7 +169,6 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
 
   ctx.inject(['settings'], (settingsCtx) => {
     const { scope, namespace } = bindQoderSettings(ctx, settingsCtx, input, {
-      base: baseConfig,
       validate: (value) => {
         for (const region of Object.keys(value.modelsByRegion ?? {})) {
           if (region !== 'global' && region !== 'china') {
