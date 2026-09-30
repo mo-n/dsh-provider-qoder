@@ -1,52 +1,28 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Project Scope & Architectural Boundaries
 
-The deliverable is the root ESM package, `dsh-provider-qoder`: a DSH extension that lets users access their Qoder subscription.
+This repository delivers `dsh-provider-qoder`, an extension enabling DeepSeek Harness (DSH) to access Qoder subscription models.
 
-- `src/dsh/` owns DSH registration, configuration, credentials, settings RPC, and provider integration.
-- `src/qoder/` owns Qoder models, account data, and transport. `src/qoder/transport/wire/` handles protocol conversion and streaming.
-- `src/client/` contains the settings and context-tier UI. `tests/` contains root package tests.
+- **Separation of Concerns**: DSH platform integration (`src/dsh/`), settings UI (`src/client/`), and Qoder upstream transport (`src/qoder/`) are strictly decoupled.
+- **Centralized Transport**: All upstream Qoder network interactions must be centralized in `QoderTransport`. Never scatter direct `fetch` calls across the adapter layers (see ADR-0003).
+- **Ubiquitous Language**: Strictly adhere to the domain terminology defined in `CONTEXT.md` (e.g., Managed Qoder PAT, Job Token, Context Tier, Multimodal Input). Never use synonyms explicitly advised against in the glossary.
 
-Keep production behavior and tests in the root package. Do not copy secrets, cached credentials, or generated output from reference implementations.
+## Commands & Verification
 
-## Architecture Direction
+Refer to `package.json` for dependencies and available scripts. Key verification workflows:
 
-Separate DSH registration, configuration, and credentials from Qoder transport logic. DSH owns the agent loop and tools; Qoder transport owns provider authentication and upstream communication.
+- `pnpm test`: Run unit tests. Tests mock network interactions by default; **never consume real Qoder quota in automated tests**.
+- `pnpm run verify`: Run build, typecheck, and unit tests.
+- `pnpm run check`: Full pre-release verification (includes `verify` and a dry-run package packing check).
 
-## Build, Test, and Development Commands
+## Workflow & Safety Guardrails
 
-The root package has its own scripts and pinned development dependencies. From the repository root, run:
+- **Branching & Releases**: Follow GitHub Flow with `main` as the sole release branch; merge PRs exclusively via **Squash and Merge**. Releases are triggered by semantic `v*` tags on `main` (e.g., `pnpm run release:patch`).
+- **Commit Conventions**: Follow Conventional Commits. PRs must explain Qoder upstream behavior, reference relevant ADRs/issues, and include screenshots for UI changes along with compatibility notes.
+- **Security Red Lines**: Never commit tokens, secrets, or local credential stores. Maintain lockfile integrity; never weaken TLS verification or introduce unauthorized paid-provider fallbacks.
 
-```sh
-pnpm install --frozen-lockfile
-pnpm run check
-```
+## Agent Guidelines
 
-`check` builds, typechecks, runs tests, and verifies the package contents with `pnpm pack --dry-run`. Use `pnpm run dev` for a watch build.
-
-## Coding Style & Naming Conventions
-
-Use ESM imports, two spaces, single quotes, and no semicolons. Use `camelCase` for values, `PascalCase` for types/classes, and kebab-case script names. Isolate translation, SSE parsing, credentials, and DSH registration behind testable boundaries.
-
-## Testing Guidelines
-
-Add root tests as `*.test.ts`, colocated with source or under `tests/`. Cover authentication, translation, SSE/tool-call streaming, models, quota, settings, and packaging. Mock network responses by default; do not consume Qoder quota unless explicitly required.
-
-## Commit & Pull Request Guidelines
-
-Reference histories use Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `ci:`, `chore:`). Keep commits scoped and imperative. PRs must explain implemented Qoder behavior, cite reference evidence, link issues, and list validation commands. Include screenshots for UI changes and flag authentication or compatibility impacts.
-
-## Security & Configuration
-
-Never commit OAuth tokens, API keys, account identifiers, callbacks, or local credential stores. Preserve lockfiles and avoid weakening TLS or silently introducing paid-provider fallbacks.
-
-## Agent skills
-
-### Issue tracker
-
-议题和规格以本地 Markdown 文件形式存放在 `.scratch/`。详见 `docs/agents/issue-tracker.md`。
-
-### Domain docs
-
-领域文档采用单上下文布局。详见 `docs/agents/domain.md`。
+- **Domain Documentation**: Single-context architecture. Read `CONTEXT.md` in the root and ADRs in `docs/adr/` before exploring or making architectural changes (see `docs/agents/domain.md`).
+- **Issue Tracking**: Local issues and feature specifications are tracked as Markdown files under `.scratch/` (see `docs/agents/issue-tracker.md`).

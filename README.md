@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/dsh-provider-qoder.svg?color=blue)](https://www.npmjs.com/package/dsh-provider-qoder)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![DSH Plugin](https://img.shields.io/badge/DSH-Plugin-6f42c1.svg)](https://github.com/mo-n/dsh-provider-qoder)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 English | [简体中文](./README_CN.md)
@@ -15,17 +16,18 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 - Configure subscription access via Qoder Personal Access Token (PAT).
 - Supports both Global (`global`) and China (`china`) services.
-- Discovers available models for your account, allows selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
-- Supports multimodality, search, and tool calls.
+- Automatically fetches available models for your account, supports selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
+- Supports multimodality, web search, and tool calls.
 - View account information, quota, and reset dates in Settings.
 
 ## Installation
 
 ### Prerequisites
 
-You will need a running DSH Web environment, an active Qoder subscription, and a PAT matching the selected service region. The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
+- An active Qoder subscription and a PAT matching the selected service region.
+- The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
+- Requirements: DSH `>=0.1.7-rc.2`.
 
-This package supports DSH `>=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0`, Cordis `>=4.0.4 <5`, and React `^18.2.0`.
 ### Install from npm
 
 Run in your terminal:
@@ -47,27 +49,14 @@ Open DSH Web, navigate to **Settings → Models**, locate the **Qoder Credential
 
 Select the region matching your account, enter your Qoder PAT into the input box labeled **API Key**, and click **Save**.
 
-### 2. Fetch and Select Models
+Once saved, the plugin automatically fetches the list of supported models for your account, making them immediately available in the DSH model picker.
 
-1. After saving the PAT and service region, click **Edit** again.
-2. Expand **Custom Settings** and click **Fetch Available Models**.
-3. Select the models you want to enable (keep at least one), then click **Save**.
-4. Select a Qoder model in the DSH model picker to start chatting.
+### 2. View Account & Manage Models
 
-Fetching models uses the **saved PAT and service region**. If you switch accounts or regions, you need to fetch models again. The initial model catalog is only a candidate reference; actual available models are subject to account query results. Model multipliers, reasoning effort options, and image-input capability are provided by Qoder and may not be available for all models.
-
-The model picker refreshes Qoder metadata for enabled models when opened, with a five-minute cache after a successful fetch. When settings are writable, refreshed multipliers and capabilities are also synchronized to the saved catalog shown in **Custom Settings**, without enabling additional models. Failed refreshes retain the last known metadata.
+Open **Settings → Qoder** to view account and quota details, configure the web search policy, and adjust enabled models:
 
 <p align="center">
-  <img src="./assets/credentials-settings.png" alt="Qoder credentials and model configuration" width="680" />
-</p>
-
-### 3. View Account & Quota
-
-Open **Settings → Qoder** to view account and quota details, and configure the web search policy as needed:
-
-<p align="center">
-  <img src="./assets/account-quota.png" alt="Qoder account quota and search settings" width="650" />
+  <img src="./assets/account-quota.png" alt="Qoder account quota and model settings" width="650" />
 </p>
 
 ## Upcoming Features
@@ -83,4 +72,6 @@ Open **Settings → Qoder** to view account and quota details, and configure the
 
 Please report issues via [GitHub Issues](https://github.com/mo-n/dsh-provider-qoder/issues) with the plugin and DSH versions, selected service region, reproduction steps, and sanitized error messages. Do not submit PATs, short-lived tokens, or personal account information.
 
-This project is licensed under the MIT License.
+## License
+
+This project is licensed under the [MIT License](LICENSE).
