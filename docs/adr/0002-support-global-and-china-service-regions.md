@@ -1,10 +1,7 @@
 # Support Global and China service regions via settings configuration
 
-We support both Global (`qoder.com`) and China (`qoder.com.cn`) Qoder services via a single `region` setting in the `provider-qoder` settings namespace, rather than requiring users to manually input arbitrary endpoint URLs or maintaining separate provider plugins.
+We support both Global (`qoder.com`) and China (`qoder.com.cn`) Qoder service regions via a single `region` setting in the `provider-qoder` namespace, rather than requiring manual endpoint entry or maintaining separate provider plugins.
 
-While both regions share the same underlying COSY authentication algorithm and request payload formats, they operate on separate network endpoints:
-- Global: `https://api3.qoder.sh/` (Algo) and `https://openapi.qoder.sh` (OpenAPI)
-- China: `https://gateway.qoder.com.cn/` (Algo) and `https://openapi.qoder.com.cn` (OpenAPI)
+While both regions share the same underlying COSY authentication algorithm and request payload formats, they operate on separate network endpoints and host distinct model catalogs.
 
-Storing `region` in DSH Settings preserves the single managed PAT credential while allowing users to switch regions, invalidate short-lived in-memory job tokens, and dynamically discover the model catalog associated with their subscription region.
-
+Storing `region` in DSH settings preserves a single Managed Qoder PAT credential while allowing subscribers to switch environments, flush in-memory job tokens, and dynamically discover the model catalog corresponding to their active region.
