@@ -25,7 +25,10 @@
     "build": "tsdown --config tsdown.config.mjs",
     "verify": "pnpm run build && pnpm run typecheck && pnpm test",
     "check": "pnpm run verify && pnpm pack --dry-run",
-    "prepublishOnly": "pnpm run verify"
+    "prepublishOnly": "pnpm run verify",
+    "release:patch": "pnpm run check && npm version patch -m \"chore(release): %s\" && git push && git push --tags",
+    "release:minor": "pnpm run check && npm version minor -m \"chore(release): %s\" && git push && git push --tags",
+    "release:major": "pnpm run check && npm version major -m \"chore(release): %s\" && git push && git push --tags"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

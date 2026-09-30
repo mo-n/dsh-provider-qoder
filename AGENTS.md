@@ -36,6 +36,20 @@ Use ESM imports, two spaces, single quotes, and no semicolons. Use `camelCase` f
 
 Add root tests as `*.test.ts`, colocated with source or under `tests/`. Cover authentication, translation, SSE/tool-call streaming, models, quota, settings, and packaging. Mock network responses by default; do not consume Qoder quota unless explicitly required.
 
+## Branching & Release Workflow
+
+This repository strictly follows **GitHub Flow** with `main` as the single production and release branch.
+
+- **Branch Naming**: All work branches must follow the hierarchical pattern `<type>/<short-desc>`, where `<type>` aligns with Conventional Commits:
+  - `feat/<feature-name>`: New capabilities or provider features
+  - `fix/<issue-name>`: Bug fixes and regressions
+  - `refactor/<target>`: Internal structure improvements without functional change
+  - `docs/<topic>`: Documentation updates
+  - `test/<scope>`: Test additions or test framework updates
+  - `chore/<target>`: Tooling, dependency, or configuration updates
+- **PR & Merge Policy**: All contributions merge into `main` via **Squash and Merge**. Ensure PR titles use Conventional Commits since the squashed commit title on `main` will inherit it. Delete head branches immediately upon merge.
+- **Releases**: Releases are tag-driven and triggered by `v*` tags on `main`. Use `pnpm run release:patch` (or `minor`/`major`) to verify, bump version, create the release commit/tag, and push to trigger `.github/workflows/publish.yml`.
+
 ## Commit & Pull Request Guidelines
 
 Reference histories use Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `ci:`, `chore:`). Keep commits scoped and imperative. PRs must explain implemented Qoder behavior, cite reference evidence, link issues, and list validation commands. Include screenshots for UI changes and flag authentication or compatibility impacts.
