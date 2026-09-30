@@ -69,12 +69,14 @@
   min-width: 180px;
   padding: 4px;
   border-radius: 14px;
-  background: var(--dsw-specific-menu);
+  background: var(--dsw-menu-surface-fill);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
   border: 1px solid var(--dsw-alias-border-l1);
   box-shadow: var(--dsw-elevation-prominent);
   color: var(--dsw-alias-label-primary);
   animation: fadeIn 120ms ease;
 }
+
 
 @keyframes fadeIn {
   from {

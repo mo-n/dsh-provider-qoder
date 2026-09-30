@@ -7,7 +7,9 @@ import ts from 'typescript'
 import { historicalContextWindow, isQoderProvider, saveContextSelection } from '../src/client/context-selection.ts'
 import { resolveContextTier, type QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
-import { modelsOf, regionOf, type QoderModelSettingsSnapshot } from '../src/client/credential-operations.ts'
+import { QoderAdapter } from '../src/dsh/adapter.ts'
+import type { QoderTransport } from '../src/qoder/transport/index.ts'
+import { modelsOf, regionOf } from '../src/client/credential-operations.ts'
 
 const model: QoderCatalogModel = {
   id: 'a', name: 'A', contextTier: 'large', contextWindow: 1_000_000,
@@ -31,38 +33,41 @@ test('scoped catalogs never fall back to another region or repopulate an empty c
   assert.deepEqual(modelsOf({ ...section, modelsByRegion: { china: [] } }, 'china'), [])
 })
 
-test('tier write failures preserve defaults and report partial success explicitly', async () => {
-  let saved = 0
+test('session tier write failures are reported, including unavailable and throwing RPCs', async () => {
   let allowSession = false
-  let allowDefaults = false
   const operations = {
-    getModelSnapshot: () => ({ value: { modelsByRegion: { global: [model] } } }) as QoderModelSettingsSnapshot,
     setSessionTier: async () => allowSession,
-    storeModels: async () => { saved++; return allowDefaults },
   }
   assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'session-failed')
-  assert.equal(saved, 0)
   allowSession = true
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'default-failed')
-  allowDefaults = true
   assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'saved')
   operations.setSessionTier = async () => { throw new Error('offline') }
   assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'session-failed')
-  assert.equal(saved, 2)
+  assert.equal(await saveContextSelection({}, 's', 'global', 'a', 'small'), 'session-failed')
 })
 
-test('default update reads fresh models after session acknowledgement', async () => {
-  let snapshot = [model]
-  const newcomer = { id: 'new', name: 'New' }
-  let stored: QoderCatalogModel[] = []
-  const result = await saveContextSelection({
-    getModelSnapshot: () => ({ value: { modelsByRegion: { global: snapshot } } }) as QoderModelSettingsSnapshot,
-    setSessionTier: async () => { snapshot = [...snapshot, newcomer]; return true },
-    storeModels: async (_region, models) => { stored = models; return true },
-  }, 's', 'global', 'a', 'small')
+test('composer context selection changes only its session and leaves model defaults untouched', async () => {
+  const defaults = structuredClone(model)
+  const transport = {} as QoderTransport
+  const adapter = new QoderAdapter({ models: [defaults], resolveTransport: () => transport })
+  const calls: unknown[] = []
+  let settingsWrites = 0
+  const operations = {
+    setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region: 'global' | 'china') => {
+      calls.push([sessionId, modelId, tierKey, region])
+      adapter.setSessionTier(sessionId, modelId, tierKey, region)
+      return true
+    },
+    storeModels: async () => { settingsWrites++; return true },
+  }
+  const result = await saveContextSelection(operations, 's', 'global', 'a', 'small')
   assert.equal(result, 'saved')
-  assert.equal(stored[0].contextTier, 'small')
-  assert.equal(stored[1], newcomer)
+  assert.deepEqual(calls, [['s', 'a', 'small', 'global']])
+  assert.equal(settingsWrites, 0)
+  assert.deepEqual(defaults, model)
+  assert.equal(adapter.resolveEffectiveModelForSession('a', 's')?.contextWindow, 200_000)
+  assert.equal(adapter.resolveEffectiveModelForSession('a', 'other-session')?.contextWindow, 1_000_000)
+  assert.equal(adapter.resolveEffectiveModelForSession('a')?.contextTier, 'large')
 })
 
 test('composer keeps projection hook order stable across unresolved, foreign, single and multi-tier models', async () => {
@@ -92,7 +97,11 @@ test('composer keeps projection hook order stable across unresolved, foreign, si
         getModelSnapshot: () => ({ value: { modelsByRegion: { global: [model, single] } } }),
         subscribeModels: () => () => {},
       },
-      useProjection: (key: string) => { hooks.push(key); return undefined },
+      useProjection: (key: string) => {
+        hooks.push(key)
+        // A new conversation has no saved selection; the directory supplies its default.
+        return key === 'modelSelection' ? { next: null, lastUsed: null } : undefined
+      },
     })
     assert.deepEqual(hooks, ['modelSelection', 'contextPressure'])
     assert.equal(output !== null, current?.provider === QODER_PROVIDER_ID && current.model === 'a')

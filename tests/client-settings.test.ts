@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
+import { Context, Service } from '@deepseek-ai/cordis'
 
 const loadClientPlugin = async () => {
   let plugin!: { apply(ctx: unknown): void; inject: string[] }
@@ -52,6 +53,7 @@ test('client settings mounts through configForms and reports rejected writes', a
     effect: (callback: () => unknown) => callback(),
     locale: { register() {}, bind: () => (key: string) => key },
     remote: { credentials: {} },
+    inject: () => {},
     slots: {
       inject: (_name: string, callback: () => void) => callback(),
       register: (spec: { name: string; inject(): { operations: typeof operations } }) => {
@@ -62,7 +64,7 @@ test('client settings mounts through configForms and reports rejected writes', a
   }
   plugin.apply(ctx)
   assert.equal(namespace, 'provider-qoder')
-  assert.deepEqual(registeredSlots, ['settings.section', 'settings.models.footer', 'conversation.input.right'])
+  assert.deepEqual(registeredSlots, ['settings.section', 'settings.models.footer'])
   assert.equal(await operations.storeRegion('china'), true)
   accepted = false
   assert.equal(await operations.storeRegion('global'), false)
@@ -85,6 +87,7 @@ test('client settings uses declared services on guarded context', async () => {
     effect: (callback: () => unknown) => callback(),
     locale: { register() {}, bind: () => (key: string) => key },
     remote: { credentials: {} },
+    inject: () => {},
     slots: {
       inject: (_name: string, callback: () => void) => callback(),
       register: () => {},
@@ -103,4 +106,63 @@ test('client settings uses declared services on guarded context', async () => {
     plugin.apply(guardedCtx)
   })
   assert.equal(mounted, true)
+})
+
+test('new conversation receives the default model directory before a model selection', async () => {
+  const plugin = await loadClientPlugin()
+  const ctx = new Context()
+  const current = { provider: 'dsh-provider-qoder', model: 'dfmodel' }
+  const directory = { getSnapshot: () => ({ current }), subscribe: () => () => {} }
+  const entries = new Map<string, { inject(sessionId: string): { directory: typeof directory } }>()
+  const form = {
+    getSnapshot: () => ({ value: { modelsByRegion: {} } }),
+    subscribe: () => () => {},
+    set: async () => true,
+  }
+  // Exercise real Cordis service tracing and dependency readiness.
+  class ModelDirectories extends Service {
+    static inject = ['sessions', 'remote', 'remote.session']
+
+    constructor(scope: Context) {
+      super(scope, 'modelDirectories')
+    }
+
+    directoryFor(sessionId: string) {
+      const sessions = (this.ctx as unknown as { sessions: { has(id: string): boolean } }).sessions
+      assert.ok(sessions.has(sessionId))
+      assert.ok(this.ctx.remote.session)
+      return { store: directory }
+    }
+  }
+  try {
+    ctx.provide('slots', {
+      inject: (_name: string, callback: () => unknown) => callback(),
+      register: (spec: { name: string; inject(sessionId: string): { directory: typeof directory } }) => {
+        entries.set(spec.name, spec)
+      },
+    } as any)
+    ctx.provide('locale', { register() {}, bind: () => (key: string) => key } as any)
+    ctx.provide('remote', { credentials: {}, session: {} } as any)
+    ctx.provide('remote.credentials', {} as any)
+    ctx.provide('configForms', { get: () => form } as any)
+    await ctx.plugin(plugin).await()
+    assert.ok(entries.has('settings.section'))
+    assert.equal(entries.has('conversation.input.right'), false)
+
+    // Services may mount after the settings plugin. The control follows readiness.
+    await ctx.plugin({
+      apply(scope: Context) {
+        scope.provide('sessions', { has: (id: string) => id === 'new' } as any)
+        scope.provide('remote.session', {} as any)
+      },
+    }).await()
+    await ctx.plugin(ModelDirectories).await()
+    await ctx.fiber.await()
+    const entry = entries.get('conversation.input.right')
+    assert.ok(entry)
+    assert.equal(entry.inject('new').directory, directory)
+    assert.deepEqual(entry.inject('new').directory.getSnapshot().current, current)
+  } finally {
+    await ctx.fiber.dispose()
+  }
 })

@@ -19,7 +19,7 @@ export interface ModelDirectoryStoreLike {
 export interface QoderContextSelectProps {
   sessionId?: string
   directory?: ModelDirectoryStoreLike
-  operations?: Pick<QoderCredentialOperations, 'getModelSnapshot' | 'canRestoreContextHistory' | 'subscribeModels' | 'storeModels' | 'setSessionTier'>
+  operations?: Pick<QoderCredentialOperations, 'getModelSnapshot' | 'canRestoreContextHistory' | 'subscribeModels' | 'setSessionTier'>
   t?: (key: QoderCredentialCopy, values?: Record<string, string | number>) => string
   activeLocale?: () => string
   useProjection?: <T = unknown>(key: string) => T | undefined
@@ -30,7 +30,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
   const [open, setOpen] = useState(false)
   const [manualTiers, setManualTiers] = useState<Record<string, string>>({})
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState<{ key: string; message: 'contextSelectFailed' | 'contextDefaultFailed' } | null>(null)
+  const [error, setError] = useState<{ key: string } | null>(null)
   const saving = useRef(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
@@ -107,8 +107,8 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
     setError(null)
     try {
       const result = await saveContextSelection(operations, sessionId, region, activeModel.id, tierKey)
-      if (result !== 'session-failed') setManualTiers(prev => ({ ...prev, [sessionKey]: tierKey }))
-      if (result !== 'saved') setError({ key: sessionKey, message: result === 'session-failed' ? 'contextSelectFailed' : 'contextDefaultFailed' })
+      if (result === 'saved') setManualTiers(prev => ({ ...prev, [sessionKey]: tierKey }))
+      else setError({ key: sessionKey })
     } finally {
       saving.current = false
       setPending(false)
@@ -143,7 +143,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
         </span>
       </button>
 
-      {error && error.key === sessionKey && <span role="alert" className={css.error}>{t ? t(error.message) : error.message}</span>}
+      {error && error.key === sessionKey && <span role="alert" className={css.error}>{t ? t('contextSelectFailed') : 'contextSelectFailed'}</span>}
       {open && (
         <div className={css.menu} role="menu" aria-label={selectTitle}>
           <div className={css.menuHeader}>{menuHeader}</div>
