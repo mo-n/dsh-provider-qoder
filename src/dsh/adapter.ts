@@ -123,7 +123,7 @@ export class QoderAdapter extends LlmAdapter {
     const base = this.effectiveModels().find(candidate => candidate.id === modelId)
     if (base === undefined) return undefined
     if (sessionId) {
-      const manualTierKey = this.sessionTiers.get(JSON.stringify([this.region(), sessionId, modelId]))
+      const manualTierKey = this.getSessionTier(sessionId, modelId)
       const reqCtx = this.sessions?.get(sessionId)?.requestContext?.()
       const historicalWindow = !this.historyRegionChanged && reqCtx?.provider === this.providerId && reqCtx.model === modelId
         ? reqCtx.contextWindow : undefined
@@ -171,10 +171,7 @@ export class QoderAdapter extends LlmAdapter {
    */
   private publishDiscoveredModels(transport: QoderTransport, models: readonly QoderCatalogModel[]): void {
     try {
-      const pending: unknown = this.onModelsDiscovered?.(transport, models)
-      if (pending !== undefined && pending !== null && typeof (pending as Promise<unknown>).catch === 'function') {
-        void (pending as Promise<unknown>).catch(() => {})
-      }
+      void Promise.resolve(this.onModelsDiscovered?.(transport, models)).catch(() => {})
     } catch {
       // Discovery is advisory: a notification failure never affects catalog reads.
     }

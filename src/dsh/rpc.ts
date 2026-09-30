@@ -6,11 +6,15 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { QoderRpcResult } from './rpc-channel.ts'
+import {
+  qoderRpcEndpoints,
+  qoderRpcPath,
+  type QoderRpcEndpoint,
+  type QoderRpcResult,
+} from './rpc-channel.ts'
 
 /** Qoder's internal dispatcher; Fetch-route authentication remains owned by Connection. */
 export type QoderRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<QoderRpcResult<unknown>>
-import { qoderRpcEndpoints, qoderRpcPath, type QoderRpcEndpoint } from './rpc-channel.ts'
 
 /**
  * Mount every Qoder settings endpoint on the shared API channel.

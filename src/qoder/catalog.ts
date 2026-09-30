@@ -78,6 +78,10 @@ function positiveNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
 function contextOptionsOf(value: unknown): QoderCatalogModel['contextOptions'] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const options: NonNullable<QoderCatalogModel['contextOptions']> = {}
@@ -88,8 +92,8 @@ function contextOptionsOf(value: unknown): QoderCatalogModel['contextOptions'] {
     const isDefault = typeof entry.is_default === 'boolean' ? entry.is_default : undefined
     if (tokenCount === undefined) continue
     options[key] = {
-      ...tokenCount === undefined ? {} : { tokenCount },
-      ...isDefault === undefined ? {} : { isDefault },
+      tokenCount,
+      ...isDefault !== undefined ? { isDefault } : {},
     }
   }
   if (Object.keys(options).length === 0) return undefined
@@ -167,18 +171,11 @@ export function normalizeQoderModels(
       ...Object.values(contextOptions ?? {}).map(option => option.tokenCount ?? 0),
     )
     const isReasoning = thinkingDefault(raw.thinking_config, raw.is_reasoning === true, onConflict)
-    const priceFactor = typeof raw.price_factor === 'number' && Number.isFinite(raw.price_factor) && raw.price_factor >= 0
-      ? raw.price_factor
-      : (typeof raw.priceFactor === 'number' && Number.isFinite(raw.priceFactor) && raw.priceFactor >= 0 ? raw.priceFactor : undefined)
-    const rawOriginalPrice = typeof raw.original_price_factor === 'number' && Number.isFinite(raw.original_price_factor) && raw.original_price_factor >= 0
-      ? raw.original_price_factor
-      : (typeof raw.originPriceFactor === 'number' && Number.isFinite(raw.originPriceFactor) && raw.originPriceFactor >= 0
-        ? raw.originPriceFactor
-        : undefined)
-    const promotionPrice = (typeof raw.promotion === 'object' && raw.promotion !== null
+    const priceFactor = nonNegativeNumber(raw.price_factor) ?? nonNegativeNumber(raw.priceFactor)
+    const rawOriginalPrice = nonNegativeNumber(raw.original_price_factor) ?? nonNegativeNumber(raw.originPriceFactor)
+    const promotionPrice = typeof raw.promotion === 'object' && raw.promotion !== null
       && (raw.promotion as { active?: unknown }).active === true
-      && typeof (raw.promotion as { before_promotion_price_factor?: unknown }).before_promotion_price_factor === 'number')
-      ? (raw.promotion as { before_promotion_price_factor: number }).before_promotion_price_factor
+      ? nonNegativeNumber((raw.promotion as { before_promotion_price_factor?: unknown }).before_promotion_price_factor)
       : undefined
     const originalPriceFactor = rawOriginalPrice ?? promotionPrice
     const isFree = raw.is_free === true || raw.isFree === true
@@ -304,6 +301,14 @@ export function effectiveContextWindow(
   return selectedContextTier(model)?.tokenCount ?? model.contextWindow
 }
 
+/** Clone a model catalog entry, detaching any contextOptions object. */
+export function cloneCatalogModel(model: QoderCatalogModel): QoderCatalogModel {
+  return {
+    ...model,
+    ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
+  }
+}
+
 /** Carry subscriber context choices only while the refreshed catalog supports them. */
 export function mergeAdvertisedContext(
   remembered: QoderCatalogModel,
@@ -332,23 +337,15 @@ export function mergeQoderDiscoveryMetadata(
   const catalog = new Map(discovered.map(model => [model.id, model]))
   return configured.map((model) => {
     const advertised = catalog.get(model.id)
-    if (advertised === undefined) {
-      return {
-        ...model,
-        ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
-      }
-    }
+    if (advertised === undefined) return cloneCatalogModel(model)
 
     const merged: QoderCatalogModel = { ...model }
-    for (const key of discoveredMetadataKeys) delete merged[key]
     for (const key of discoveredMetadataKeys) {
-      if (advertised[key] !== undefined) {
-        const val = advertised[key]
-        Object.assign(merged, {
-          [key]: key === 'contextOptions' && typeof val === 'object' && val !== null
-            ? { ...val }
-            : val,
-        })
+      if (key !== 'contextOptions') {
+        delete merged[key]
+        if (advertised[key] !== undefined) {
+          Object.assign(merged, { [key]: advertised[key] })
+        }
       }
     }
     return mergeAdvertisedContext(model, advertised, merged)

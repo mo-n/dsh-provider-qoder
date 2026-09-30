@@ -58,6 +58,36 @@ function publicError(code: QoderRpcErrorCode, message: string, details: object =
   }
 }
 
+async function executeRpc<T>(
+  operation: string,
+  task: () => Promise<T>,
+  signal: AbortSignal,
+  logger?: QoderLogger,
+): Promise<QoderHostRpcResult<T>> {
+  try {
+    return { ok: true, value: await task() }
+  } catch (error) {
+    if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) {
+      logger?.debug?.(`[Qoder RPC] ${operation} was aborted`)
+      return publicError('ABORTED', 'Request aborted')
+    }
+    let code: QoderRpcErrorCode = 'INTERNAL'
+    if (error instanceof QoderLlmError) {
+      if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
+        code = 'NO_CREDENTIALS'
+      } else if (error.code === 'AUTH') {
+        code = 'UNAUTHENTICATED'
+      } else if (error.code === 'TIMEOUT') {
+        code = 'TIMEOUT'
+      } else {
+        code = 'UPSTREAM_ERROR'
+      }
+    }
+    logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
+    return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
+  }
+}
+
 export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void {
   const config = readConfig(input)
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
@@ -262,33 +292,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
 
-    const executeRpc = async <T>(operation: string, task: () => Promise<T>): Promise<QoderHostRpcResult<T>> => {
-      try {
-        return { ok: true, value: await task() }
-      } catch (error) {
-        if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) {
-          logger?.debug?.(`[Qoder RPC] ${operation} was aborted`)
-          return publicError('ABORTED', 'Request aborted')
-        }
-        let code: QoderRpcErrorCode = 'INTERNAL'
-        if (error instanceof QoderLlmError) {
-          if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
-            code = 'NO_CREDENTIALS'
-          } else if (error.code === 'AUTH') {
-            code = 'UNAUTHENTICATED'
-          } else if (error.code === 'TIMEOUT') {
-            code = 'TIMEOUT'
-          } else {
-            code = 'UPSTREAM_ERROR'
-          }
-        }
-        logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
-        return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
-      }
-    }
-
     if (endpoint === 'models') {
-      return await executeRpc('discover Qoder models', () => discoverModels(signal))
+      return await executeRpc('discover Qoder models', () => discoverModels(signal), signal, logger)
     }
 
     if (endpoint === 'sessionTier') {
@@ -298,7 +303,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
         return await executeRpc('select session context tier', async () => {
           adapter.setSessionTier(sessionId, modelId, tierKey, region)
           return { success: true }
-        })
+        }, signal, logger)
       }
       return publicError('INTERNAL', 'Invalid sessionTier payload')
     }
@@ -310,6 +315,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     const outcome = await executeRpc(
       'load Qoder account',
       () => activeTransport.readAccount({ force, signal }),
+      signal,
+      logger,
     )
     if (outcome.ok) logger?.debug?.('[Qoder RPC] Subscriber account resolved')
     return outcome
@@ -339,7 +346,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       webCtx.effect(() => {
         const routedSearch: typeof originalSearch = async (request, signal) => {
           const mode = resolveConfig().webSearchMode ?? 'auto'
-          if (mode !== 'disabled' && shouldUseQoderSearch(mode, initiatingModelProvider(ctx))) {
+          if (shouldUseQoderSearch(mode, initiatingModelProvider(ctx))) {
             return searchProvider.search(request, signal)
           }
           return originalSearch.call(webCtx.web, request, signal)

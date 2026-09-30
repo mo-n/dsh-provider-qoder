@@ -1,5 +1,5 @@
 import type { QoderAccountInfo } from '../qoder/account.ts'
-import { defaultModels, mergeAdvertisedContext, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { cloneCatalogModel, defaultModels, mergeAdvertisedContext, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderRpcResult } from '../dsh/rpc-channel.ts'
@@ -60,19 +60,11 @@ export function reconcileQoderModels(
   discovered: readonly QoderCatalogModel[],
 ): QoderModelReconciliation {
   const availableIds = new Set(discovered.map(model => model.id))
-  const unavailable = known.filter(model => !availableIds.has(model.id)).map(model => ({
-    ...model,
-    ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
-  }))
+  const unavailable = known.filter(model => !availableIds.has(model.id)).map(cloneCatalogModel)
   const previous = new Map(known.map(model => [model.id, model]))
   const reconciled = discovered.map(model => {
     const remembered = previous.get(model.id)
-    if (remembered === undefined) {
-      return {
-        ...model,
-        ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
-      }
-    }
+    if (remembered === undefined) return cloneCatalogModel(model)
     return mergeAdvertisedContext(remembered, model, model)
   })
   return {

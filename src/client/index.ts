@@ -7,7 +7,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { qoderCredentialRef } from '../dsh/credential-contract.ts'
 import type { QoderAccountInfo } from '../qoder/account.ts'
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import { cloneCatalogModel, type QoderCatalogModel } from '../qoder/catalog.ts'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
 import { QoderContextSelect } from './QoderContextSelect.tsx'
@@ -131,10 +131,7 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     storeModels: async (region, models) => {
       try {
         const current = modelScope.getSnapshot().value
-        const clonedModels = models.map(m => ({
-          ...m,
-          ...m.contextOptions !== undefined ? { contextOptions: { ...m.contextOptions } } : {},
-        }))
+        const clonedModels = models.map(cloneCatalogModel)
         const res = await modelScope.set('modelsByRegion', {
           ...current?.modelsByRegion,
           [region]: clonedModels,
