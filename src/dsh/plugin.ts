@@ -7,7 +7,7 @@ import type {} from '@deepseek-ai/dsh-web'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
-import { QoderSearchProvider } from './search-provider.ts'
+import { initiatingModelProvider, QoderSearchProvider, shouldUseQoderSearch } from './search-provider.ts'
 import {
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
@@ -55,6 +55,36 @@ function publicError(code: QoderRpcErrorCode, message: string, details: object =
   return {
     ok: false,
     error: { code, message, details },
+  }
+}
+
+async function executeRpc<T>(
+  operation: string,
+  task: () => Promise<T>,
+  signal: AbortSignal,
+  logger?: QoderLogger,
+): Promise<QoderHostRpcResult<T>> {
+  try {
+    return { ok: true, value: await task() }
+  } catch (error) {
+    if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) {
+      logger?.debug?.(`[Qoder RPC] ${operation} was aborted`)
+      return publicError('ABORTED', 'Request aborted')
+    }
+    let code: QoderRpcErrorCode = 'INTERNAL'
+    if (error instanceof QoderLlmError) {
+      if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
+        code = 'NO_CREDENTIALS'
+      } else if (error.code === 'AUTH') {
+        code = 'UNAUTHENTICATED'
+      } else if (error.code === 'TIMEOUT') {
+        code = 'TIMEOUT'
+      } else {
+        code = 'UPSTREAM_ERROR'
+      }
+    }
+    logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
+    return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
   }
 }
 
@@ -262,33 +292,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
 
-    const executeRpc = async <T>(operation: string, task: () => Promise<T>): Promise<QoderHostRpcResult<T>> => {
-      try {
-        return { ok: true, value: await task() }
-      } catch (error) {
-        if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) {
-          logger?.debug?.(`[Qoder RPC] ${operation} was aborted`)
-          return publicError('ABORTED', 'Request aborted')
-        }
-        let code: QoderRpcErrorCode = 'INTERNAL'
-        if (error instanceof QoderLlmError) {
-          if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
-            code = 'NO_CREDENTIALS'
-          } else if (error.code === 'AUTH') {
-            code = 'UNAUTHENTICATED'
-          } else if (error.code === 'TIMEOUT') {
-            code = 'TIMEOUT'
-          } else {
-            code = 'UPSTREAM_ERROR'
-          }
-        }
-        logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
-        return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
-      }
-    }
-
     if (endpoint === 'models') {
-      return await executeRpc('discover Qoder models', () => discoverModels(signal))
+      return await executeRpc('discover Qoder models', () => discoverModels(signal), signal, logger)
     }
 
     if (endpoint === 'sessionTier') {
@@ -298,7 +303,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
         return await executeRpc('select session context tier', async () => {
           adapter.setSessionTier(sessionId, modelId, tierKey, region)
           return { success: true }
-        })
+        }, signal, logger)
       }
       return publicError('INTERNAL', 'Invalid sessionTier payload')
     }
@@ -310,6 +315,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     const outcome = await executeRpc(
       'load Qoder account',
       () => activeTransport.readAccount({ force, signal }),
+      signal,
+      logger,
     )
     if (outcome.ok) logger?.debug?.('[Qoder RPC] Subscriber account resolved')
     return outcome
@@ -335,29 +342,18 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     // ctx.web.search always routes to Qoder even if the host profile configured
     // a different fixed searchProvider (e.g. deepseek-official).
     if (typeof webCtx.web.search === 'function') {
-      const originalSearch = webCtx.web.search.bind(webCtx.web)
+      const originalSearch = webCtx.web.search
       webCtx.effect(() => {
-        webCtx.web.search = async (request, signal) => {
+        const routedSearch: typeof originalSearch = async (request, signal) => {
           const mode = resolveConfig().webSearchMode ?? 'auto'
-          if (mode === 'disabled') {
-            return originalSearch(request, signal)
-          }
-
-          const agentsService = ctx.get('agents')
-            ?? (ctx as unknown as { agents?: { currentInitiator?: () => { options?: { provider?: string } } } }).agents
-          const agent = agentsService?.currentInitiator?.()
-          const defaultModelService = ctx.get('agentDefaultModel') as unknown as { get?: () => { provider?: string } }
-          const providerRoute = agent?.options?.provider ?? defaultModelService?.get?.()?.provider
-          const isQoderActive = providerRoute === providerQoder
-
-          if (mode === 'always' || isQoderActive) {
+          if (shouldUseQoderSearch(mode, initiatingModelProvider(ctx))) {
             return searchProvider.search(request, signal)
           }
-
-          return originalSearch(request, signal)
+          return originalSearch.call(webCtx.web, request, signal)
         }
+        webCtx.web.search = routedSearch
         return () => {
-          webCtx.web.search = originalSearch
+          if (webCtx.web.search === routedSearch) webCtx.web.search = originalSearch
         }
       }, 'provider-qoder: transparent web search router')
     }

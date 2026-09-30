@@ -1,25 +1,20 @@
 /**
  * Loopback settings RPC for the Qoder cards.
  *
- * The endpoints ride on Connection's shared `/api` channel as exact Fetch
- * routes rather than as a dedicated `connection.rpc.handle` channel.
- *
- * `rpc.handle` resolves `webServer` on the connection plugin's own context. Up
- * to `dsh-client-connection` 0.1.2-rc.1 that context injected `webServer`, but
- * 0.1.5-rc.2 injects only `credentials` and moves `webServer` into a child
- * context, so every `rpc.handle` call now fails with `cannot get property
- * "webServer" without inject` and the channel is never mounted — which surfaces
- * in the browser as `HTTP 405` from the static frontend fallback. Exact Fetch
- * routes are registered in the service's own registry, never touch that lookup,
- * and are what DSH's own file-upload plugin uses.
+ * Endpoints use Connection exact Fetch routes on its shared `/api` channel.
+ * See ADR-0008 for the reason this replaces the dedicated RPC channel.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { QoderRpcResult } from './rpc-channel.ts'
+import {
+  qoderRpcEndpoints,
+  qoderRpcPath,
+  type QoderRpcEndpoint,
+  type QoderRpcResult,
+} from './rpc-channel.ts'
 
 /** Qoder's internal dispatcher; Fetch-route authentication remains owned by Connection. */
 export type QoderRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<QoderRpcResult<unknown>>
-import { qoderRpcEndpoints, qoderRpcPath, type QoderRpcEndpoint } from './rpc-channel.ts'
 
 /**
  * Mount every Qoder settings endpoint on the shared API channel.

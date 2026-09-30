@@ -107,7 +107,7 @@ _Avoid_: static search provider, fixed search binding
 ### Transport & Session Lifecycle
 
 **Qoder transport**:
-The provider-side capability owning all communication with Qoder, including authentication, model discovery, quota inspection, request translation, and event streaming.
+The provider-side capability owning all communication with Qoder, including authentication, model discovery, subscriber account reads, model requests, image publication, and web search. It does not own agent tools or workspace operations.
 _Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK
 
 **Qoder settings RPC**:

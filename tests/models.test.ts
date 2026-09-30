@@ -125,6 +125,36 @@ test('rediscovery caps old input budgets and preserves smaller budgets', () => {
   }
 })
 
+test('metadata refresh clears context options that the provider no longer advertises', () => {
+  const configured = [{
+    id: 'model', name: 'Model', contextWindow: 1_000_000, contextTier: 'large',
+    contextOptions: { large: { tokenCount: 1_000_000 } },
+  }]
+  const discovered = [{ id: 'model', name: 'New name', contextWindow: 200_000 }]
+
+  const [merged] = mergeQoderDiscoveryMetadata(configured, discovered)
+  assert.equal(merged.name, 'Model')
+  assert.equal(merged.contextOptions, undefined)
+  assert.equal(merged.contextTier, undefined)
+  assert.equal(merged.contextWindow, 200_000)
+})
+
+test('metadata refresh replaces a removed smaller Context Tier with the advertised window', () => {
+  const configured = [{
+    id: 'model', name: 'Model', contextWindow: 200_000, contextTier: 'small',
+    contextOptions: { small: { tokenCount: 200_000 } },
+  }]
+  for (const contextOptions of [undefined, { large: { tokenCount: 1_000_000, isDefault: true } }]) {
+    const discovered = [{ id: 'model', name: 'New name', contextWindow: 1_000_000, contextOptions }]
+    const [merged] = mergeQoderDiscoveryMetadata(configured, discovered)
+    assert.equal(merged.name, 'Model')
+    assert.equal(merged.contextTier, undefined)
+    assert.equal(merged.contextWindow, 1_000_000)
+    assert.deepEqual(merged.contextOptions, contextOptions)
+    assert.deepEqual(mergeQoderDiscoveryMetadata([merged], discovered), [merged])
+  }
+})
+
 test('catalog conflict diagnostics contain only conflict kinds', async () => {
   const warnings: unknown[] = []
   await fetchQoderModels({
@@ -405,4 +435,3 @@ test('mergeQoderDiscoveryMetadata detaches deeply frozen models with contextOpti
   const validatedAfterMerge = Config({ modelsByRegion: { global: merged } })
   assert.equal(validatedAfterMerge.modelsByRegion?.global?.[0].contextTier, '1M')
 })
-

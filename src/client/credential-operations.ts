@@ -1,5 +1,5 @@
 import type { QoderAccountInfo } from '../qoder/account.ts'
-import { selectedContextTier, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { cloneCatalogModel, defaultModels, mergeAdvertisedContext, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderRpcResult } from '../dsh/rpc-channel.ts'
@@ -27,6 +27,15 @@ export interface QoderModelSettingsSection {
   webSearchMode?: QoderWebSearchMode
 }
 
+export function regionOf(value: unknown): QoderRegion {
+  if (typeof value !== 'object' || value === null) return 'global'
+  return (value as { region?: unknown }).region === 'china' ? 'china' : 'global'
+}
+
+export function modelsOf(section: QoderModelSettingsSection | undefined, region: QoderRegion): QoderCatalogModel[] {
+  const scoped = section?.modelsByRegion?.[region]
+  return Array.isArray(scoped) ? scoped : defaultModels.map(model => ({ ...model }))
+}
 
 export interface QoderModelSettingsSnapshot {
   status: 'loading' | 'ready' | 'unavailable'
@@ -51,35 +60,12 @@ export function reconcileQoderModels(
   discovered: readonly QoderCatalogModel[],
 ): QoderModelReconciliation {
   const availableIds = new Set(discovered.map(model => model.id))
-  const unavailable = known.filter(model => !availableIds.has(model.id)).map(model => ({
-    ...model,
-    ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
-  }))
+  const unavailable = known.filter(model => !availableIds.has(model.id)).map(cloneCatalogModel)
   const previous = new Map(known.map(model => [model.id, model]))
   const reconciled = discovered.map(model => {
     const remembered = previous.get(model.id)
-    if (remembered === undefined) {
-      return {
-        ...model,
-        ...model.contextOptions !== undefined ? { contextOptions: { ...model.contextOptions } } : {},
-      }
-    }
-    // A remembered tier selection is an explicit subscriber decision: carry it
-    // over while the provider still advertises that tier, and let it widen the
-    // budget instead of being capped by the provider default.
-    const carried = selectedContextTier({
-      contextTier: remembered.contextTier,
-      contextOptions: model.contextOptions ?? remembered.contextOptions,
-    })
-    const options = model.contextOptions ?? remembered.contextOptions
-    const clonedOptions = options !== undefined ? { contextOptions: { ...options } } : {}
-    if (carried !== undefined) {
-      return { ...model, ...clonedOptions, contextTier: carried.key, contextWindow: carried.tokenCount }
-    }
-    const budget = remembered.contextWindow
-    return budget === undefined || model.contextWindow === undefined
-      ? { ...model, ...clonedOptions }
-      : { ...model, ...clonedOptions, contextWindow: Math.min(budget, model.contextWindow) }
+    if (remembered === undefined) return cloneCatalogModel(model)
+    return mergeAdvertisedContext(remembered, model, model)
   })
   return {
     catalog: [...reconciled, ...unavailable],

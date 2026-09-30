@@ -5,6 +5,8 @@
  * module so the route path cannot drift between the two halves.
  */
 
+import type { QoderRegion } from '../qoder/region.ts'
+ 
 /** Logical channel owning the Qoder settings endpoints. */
 export const qoderRpcChannel = '/qoder-subscription'
 
@@ -20,7 +22,7 @@ export const qoderRpcEndpoints = ['account', 'models', 'sessionTier'] as const
 export type QoderRpcEndpoint = (typeof qoderRpcEndpoints)[number]
 
 export interface QoderSessionTierPayload {
-  region: import('../qoder/region.ts').QoderRegion
+  region: QoderRegion
   sessionId: string
   modelId: string
   tierKey: string

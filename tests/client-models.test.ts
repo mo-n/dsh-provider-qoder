@@ -65,6 +65,33 @@ test('a context tier the provider stops advertising falls back to the default bu
   assert.equal(reconciled.selected[0].contextWindow, 200_000)
 })
 
+test('rediscovery without context options clears the old options and tier', () => {
+  const current = [{
+    id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large',
+    contextOptions: { small: { tokenCount: 200_000 }, large: { tokenCount: 1_000_000 } },
+  }]
+  const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 200_000 }]
+
+  const [selected] = reconcileQoderModels(current, discovered).selected
+  assert.equal(selected.contextOptions, undefined)
+  assert.equal(selected.contextTier, undefined)
+  assert.equal(selected.contextWindow, 200_000)
+})
+
+test('rediscovery replaces a removed smaller Context Tier with the advertised window', () => {
+  const current = [{
+    id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextTier: 'small',
+    contextOptions: { small: { tokenCount: 200_000 } },
+  }]
+  for (const contextOptions of [undefined, { large: { tokenCount: 1_000_000, isDefault: true } }]) {
+    const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextOptions }]
+    const [selected] = reconcileQoderModels(current, discovered).selected
+    assert.equal(selected.contextTier, undefined)
+    assert.equal(selected.contextWindow, 1_000_000)
+    assert.deepEqual(selected.contextOptions, contextOptions)
+  }
+})
+
 test('reconcileQoderModels tolerates deeply frozen models with contextOptions', () => {
   const current = Object.freeze([{
     id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: '1M',
@@ -86,4 +113,3 @@ test('reconcileQoderModels tolerates deeply frozen models with contextOptions', 
   assert.equal(reconciled.selected[0].contextWindow, 1_000_000)
   assert.equal(Object.isFrozen(reconciled.selected[0].contextOptions), false)
 })
-

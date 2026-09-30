@@ -3,8 +3,8 @@ import { contextTiersOf, formatContextTokens, resolveContextTier } from '../qode
 import type { QoderRegion } from '../qoder/region.ts'
 import { QODER_PROVIDER_ID } from '../dsh/provider.ts'
 import type { QoderCredentialCopy } from './locales.ts'
-import type { QoderCredentialOperations } from './credential-operations.ts'
-import { historicalContextWindow, isQoderProvider, modelsOf, saveContextSelection } from './context-selection.ts'
+import { modelsOf, regionOf, type QoderCredentialOperations } from './credential-operations.ts'
+import { historicalContextWindow, isQoderProvider, saveContextSelection } from './context-selection.ts'
 import css from './QoderContextSelect.module.css'
 
 export interface ModelDirectorySnapshot {
@@ -32,7 +32,6 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<{ key: string; message: 'contextSelectFailed' | 'contextDefaultFailed' } | null>(null)
   const saving = useRef(false)
-  const legacyRegion = useRef<QoderRegion | undefined>(undefined)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   const directoryState = useSyncExternalStore(
@@ -80,9 +79,8 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
 
   if (!current) return null
 
-  const region: QoderRegion = modelSnapshot?.value?.region === 'china' ? 'china' : 'global'
-  if (legacyRegion.current === undefined && modelSnapshot?.value) legacyRegion.current = region
-  const models = modelsOf(modelSnapshot?.value, region, legacyRegion.current ?? region)
+  const region: QoderRegion = regionOf(modelSnapshot?.value)
+  const models = modelsOf(modelSnapshot?.value, region)
 
   const currentModelId = current.model.includes('/') ? current.model.split('/')[1] : current.model
   const currentProviderId = current.provider ?? (current.model.includes('/') ? current.model.split('/')[0] : undefined)
@@ -108,7 +106,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
     setPending(true)
     setError(null)
     try {
-      const result = await saveContextSelection(operations, sessionId, region, activeModel.id, tierKey, legacyRegion.current ?? region)
+      const result = await saveContextSelection(operations, sessionId, region, activeModel.id, tierKey)
       if (result !== 'session-failed') setManualTiers(prev => ({ ...prev, [sessionKey]: tierKey }))
       if (result !== 'saved') setError({ key: sessionKey, message: result === 'session-failed' ? 'contextSelectFailed' : 'contextDefaultFailed' })
     } finally {
@@ -179,4 +177,3 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
     </div>
   )
 }
-
