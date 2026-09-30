@@ -66,13 +66,16 @@ Always use the slash-delimited `<type>/<short-desc>` format:
 
 Releases are completely automated via GitHub Actions on `v*` tag pushes:
 
-1. On `main`, run:
+1. On `main`, run local checks:
    ```bash
-   pnpm run release:patch   # for backward-compatible bug fixes
-   # or
-   pnpm run release:minor   # for new backwards-compatible features
-   # or
-   pnpm run release:major   # for breaking changes
+   pnpm run check
    ```
-2. The release script runs full validation (`pnpm run check`), increments version in `package.json`, generates a `chore(release): vx.y.z` commit and annotated tag, and pushes to `origin`.
-3. The `.github/workflows/publish.yml` workflow automatically publishes the package to npm with provenance and creates a GitHub Release.
+2. Bump version, create the commit, and tag with your target version (supports patch/minor/major, explicit versions like `0.5.0`, or prerelease versions like `0.5.0-rc.1`):
+   ```bash
+   pnpm version <version> -m "chore(release): %s"
+   ```
+3. Push commit and tag to GitHub:
+   ```bash
+   git push && git push --tags
+   ```
+4. The `.github/workflows/publish.yml` workflow automatically validates the tag matches `package.json`, publishes the package to npm with provenance (tagging `next` for prereleases or `latest` otherwise), and creates a GitHub Release.

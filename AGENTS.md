@@ -4,12 +4,6 @@
 
 The deliverable is the root ESM package, `dsh-provider-qoder`: a DSH extension that lets users access their Qoder subscription.
 
-- `src/` contains the production extension. `adapter.ts` owns provider behavior; `translate.ts`, `serialize.ts`, and `sse.ts` handle protocol conversion and streaming.
-- `pi-provider-qoder/` is a temporary reference for the reverse-engineered Qoder authentication, API, signing, model, usage, and streaming behavior.
-- `dsh-codex-subscription/` is a temporary reference for DSH plugin integration, OAuth coordination, settings UI, quota reporting, tests, packaging, and diagnostics.
-
-Do not add runtime dependencies on the references or implement production changes inside them. Port needed behavior into the root with tests. Both directories may be deleted after feature parity. Follow their local instructions when running them.
-
 ## Architecture Direction
 
 Separate DSH registration, configuration, and credentials from Qoder transport logic. Treat the Pi provider as protocol evidence, not the desired public API; adapt it to the DSH conventions demonstrated by the Codex plugin. Never copy secrets, cached credentials, or generated output.
@@ -48,7 +42,7 @@ This repository strictly follows **GitHub Flow** with `main` as the single produ
   - `test/<scope>`: Test additions or test framework updates
   - `chore/<target>`: Tooling, dependency, or configuration updates
 - **PR & Merge Policy**: All contributions merge into `main` via **Squash and Merge**. Ensure PR titles use Conventional Commits since the squashed commit title on `main` will inherit it. Delete head branches immediately upon merge.
-- **Releases**: Releases are tag-driven and triggered by `v*` tags on `main`. Use `pnpm run release:patch` (or `minor`/`major`) to verify, bump version, create the release commit/tag, and push to trigger `.github/workflows/publish.yml`.
+- **Releases**: Releases are tag-driven and triggered by `v*` tags on `main`. Verify with `pnpm run check`, bump version and tag with `pnpm version <version> -m "chore(release): %s"`, and push with tags (`git push && git push --tags`) to trigger `.github/workflows/publish.yml`.
 
 ## Commit & Pull Request Guidelines
 
