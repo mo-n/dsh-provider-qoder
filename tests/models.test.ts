@@ -139,6 +139,22 @@ test('metadata refresh clears context options that the provider no longer advert
   assert.equal(merged.contextWindow, 200_000)
 })
 
+test('metadata refresh replaces a removed smaller Context Tier with the advertised window', () => {
+  const configured = [{
+    id: 'model', name: 'Model', contextWindow: 200_000, contextTier: 'small',
+    contextOptions: { small: { tokenCount: 200_000 } },
+  }]
+  for (const contextOptions of [undefined, { large: { tokenCount: 1_000_000, isDefault: true } }]) {
+    const discovered = [{ id: 'model', name: 'New name', contextWindow: 1_000_000, contextOptions }]
+    const [merged] = mergeQoderDiscoveryMetadata(configured, discovered)
+    assert.equal(merged.name, 'Model')
+    assert.equal(merged.contextTier, undefined)
+    assert.equal(merged.contextWindow, 1_000_000)
+    assert.deepEqual(merged.contextOptions, contextOptions)
+    assert.deepEqual(mergeQoderDiscoveryMetadata([merged], discovered), [merged])
+  }
+})
+
 test('catalog conflict diagnostics contain only conflict kinds', async () => {
   const warnings: unknown[] = []
   await fetchQoderModels({

@@ -325,7 +325,9 @@ export function mergeAdvertisedContext(
     merged.contextTier = tier.key
     merged.contextWindow = tier.tokenCount
   } else if (advertised.contextWindow !== undefined) {
-    merged.contextWindow = Math.min(remembered.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
+    merged.contextWindow = remembered.contextTier !== undefined
+      ? advertised.contextWindow
+      : Math.min(remembered.contextWindow ?? advertised.contextWindow, advertised.contextWindow)
   }
   return merged
 }
