@@ -194,27 +194,31 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     order: 15,
     inject: () => ({ operations, t, activeLocale }),
   }, QoderCredentialCard))
-  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
-    name: 'conversation.input.right',
-    id: 'qoder-context-select',
-    order: 10,
-    inject: (sessionId: string) => {
-      let directory: unknown = undefined
-      try {
-        const modelDirectories = ctx.get('modelDirectories') as {
-          directoryFor(id: string): { store: unknown }
-        } | undefined
-        directory = sessionId && modelDirectories ? modelDirectories.directoryFor(sessionId)?.store : undefined
-      } catch {
-        // directoryFor resolution may throw if session scope is not ready yet
-      }
-      return {
-        sessionId,
-        directory,
-        operations,
-        t,
-        activeLocale,
-      }
-    },
-  }, QoderContextSelect))
+  // Bind the control to the live model-directory service and its session faces.
+  // A setup-time optional lookup does not follow service readiness or replacement.
+  ctx.inject(['modelDirectories', 'sessions', 'remote.session'], (scope: ClientContext) => {
+    scope.slots.inject('conversation.input.right', () => scope.slots.register({
+      name: 'conversation.input.right',
+      id: 'qoder-context-select',
+      order: 10,
+      inject: (sessionId: string) => {
+        let directory: unknown = undefined
+        try {
+          const modelDirectories = scope.get('modelDirectories') as {
+            directoryFor(id: string): { store: unknown }
+          } | undefined
+          directory = sessionId && modelDirectories ? modelDirectories.directoryFor(sessionId)?.store : undefined
+        } catch {
+          // directoryFor resolution may throw if session scope is not ready yet
+        }
+        return {
+          sessionId,
+          directory,
+          operations,
+          t,
+          activeLocale,
+        }
+      },
+    }, QoderContextSelect))
+  })
 }

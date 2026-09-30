@@ -92,7 +92,11 @@ test('composer keeps projection hook order stable across unresolved, foreign, si
         getModelSnapshot: () => ({ value: { modelsByRegion: { global: [model, single] } } }),
         subscribeModels: () => () => {},
       },
-      useProjection: (key: string) => { hooks.push(key); return undefined },
+      useProjection: (key: string) => {
+        hooks.push(key)
+        // A new conversation has no saved selection; the directory supplies its default.
+        return key === 'modelSelection' ? { next: null, lastUsed: null } : undefined
+      },
     })
     assert.deepEqual(hooks, ['modelSelection', 'contextPressure'])
     assert.equal(output !== null, current?.provider === QODER_PROVIDER_ID && current.model === 'a')
