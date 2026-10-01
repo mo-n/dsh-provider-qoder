@@ -328,7 +328,7 @@ for (const status of [401, 403]) {
         if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user' }))
         bodies.push(String(init?.body))
         authorizations.push(new Headers(init?.headers).get('authorization')!)
-        return bodies.length === 1 ? new Response('{"code":"expired"}', { status })
+        return bodies.length === 1 ? new Response('{"code":"105"}', { status })
           : new Response('data: [DONE]\n\n')
       }) as typeof fetch,
     })
@@ -481,4 +481,43 @@ for (const cancellation of ['caller', 'timeout'] as const) {
     assert.equal(chats, 1)
     assert.equal(exchanges, 1)
   })
+}
+
+for (const source of ['http', 'sse'] as const) {
+  for (const [businessCode, expected] of [['112', 'QUOTA'], ['10605', 'RATE_LIMIT'], ['99999', 'PROVIDER_ERROR'], ['105', 'AUTH']] as const) {
+    test(`${source} business rejection ${businessCode} has correct classification and bounded recovery`, async () => {
+      let chats = 0
+      let exchanges = 0
+      const body = JSON.stringify({ code: '403', message: JSON.stringify({
+        code: businessCode, message: JSON.stringify({ retryAfterSeconds: 30 }),
+      }) })
+      const transport = createQoderTransport({
+        region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
+        fetch: (async input => {
+          const url = String(input)
+          if (url.includes('/exchange')) return new Response(JSON.stringify({ token: `jt-offline-${++exchanges}` }))
+          if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user' }))
+          chats++
+          return source === 'http'
+            ? new Response(body, { status: 403, headers: { 'x-request-id': 'business-id', 'retry-after': '60' } })
+            : new Response(`data: ${JSON.stringify({ statusCodeValue: 403, body })}\n\n`, {
+              headers: { 'x-request-id': 'business-id', 'retry-after': '60' },
+            })
+        }) as typeof fetch,
+      })
+      await assert.rejects(() => collectStream(transport), (error: unknown) => {
+        assert.ok(error instanceof QoderLlmError)
+        assert.equal(error.code, expected)
+        assert.equal(error.upstreamCode, businessCode)
+        assert.equal(error.source, source)
+        assert.equal(error.httpStatus, source === 'http' ? 403 : 200)
+        assert.equal(error.failure.requestId, 'business-id')
+        assert.equal(error.failure.providerRetryAfterMs, 60_000)
+        return true
+      })
+      const attempts = source === 'http' && businessCode === '105' ? 2 : 1
+      assert.equal(chats, attempts)
+      assert.equal(exchanges, attempts)
+    })
+  }
 }

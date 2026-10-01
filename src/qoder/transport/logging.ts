@@ -33,7 +33,15 @@ function redactString(value: string): string {
 
 /** Redact credentials and bound arbitrary provider values before logging them. */
 export function redactLogValue(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') return redactString(value)
+  if (typeof value === 'string') {
+    // Model causes can carry credential-bearing objects in repeatedly encoded JSON.
+    if (depth < maxDepth && value.length <= 16 * 1024 && /^[\s]*[{"]/u.test(value)) {
+      try {
+        return redactString(JSON.stringify(redactLogValue(JSON.parse(value), depth + 1)))
+      } catch { /* Preserve bounded plain text diagnostics. */ }
+    }
+    return redactString(value)
+  }
   if (value === null || typeof value !== 'object') return value
   if (depth >= maxDepth) return '[TRUNCATED]'
   if (value instanceof Error) {
@@ -42,6 +50,10 @@ export function redactLogValue(value: unknown, depth = 0): unknown {
       message: redactString(value.message),
       ...('code' in value ? { code: redactLogValue(value.code, depth + 1) } : {}),
       ...('cause' in value ? { cause: redactLogValue(value.cause, depth + 1) } : {}),
+      ...('upstreamCode' in value ? { upstreamCode: redactLogValue(value.upstreamCode, depth + 1) } : {}),
+      ...('source' in value ? { source: value.source } : {}),
+      ...('httpStatus' in value ? { httpStatus: value.httpStatus } : {}),
+      ...('failure' in value ? { failure: redactLogValue(value.failure, depth + 1) } : {}),
       ...(value instanceof AggregateError ? { errors: redactLogValue(value.errors, depth + 1) } : {}),
     }
   }
