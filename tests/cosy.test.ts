@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { writeFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { buildAuthHeaders, computeSigPath, qoderMachineOs, qoderIdeVersion } from '../src/qoder/transport/wire/cosy.ts'
 import { getQoderChatUrl } from '../src/qoder/transport/endpoints.ts'
@@ -95,7 +95,7 @@ test('Machine ID lookup honors CLI config overrides and China branding', () => {
 test('an unwritable Machine ID fallback remains stable across authentication refreshes', () => {
   const path = join(tmpdir(), `qoder-unwritable-${crypto.randomUUID()}`, 'machine_id')
   // A file as the parent makes persistence fail without changing local CLI state.
-  const parent = path.slice(0, path.lastIndexOf('/'))
+  const parent = dirname(path)
   writeFileSync(parent, 'offline')
   try { assert.equal(getMachineId([path]), getMachineId([path])) }
   finally { rmSync(parent) }
