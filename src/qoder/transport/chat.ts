@@ -7,7 +7,7 @@ import {
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import type { QoderCatalogModel } from '../catalog.ts'
-import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
+import { QoderLlmError, qoderModelError, canRefreshModelCredentials, qoderRequestId } from '../errors.ts'
 import type { QoderRegion } from '../region.ts'
 import { getQoderChatUrl } from './endpoints.ts'
 import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
@@ -123,21 +123,15 @@ export async function* streamQoderChat(
         if (requestController.signal.aborted) throw error
         // Diagnostics are optional; the HTTP status still governs recovery and errors.
       }
-      let detail = bodyText.slice(0, 300)
-      let duplicateRequest = false
-      try {
-        const parsed = JSON.parse(bodyText) as Record<string, unknown>
-        duplicateRequest = response.status === 403 && String(parsed.code) === '103'
-        const message = typeof parsed.message === 'string' ? parsed.message.trim() : ''
-        const code = typeof parsed.code === 'string' || typeof parsed.code === 'number' ? String(parsed.code) : ''
-        if (message) detail = code ? `${code}: ${message}` : message
-      } catch {
-        // Non-JSON errors still retain bounded provider diagnostics.
-      }
+      const failure = qoderModelError(`Qoder upstream service returned HTTP ${response.status}`, {
+        status: response.status,
+        headers: response.headers,
+        cause: bodyText || undefined,
+        source: 'http',
+      })
       // Only an HTTP authentication rejection before SSE starts can be retried.
       // Reuse the prepared envelope and turn identity; never replay a partial stream.
-      if (attempt === 0 && !duplicateRequest && dependencies.refreshCredentials
-        && (response.status === 401 || response.status === 403)) {
+      if (attempt === 0 && dependencies.refreshCredentials && canRefreshModelCredentials(failure)) {
         if (idleTimer !== undefined) clearTimeout(idleTimer)
         activeCredentials = await dependencies.refreshCredentials(activeCredentials, options.signal)
         if (activeCredentials.userID !== credentials.userID) {
@@ -145,11 +139,7 @@ export async function* streamQoderChat(
         }
         continue
       }
-      throw qoderHttpError(`Qoder upstream service returned HTTP ${response.status}${detail ? `: ${detail}` : ''}.`, {
-        status: response.status,
-        headers: response.headers,
-        cause: bodyText || undefined,
-      })
+      throw failure
     }
     if (!response) throw new QoderLlmError('Qoder response is missing.', 'EMPTY_RESPONSE')
     if (!response.body) {
@@ -161,7 +151,7 @@ export async function* streamQoderChat(
     let finishReason: string | undefined
     const streamStartedAt = performance.now()
 
-    for await (const chunk of parseQoderSse(response.body, { onActivity: resetIdleTimer })) {
+    for await (const chunk of parseQoderSse(response.body, { onActivity: resetIdleTimer, headers: response.headers, httpStatus: response.status })) {
       chunkCount++
       if (firstChunkDurationMs === undefined) {
         firstChunkDurationMs = Math.round(performance.now() - startedAt)

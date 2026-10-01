@@ -366,9 +366,9 @@ test('parseQoderSse surfaces structured upstream error code and message from bod
     ]))) continue
   }, (error: Error) => (
     error instanceof QoderLlmError
-    && error.code === 'INVALID_REQUEST'
+    && error.code === 'PROVIDER_ERROR'
     && error.failure.status === 400
-    && error.message === 'Qoder service returned upstream error status 400: InvalidModel: model cmodel is not supported for this plan'
+    && error.message === 'Qoder service returned upstream error status 400: model cmodel is not supported for this plan (Qoder code InvalidModel).'
   ))
 })
 

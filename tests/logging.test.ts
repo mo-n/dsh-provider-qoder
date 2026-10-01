@@ -87,3 +87,16 @@ test('parsed response logging uses one event shape and redacts its result', () =
     },
   })
 })
+
+test('error diagnostics redact arbitrary credentials inside nested JSON causes and retain classification facts', () => {
+  const error = Object.assign(new Error('queued'), {
+    code: 'RATE_LIMIT', upstreamCode: '10605', source: 'sse', httpStatus: 200,
+    failure: { message: 'queued', code: 'RATE_LIMIT', status: 403, requestId: 'queue-id' },
+    cause: JSON.stringify({ code: '10605', message: JSON.stringify({ token: 'arbitrary-private-value' }) }),
+  })
+  const logged = redactLogValue(error) as Record<string, unknown>
+  assert.equal(logged.upstreamCode, '10605')
+  assert.equal(logged.httpStatus, 200)
+  assert.equal((logged.failure as Record<string, unknown>).status, 403)
+  assert.ok(!JSON.stringify(logged).includes('arbitrary-private-value'))
+})

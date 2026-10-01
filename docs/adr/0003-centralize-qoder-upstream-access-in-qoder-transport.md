@@ -14,7 +14,21 @@ Qoder transport may refresh subscriber credentials once after an HTTP 401/403
 rejection received before a model SSE stream starts, matching qodercli. This is a
 protocol authentication exchange: the prepared model body, request ID and turn
 identity are reused. Duplicate-request 403 responses (upstream code `103`) are
-not treated as expired credentials. A second rejection is returned to DSH.
+not treated as expired credentials. Model business errors are decoded before
+recovery: known quota, queue and other non-authentication rejections, as well as
+explicit unknown business codes, do not refresh credentials. Explicit subscriber
+authentication expiry (`105`) or an unclassified HTTP 401/403 may refresh once;
+custom model authentication failures do not refresh subscriber credentials.
+A second rejection is returned to DSH.
 Transport never retries an HTTP-successful model stream, including one that
 emits a later authentication or quota error. DSH continues to own model-generation
 retries. This narrowly extends the original idempotent-read retry restriction.
+
+Model HTTP and SSE rejections share business-error classification. Queue code
+`10605` alone maps to `RATE_LIMIT`; exhausted quota and entitlement limits map to
+`QUOTA`. Provider delay hints retain the greater valid body/header delay without
+clamping to force recovery. The plugin does not override DSH's default retry
+policy or add a queue loop; DSH may decline a delay exceeding its policy cap.
+Other transport capabilities retain their own error protocols. DSH owns the
+existing retry and generic quota presentation, while transport diagnostics retain
+the concrete upstream code and distinguish HTTP status from SSE business status.
