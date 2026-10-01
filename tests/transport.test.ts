@@ -420,3 +420,65 @@ test('caller cancellation during credential refresh prevents a model replay', as
   }, (error: Error) => error instanceof QoderLlmError && error.code === 'ABORTED')
   assert.equal(chats, 1)
 })
+
+for (const bodyFailure of ['oversized', 'interrupted'] as const) {
+  for (const [status, code] of [[401, 'AUTH'], [403, 'AUTH'], [429, 'RATE_LIMIT'], [503, 'SERVER']] as const) {
+    test(`HTTP ${status} retains recovery and error metadata with ${bodyFailure} diagnostics`, async () => {
+      let exchanges = 0
+      const bodies: string[] = []
+      const transport = createQoderTransport({
+        region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
+        fetch: (async (input, init) => {
+          const url = String(input)
+          if (url.includes('/exchange')) return new Response(JSON.stringify({ token: `jt-${++exchanges}` }))
+          if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user' }))
+          bodies.push(String(init?.body))
+          const body = bodyFailure === 'oversized' ? 'x'.repeat(16 * 1024 + 1)
+            : new ReadableStream({ start(controller) { controller.error(new Error('connection reset')) } })
+          return new Response(body, { status, headers: { 'retry-after': '60', 'x-request-id': 'upstream-id' } })
+        }) as typeof fetch,
+      })
+      await assert.rejects(() => collectStream(transport), (error: unknown) => {
+        assert.ok(error instanceof QoderLlmError)
+        assert.equal(error.code, code)
+        assert.equal(error.failure.status, status)
+        assert.equal(error.failure.providerRetryAfterMs, 60_000)
+        assert.equal(error.failure.requestId, 'upstream-id')
+        return true
+      })
+      const attempts = code === 'AUTH' ? 2 : 1
+      assert.equal(exchanges, attempts)
+      assert.equal(bodies.length, attempts)
+      if (attempts === 2) assert.equal(bodies[0], bodies[1])
+    })
+  }
+}
+
+for (const cancellation of ['caller', 'timeout'] as const) {
+  test(`${cancellation} cancellation while reading authentication diagnostics prevents recovery`, async () => {
+    const caller = new AbortController()
+    let exchanges = 0
+    let chats = 0
+    const transport = createQoderTransport({
+      region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
+      streamIdleTimeoutMs: 10,
+      fetch: (async (input, init) => {
+        const url = String(input)
+        if (url.includes('/exchange')) return new Response(JSON.stringify({ token: `jt-${++exchanges}` }))
+        if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user' }))
+        chats++
+        return new Response(new ReadableStream({
+          start(controller) {
+            init!.signal!.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true })
+            if (cancellation === 'caller') caller.abort()
+          },
+        }), { status: 401 })
+      }) as typeof fetch,
+    })
+    await assert.rejects(async () => {
+      for await (const _chunk of transport.stream({ ...textRequest(), signal: caller.signal })) continue
+    }, (error: unknown) => error instanceof QoderLlmError && error.code === (cancellation === 'caller' ? 'ABORTED' : 'TIMEOUT'))
+    assert.equal(chats, 1)
+    assert.equal(exchanges, 1)
+  })
+}

@@ -116,7 +116,13 @@ export async function* streamQoderChat(
       resetIdleTimer()
       if (response.ok) break
 
-      const bodyText = (await readLimitedText(response, defaultMaxErrorBytes, 'Qoder model error response')).trim()
+      let bodyText = ''
+      try {
+        bodyText = (await readLimitedText(response, defaultMaxErrorBytes, 'Qoder model error response')).trim()
+      } catch (error) {
+        if (requestController.signal.aborted) throw error
+        // Diagnostics are optional; the HTTP status still governs recovery and errors.
+      }
       let detail = bodyText.slice(0, 300)
       let duplicateRequest = false
       try {
