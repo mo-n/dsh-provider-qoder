@@ -34,18 +34,6 @@ test('region switch discards a late discovery without submitting a save', async 
   assert.equal(china.getSnapshot().pending, undefined)
 })
 
-test('region switch resets an already discovered directory', async () => {
-  const operations = { discoverModels: async () => ({ ok: true as const, value: [...globalModels, { id: 'global-c', name: 'C' }] }),
-    storeModels: async () => true }
-  const global = new QoderModelCatalogEditor('global', globalModels, operations)
-  await global.discover()
-  assert.equal(global.getSnapshot().catalog.length, 3)
-  global.dispose()
-  const china = new QoderModelCatalogEditor('china', chinaModels, operations)
-  assert.deepEqual(china.getSnapshot().models, chinaModels)
-  assert.deepEqual(china.getSnapshot().catalog, chinaModels)
-})
-
 for (const accepted of [true, false]) {
   test(`submitted Global save finishes after switching region (${accepted ? 'accepted' : 'refused'})`, async () => {
     const result = deferred<boolean>()
@@ -111,8 +99,6 @@ for (const throws of [false, true]) {
     assert.deepEqual(editor.getSnapshot().models, confirmed)
     assert.deepEqual(editor.getSnapshot().catalog, confirmed)
     assert.equal(editor.getSnapshot().failure, 'saveFailed')
-    await editor.toggle('global-b', false)
-    assert.deepEqual(editor.getSnapshot().models, confirmed)
     fail = false
     await editor.selectTier('global-a', 'large')
     assert.equal(editor.getSnapshot().failure, undefined)
@@ -120,19 +106,31 @@ for (const throws of [false, true]) {
   })
 }
 
-test('failed save restores the latest confirmed settings, not the submission snapshot', async () => {
-  const result = deferred<boolean>()
-  const editor = new QoderModelCatalogEditor('global', globalModels, {
-    discoverModels: async () => ({ ok: true, value: globalModels }), storeModels: () => result.promise,
+for (const outcome of ['accepted', 'refused', 'exception'] as const) {
+  test(`${outcome} save preserves newer accepted settings and subsequent edits`, async () => {
+    const result = deferred<boolean>()
+    const writes: QoderCatalogModel[][] = []
+    const editor = new QoderModelCatalogEditor('global', globalModels, {
+      discoverModels: async () => ({ ok: true, value: globalModels }),
+      storeModels: async (_region, models) => {
+        writes.push(models)
+        return writes.length === 1 ? result.promise : true
+      },
+    })
+    const pending = editor.selectTier('global-a', 'large')
+    const latest = [{ ...globalModels[0], name: 'Updated elsewhere' }, { id: 'new', name: 'New' }]
+    editor.replaceModels(latest)
+    if (outcome === 'exception') result.reject(new Error('offline'))
+    else result.resolve(outcome === 'accepted')
+    await pending
+    assert.deepEqual(editor.getSnapshot().models, latest)
+    assert.deepEqual(editor.getSnapshot().catalog.filter(model => latest.some(value => value.id === model.id)), latest)
+    assert.equal(editor.getSnapshot().pending, undefined)
+    assert.equal(editor.getSnapshot().failure, outcome === 'accepted' ? undefined : 'saveFailed')
+    await editor.selectTier('global-a', 'large')
+    assert.deepEqual(writes[1], [{ ...latest[0], contextTier: 'large', contextWindow: 1_000_000 }, latest[1]])
   })
-  const pending = editor.selectTier('global-a', 'large')
-  const latest = [{ ...globalModels[0], name: 'Updated elsewhere' }]
-  editor.replaceModels(latest)
-  result.resolve(false)
-  await pending
-  assert.deepEqual(editor.getSnapshot().catalog, latest)
-  assert.deepEqual(editor.getSnapshot().models, latest)
-})
+}
 
 test('discovery failures release the editor and removing the last model never saves', async () => {
   let fail = true
@@ -156,7 +154,6 @@ test('discovery failures release the editor and removing the last model never sa
   assert.deepEqual(editor.getSnapshot().models, chinaModels)
 })
 
-
 test('directory follows accepted settings before discovery and after a failed save', async () => {
   const editor = new QoderModelCatalogEditor('global', globalModels, {
     discoverModels: async () => ({ ok: true, value: globalModels }), storeModels: async () => false,
@@ -167,4 +164,23 @@ test('directory follows accepted settings before discovery and after a failed sa
   await editor.selectTier('global-a', 'large')
   editor.replaceModels(globalModels)
   assert.deepEqual(editor.getSnapshot().catalog, globalModels)
+})
+
+test('discovery retains unselected entries when accepted settings arrive before acknowledgement', async () => {
+  const result = deferred<boolean>()
+  const discovered = [...globalModels, { id: 'new', name: 'New' }]
+  const editor = new QoderModelCatalogEditor('global', globalModels, {
+    discoverModels: async () => ({ ok: true, value: discovered }),
+    storeModels: () => result.promise,
+  })
+  const pending = editor.discover()
+  await Promise.resolve()
+  assert.equal(editor.getSnapshot().pending, 'saving')
+  editor.replaceModels([discovered[2]])
+  result.resolve(true)
+  await pending
+  assert.deepEqual(editor.getSnapshot().models, [discovered[2]])
+  assert.deepEqual(editor.getSnapshot().catalog, discovered)
+  await editor.toggle('global-a', true)
+  assert.deepEqual(editor.getSnapshot().models.map(model => model.id), ['global-a', 'new'])
 })

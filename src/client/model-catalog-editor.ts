@@ -108,6 +108,7 @@ export class QoderModelCatalogEditor {
       return
     }
     const submitted = models.map(cloneCatalogModel)
+    const confirmedAtSubmission = this.confirmed
     this.publish({ ...this.snapshot, pending: 'saving', failure: undefined, failureMessage: undefined })
     let saved = false
     try {
@@ -118,8 +119,14 @@ export class QoderModelCatalogEditor {
     }
     if (!this.active) return
     if (saved) {
-      this.confirmed = submitted
-      this.publish({ models: submitted, catalog, unavailableIds })
+      // A settings notification received during the save is more authoritative
+      // than its boolean acknowledgement. Keep discovered, unselected entries too.
+      if (this.confirmed === confirmedAtSubmission) this.confirmed = submitted
+      const accepted = new Map(this.confirmed.map(model => [model.id, model]))
+      const directory = new Map(catalog.map(model => [model.id, model]))
+      for (const [id, model] of accepted) directory.set(id, model)
+      this.publish({ models: this.confirmed, catalog: [...directory.values()],
+        unavailableIds: new Set([...unavailableIds].filter(id => !accepted.has(id))) })
     } else {
       this.publish({ models: this.confirmed, catalog: this.confirmed, unavailableIds: new Set(), failure: 'saveFailed' })
     }
