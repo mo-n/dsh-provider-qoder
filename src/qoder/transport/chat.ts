@@ -10,6 +10,7 @@ import type { QoderCatalogModel } from '../catalog.ts'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
 import type { QoderRegion } from '../region.ts'
 import { getQoderChatUrl } from './endpoints.ts'
+import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
 import { redactLogValue, type QoderLogger } from './logging.ts'
 import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBody } from './wire/encoding.ts'
@@ -23,6 +24,7 @@ export interface QoderChatDependencies {
   region: QoderRegion
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
+  refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
 }
 
 function aborted(message: string): QoderLlmError {
@@ -37,6 +39,7 @@ export async function* streamQoderChat(
   dependencies: QoderChatDependencies,
 ): AsyncGenerator<StreamChunk> {
   const request = await buildQoderRequestBody(options, credentials.userID, messages, model)
+  request.session_type = dependencies.region === 'china' ? 'qoderclicn' : 'qodercli'
   const encodedBody = qoderEncodeBody(JSON.stringify(request))
   const encodedBytes = Buffer.from(encodedBody, 'utf8')
   const chatUrl = getQoderChatUrl(dependencies.region)
@@ -50,7 +53,7 @@ export async function* streamQoderChat(
   let lastActivityAt = startedAt
   const onCallerAbort = (): void => requestController.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', onCallerAbort, { once: true })
-  const headerTimer = setTimeout(() => {
+  let headerTimer = setTimeout(() => {
     headerTimedOut = true
     requestController.abort('response header timeout')
   }, dependencies.responseHeaderTimeoutMs)
@@ -75,56 +78,80 @@ export async function* streamQoderChat(
       contextTier: markedTiers.length === 1 ? markedTiers[0][0] : null,
       context_length: request.parameters.context_length ?? null,
     }))
-    const response = await dependencies.fetch(chatUrl, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'accept': 'text/event-stream',
-        'cache-control': 'no-cache',
-        'accept-encoding': 'identity',
-        'x-model-key': options.model || 'cmodel',
-        'x-model-source': model?.source || 'system',
-        ...attributionHeaders(),
-        ...buildAuthHeaders(encodedBytes, chatUrl, credentials),
-      },
-      body: encodedBytes,
-      signal: requestController.signal,
-    })
-    clearTimeout(headerTimer)
-    reqId = qoderRequestId(response.headers)
-    dependencies.logger?.debug?.('[Qoder Stream] Response headers received', {
-      region: dependencies.region,
-      status: response.status,
-      durationMs: Math.round(performance.now() - startedAt),
-      ...reqId === undefined ? {} : { requestId: reqId },
-    })
-    resetIdleTimer()
-    if (!response.ok) {
+    let response: Response | undefined
+    let activeCredentials = credentials
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (options.signal?.aborted) throw aborted('Request was aborted.')
+      if (attempt > 0) {
+        headerTimer = setTimeout(() => {
+          headerTimedOut = true
+          requestController.abort('response header timeout')
+        }, dependencies.responseHeaderTimeoutMs)
+      }
+      response = await dependencies.fetch(chatUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'accept': 'text/event-stream',
+          'cache-control': 'no-cache',
+          'connection': 'keep-alive',
+          'accept-encoding': 'identity',
+          'x-model-key': options.model || 'cmodel',
+          'x-model-source': model?.source || 'system',
+          ...attributionHeaders(),
+          ...buildAuthHeaders(encodedBytes, chatUrl, activeCredentials),
+        },
+        body: encodedBytes,
+        signal: requestController.signal,
+      })
+      clearTimeout(headerTimer)
+      reqId = qoderRequestId(response.headers)
+      dependencies.logger?.debug?.('[Qoder Stream] Response headers received', {
+        region: dependencies.region,
+        status: response.status,
+        attempt: attempt + 1,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...reqId === undefined ? {} : { requestId: reqId },
+      })
+      resetIdleTimer()
+      if (response.ok) break
+
       let bodyText = ''
       try {
-        bodyText = (await response.text()).trim()
+        bodyText = (await readLimitedText(response, defaultMaxErrorBytes, 'Qoder model error response')).trim()
+      } catch (error) {
+        if (requestController.signal.aborted) throw error
+        // Diagnostics are optional; the HTTP status still governs recovery and errors.
+      }
+      let detail = bodyText.slice(0, 300)
+      let duplicateRequest = false
+      try {
+        const parsed = JSON.parse(bodyText) as Record<string, unknown>
+        duplicateRequest = response.status === 403 && String(parsed.code) === '103'
+        const message = typeof parsed.message === 'string' ? parsed.message.trim() : ''
+        const code = typeof parsed.code === 'string' || typeof parsed.code === 'number' ? String(parsed.code) : ''
+        if (message) detail = code ? `${code}: ${message}` : message
       } catch {
-        // ignore body read failure
+        // Non-JSON errors still retain bounded provider diagnostics.
       }
-      let detail = ''
-      if (bodyText) {
-        try {
-          const parsed = JSON.parse(bodyText) as Record<string, unknown>
-          const msg = typeof parsed.message === 'string' && parsed.message.trim() ? parsed.message.trim() : undefined
-          const code = typeof parsed.code === 'string' && parsed.code.trim() ? parsed.code.trim() : undefined
-          if (code && msg) detail = `: ${code}: ${msg}`
-          else if (msg) detail = `: ${msg}`
-          else detail = `: ${bodyText.slice(0, 300)}`
-        } catch {
-          detail = `: ${bodyText.slice(0, 300)}`
+      // Only an HTTP authentication rejection before SSE starts can be retried.
+      // Reuse the prepared envelope and turn identity; never replay a partial stream.
+      if (attempt === 0 && !duplicateRequest && dependencies.refreshCredentials
+        && (response.status === 401 || response.status === 403)) {
+        if (idleTimer !== undefined) clearTimeout(idleTimer)
+        activeCredentials = await dependencies.refreshCredentials(activeCredentials, options.signal)
+        if (activeCredentials.userID !== credentials.userID) {
+          throw new QoderLlmError('Qoder subscriber identity changed during authentication recovery.', 'AUTH')
         }
+        continue
       }
-      throw qoderHttpError(`Qoder upstream service returned HTTP ${response.status}${detail}.`, {
+      throw qoderHttpError(`Qoder upstream service returned HTTP ${response.status}${detail ? `: ${detail}` : ''}.`, {
         status: response.status,
         headers: response.headers,
         cause: bodyText || undefined,
       })
     }
+    if (!response) throw new QoderLlmError('Qoder response is missing.', 'EMPTY_RESPONSE')
     if (!response.body) {
       throw new QoderLlmError('Qoder response contains no readable body stream.', 'EMPTY_RESPONSE')
     }

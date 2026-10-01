@@ -1,17 +1,27 @@
 import crypto from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import type { QoderRegion } from '../region.ts'
 
-function defaultMachineIdPaths(): string[] {
-  return [
-    join(homedir(), '.qoder', '.auth', 'machine_id'),
-    join(homedir(), '.dsh', 'qoder', 'machine_id'),
-  ]
+/** Match the native CLI's region-specific config directory overrides. */
+export function qoderMachineIdPaths(
+  region: QoderRegion = 'global',
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+): string[] {
+  const prefix = region === 'china' ? 'QODERCN_' : 'QODER_'
+  const cliHome = env[`${prefix}CLI_HOME`] ?? env.GEMINI_CLI_HOME ?? home
+  const configDir = env[`${prefix}CONFIG_DIR`]
+  const cliDir = configDir ? resolve(configDir) : join(cliHome, region === 'china' ? '.qoder-cn' : '.qoder')
+  return [join(cliDir, '.auth', 'machine_id'), join(home, '.dsh', 'qoder', 'machine_id')]
 }
 
+// An unwritable fallback still needs one stable identity for this process.
+const ephemeralMachineIds = new Map<string, string>()
+
 /** Read Qoder's machine id or create the DSH-owned fallback. */
-export function getMachineId(paths: readonly string[] = defaultMachineIdPaths()): string {
+export function getMachineId(paths: readonly string[] = qoderMachineIdPaths()): string {
   for (const path of paths) {
     if (!existsSync(path)) continue
     try {
@@ -22,8 +32,8 @@ export function getMachineId(paths: readonly string[] = defaultMachineIdPaths())
     }
   }
 
-  const machineId = crypto.randomUUID()
   const savePath = paths.at(-1)
+  const machineId = (savePath === undefined ? undefined : ephemeralMachineIds.get(savePath)) ?? crypto.randomUUID()
   if (savePath !== undefined) {
     try {
       mkdirSync(dirname(savePath), { recursive: true })
@@ -38,5 +48,6 @@ export function getMachineId(paths: readonly string[] = defaultMachineIdPaths())
       }
     }
   }
+  if (savePath !== undefined) ephemeralMachineIds.set(savePath, machineId)
   return machineId
 }

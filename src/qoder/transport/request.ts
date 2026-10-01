@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
 import { logParsedResponse, redactLogPayload, type QoderLogger } from './logging.ts'
-import { defaultUserAgent, qoderClientType } from './wire/cosy.ts'
+import { defaultUserAgent, qoderClientType, qoderIdeVersion, qoderMachineOs } from './wire/cosy.ts'
 
 export const defaultMetadataTimeoutMs = 15_000
 export const defaultResponseHeaderTimeoutMs = 60_000
@@ -158,7 +158,6 @@ export interface OpenApiJsonRequestOptions {
   url: string
   method?: 'GET' | 'POST'
   token?: string
-  machineId?: string
   body?: unknown
   headers?: Record<string, string>
   signal?: AbortSignal
@@ -187,16 +186,13 @@ export async function openApiJsonRequest<T>(
     const headers: Record<string, string> = {
       accept: 'application/json',
       'user-agent': options.userAgent ?? defaultUserAgent,
-      'cosy-version': '1.0.1',
+      'cosy-version': qoderIdeVersion,
+      'cosy-machineos': qoderMachineOs(),
       'cosy-clienttype': qoderClientType,
       ...options.headers,
     }
     if (options.token) {
       headers.authorization = `Bearer ${options.token}`
-    }
-    if (options.machineId) {
-      headers['Cosy-MachineToken'] = options.machineId
-      headers['Cosy-MachineType'] = 'host'
     }
     let bodyText: string | undefined
     if (options.body !== undefined) {

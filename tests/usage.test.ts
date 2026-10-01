@@ -228,7 +228,7 @@ test('QoderUsageReader shares a concurrent quota cache miss', async () => {
   assert.equal(first, second)
 })
 
-test('QoderUsageReader reads subscriber plan and user status with machine fingerprint headers', async () => {
+test('QoderUsageReader reads subscriber plan and user status without fabricating UMID headers', async () => {
   let statusHeaders: Record<string, string> | undefined
   let planHeaders: Record<string, string> | undefined
   let quotaHeaders: Record<string, string> | undefined
@@ -308,8 +308,8 @@ test('QoderUsageReader reads subscriber plan and user status with machine finger
 
   assert.equal(planHeaders?.authorization, 'Bearer jt-plan-test')
   assert.equal(statusHeaders?.authorization, 'Bearer jt-plan-test')
-  assert.equal(statusHeaders?.['Cosy-MachineToken'], 'umid-fingerprint-test')
-  assert.equal(statusHeaders?.['Cosy-MachineType'], 'host')
+  assert.equal(statusHeaders?.['Cosy-MachineToken'], undefined)
+  assert.equal(statusHeaders?.['Cosy-MachineType'], undefined)
   assert.equal(planHeaders?.['cosy-clienttype'], '5')
   assert.equal(statusHeaders?.['cosy-clienttype'], '5')
   assert.equal(quotaHeaders?.['cosy-clienttype'], '5')

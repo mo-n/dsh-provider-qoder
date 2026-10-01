@@ -71,15 +71,13 @@ test('signs the multipart body length rather than the raw bytes', async () => {
   })
 
   await uploader.resolveImageUrl(requestImage(), credentials)
-  // The Qoder client passes String(body.length) to prepareRequest, so the
-  // signed body hash must cover that decimal string, never the image bytes.
-  const expected = createHashHex(String(bodyLength))
-  assert.equal(headers['Cosy-Bodyhash'], expected)
-  assert.equal(headers['Cosy-Bodylength'], String(String(bodyLength).length))
-  assert.equal(headers['Cosy-Sigpath'], '/api/v2/image/upload')
-  assert.match(headers['Content-Type'], /^multipart\/form-data; boundary=----qodercli-/u)
-  assert.equal(headers['Content-Length'], String(bodyLength))
-  assert.ok(headers['AI-CLIENT-TIMESTAMP'])
+  // Validate the actual signature rather than non-CLI diagnostic headers.
+  const [, payload, signature] = headers.Authorization.split('.')
+  assert.equal(signature, createHashHex([
+    payload, headers['Cosy-Key'], headers['Cosy-Date'], String(bodyLength),
+    '/api/v2/image/upload',
+  ].join('\n')))
+
 })
 
 function createHashHex(value: string): string {

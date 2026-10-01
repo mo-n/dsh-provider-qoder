@@ -337,7 +337,7 @@ export class QoderUsageReader {
     const [usage, plan, status] = await Promise.all([
       retryMetadataRead(signal, () => this.fetchUsage(creds.authToken, signal)),
       this.safeFetchPlan(creds.authToken, signal),
-      this.safeFetchStatus(creds.authToken, creds.machineID, signal),
+      this.safeFetchStatus(creds.authToken, signal),
     ])
 
     const accountInfo: QoderAccountInfo = {
@@ -423,13 +423,11 @@ export class QoderUsageReader {
 
   private async fetchStatus(
     jobToken: string,
-    machineId?: string,
     signal?: AbortSignal,
   ): Promise<QoderSubscriberStatus | undefined> {
     const data = await openApiJsonRequest<unknown>(this.fetchImpl, {
       url: getQoderUserStatusUrl(this.region),
       token: jobToken,
-      machineId,
       signal,
       timeoutMs: this.timeoutMs,
       logger: this.logger,
@@ -441,11 +439,10 @@ export class QoderUsageReader {
 
   private async safeFetchStatus(
     jobToken: string,
-    machineId?: string,
     signal?: AbortSignal,
   ): Promise<QoderSubscriberStatus | undefined> {
     try {
-      return await this.fetchStatus(jobToken, machineId, signal)
+      return await this.fetchStatus(jobToken, signal)
     } catch (error) {
       if (signal?.aborted) throw error
       this.logger?.warn?.('[Qoder Status] Failed to load user status (degraded)', error instanceof Error ? error.message : error)

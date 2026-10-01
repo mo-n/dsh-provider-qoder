@@ -7,3 +7,14 @@ Each transport instance binds one immutable Qoder service region. Model catalogs
 The original capabilities were model streaming, model discovery, and account reading. [ADR-0004](0004-publish-qoder-multimodal-input-through-the-center-service.md) adds image publication inside model-request preparation, and [ADR-0006](0006-route-web-search-by-initiating-model.md) adds web search. Both preserve the same ownership boundary; authentication refresh and retry behavior for those operations are defined separately from model-generation retries.
 
 Connection pools, background refresh, circuit breakers, dynamic rate limiting, and full tracing remain outside scope until demonstrated needs justify them.
+
+## Authentication recovery before model generation
+
+Qoder transport may refresh subscriber credentials once after an HTTP 401/403
+rejection received before a model SSE stream starts, matching qodercli. This is a
+protocol authentication exchange: the prepared model body, request ID and turn
+identity are reused. Duplicate-request 403 responses (upstream code `103`) are
+not treated as expired credentials. A second rejection is returned to DSH.
+Transport never retries an HTTP-successful model stream, including one that
+emits a later authentication or quota error. DSH continues to own model-generation
+retries. This narrowly extends the original idempotent-read retry restriction.

@@ -93,7 +93,7 @@ export interface QoderWireRequest {
   chat_prompt: string
   image_urls: null
   aliyun_user_type: string
-  system: string
+  system: QoderWireTextPart[]
   messages: QoderWireMessage[]
   tools: QoderWireTool[]
   parameters: {
