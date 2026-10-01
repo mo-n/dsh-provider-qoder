@@ -47,6 +47,10 @@ test('client settings mounts through configForms and reports rejected writes', a
       writes.push([field, value])
       return accepted
     },
+    mutate: async (ops: unknown) => {
+      writes.push(ops)
+      return accepted
+    },
   }
   const ctx = {
     configForms: { get: (id: string) => { namespace = id; return form } },
@@ -71,6 +75,9 @@ test('client settings mounts through configForms and reports rejected writes', a
   assert.equal(await operations.storeModels('china', []), false)
   assert.equal(await operations.storeWebSearchMode('disabled'), false)
   assert.equal(writes.length, 4)
+  assert.deepEqual(JSON.parse(JSON.stringify(writes[2])), [{
+    op: 'set', path: ['modelsByRegion', 'china'], value: [],
+  }])
 })
 
 test('client settings uses declared services on guarded context', async () => {

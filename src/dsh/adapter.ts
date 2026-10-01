@@ -16,10 +16,10 @@ import {
   defaultModels,
   effectiveContextWindow,
   formatModelRate,
-  mergeQoderDiscoveryMetadata,
   type QoderCatalogModel,
 } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
+import { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
@@ -36,6 +36,7 @@ export interface QoderAdapterAgentStore {
 
 export interface QoderAdapterOptions {
   resolveTransport: () => QoderTransport
+  catalog?: QoderCatalogLifecycle
   region?: () => QoderRegion
   models?: readonly QoderCatalogModel[]
   providerId?: string
@@ -43,7 +44,7 @@ export interface QoderAdapterOptions {
   sessions?: QoderAdapterSessionStore
   agents?: QoderAdapterAgentStore
   /**
-   * Publish accepted automatic discoveries to the host's settings catalog.
+   * Publish accepted discoveries to the host's settings catalog.
    *
    * The return value is ignored: a catalog read never waits for this
    * notification, so a host that persists settings owns its own background
@@ -70,12 +71,7 @@ export class QoderAdapter extends LlmAdapter {
   private catalogModels: readonly QoderCatalogModel[]
   private readonly providerId: string
   private readonly providerName: string
-  private readonly onModelsDiscovered?: QoderAdapterOptions['onModelsDiscovered']
-  private readonly discoveries = new WeakMap<QoderTransport, {
-    models?: readonly QoderCatalogModel[]
-    expiresAt: number
-    inflight?: Promise<void>
-  }>()
+  private readonly catalog: QoderCatalogLifecycle
 
   private historyRegion: QoderRegion
   private historyRegionChanged = false
@@ -90,8 +86,13 @@ export class QoderAdapter extends LlmAdapter {
     this.catalogModels = options.models && options.models.length > 0 ? options.models : defaultModels
     this.providerId = options.providerId ?? QODER_PROVIDER_ID
     this.providerName = options.providerName ?? 'Qoder'
-    this.onModelsDiscovered = options.onModelsDiscovered
     this.region = options.region ?? (() => 'global')
+    this.catalog = options.catalog ?? new QoderCatalogLifecycle({
+      resolveTransport: this.resolveTransport,
+      region: this.region,
+      configuredModels: () => this.catalogModels,
+      onDiscovered: options.onModelsDiscovered,
+    })
     this.historyRegion = this.region()
     this.sessions = options.sessions
     this.agents = options.agents
@@ -137,64 +138,18 @@ export class QoderAdapter extends LlmAdapter {
     return { id: provider, name: this.providerName }
   }
 
-  /** Refresh advertised metadata on catalog reads, sharing a five-minute transport-local cache. */
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    const transport = this.resolveTransport()
-    let cached = this.discoveries.get(transport)
-    if (cached === undefined) {
-      cached = { expiresAt: 0 }
-      this.discoveries.set(transport, cached)
-    }
-    const entry = cached
-    if (entry.inflight === undefined && Date.now() >= entry.expiresAt) {
-      entry.inflight = Promise.resolve().then(() => transport.discoverModels()).then(models => {
-        // Explicit discovery replaces this entry; a region switch replaces the transport.
-        // Neither obsolete result may overwrite the host's current settings catalog.
-        if (this.discoveries.get(transport) !== entry || this.resolveTransport() !== transport) return
-        entry.models = models
-        entry.expiresAt = Date.now() + 5 * 60 * 1000
-        this.publishDiscoveredModels(transport, models)
-      }).catch(() => {
-        // Discovery is advisory: retain the configured or last advertised models on failure.
-      }).finally(() => { entry.inflight = undefined })
-    }
-    await entry.inflight
-    if (this.resolveTransport() !== transport) return this.listModels(provider)
+    await this.catalog.refresh()
     return this.effectiveModels().map(model => modelInfo(provider, model))
   }
 
-  /**
-   * Announce one accepted discovery without joining the catalog read.
-   *
-   * Persisting metadata can queue behind unrelated settings writes, so awaiting
-   * it here would stall every `listModels` call on settings storage.
-   */
-  private publishDiscoveredModels(transport: QoderTransport, models: readonly QoderCatalogModel[]): void {
-    try {
-      void Promise.resolve(this.onModelsDiscovered?.(transport, models)).catch(() => {})
-    } catch {
-      // Discovery is advisory: a notification failure never affects catalog reads.
-    }
-  }
-
   private effectiveModels(): readonly QoderCatalogModel[] {
-    return mergeQoderDiscoveryMetadata(
-      this.catalogModels,
-      this.discoveries.get(this.resolveTransport())?.models ?? [],
-    )
+    return this.catalog.models()
   }
 
   replaceModels(models: readonly QoderCatalogModel[]): void {
     this.observeRegion()
     this.catalogModels = models
-  }
-
-  /** Publish an explicit discovery without letting older in-flight reads overwrite it. */
-  updateDiscoveredModels(transport: QoderTransport, models: readonly QoderCatalogModel[]): void {
-    this.discoveries.set(transport, {
-      models,
-      expiresAt: Date.now() + 5 * 60 * 1000,
-    })
   }
 
   override resolveModel(

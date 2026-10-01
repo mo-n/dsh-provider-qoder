@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
-import { modelsOf, regionOf, type QoderCredentialInjected, type QoderCredentialStatus } from './credential-operations.ts'
+import {
+  modelsOf,
+  regionOf,
+  type QoderCredentialInjected,
+  type QoderCredentialStatus,
+  type QoderModelSettingsSnapshot,
+} from './credential-operations.ts'
 import { resolveLocalizedText } from './locales.ts'
-import { QoderModelCatalog, validateModelCatalog } from './QoderModelCatalog.tsx'
+import { QoderModelCatalog } from './QoderModelCatalog.tsx'
 import css from './QoderCredentialCard.module.css'
 
 export type QoderAccountCardProps = SettingsSectionOwnerProps & QoderCredentialInjected
@@ -36,23 +41,37 @@ function formatResetDate(dateStr?: string): string | undefined {
 
 /**
  * Settings card for the Qoder subscription: credential state, subscriber
- * profile, and every quota block the provider reports.
+ * profile, and every quota block the provider reports. Region changes remount
+ * the account state before any old profile can be displayed.
  */
-export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCardProps) {
+export function QoderAccountCard(props: QoderAccountCardProps) {
+  const modelSnapshot = useSyncExternalStore(
+    props.operations.subscribeModels,
+    props.operations.getModelSnapshot,
+    props.operations.getModelSnapshot,
+  )
+  return <RegionAccountCard key={regionOf(modelSnapshot.value)} {...props} modelSnapshot={modelSnapshot} />
+}
+
+function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: QoderAccountCardProps & {
+  modelSnapshot: QoderModelSettingsSnapshot
+}) {
   const [credentialState, setCredentialState] = useState<CredentialViewState>({ status: 'loading' })
   const [accountState, setAccountState] = useState<AccountViewState>({ status: 'idle' })
   const [refreshing, setRefreshing] = useState(false)
   const [credentialRevision, setCredentialRevision] = useState(0)
-  const [modelSaveError, setModelSaveError] = useState<string | undefined>()
   const latestAccountRequest = useRef(0)
-  const modelSnapshot = useSyncExternalStore(
-    operations.subscribeModels,
-    operations.getModelSnapshot,
-    operations.getModelSnapshot,
-  )
+  const latestCredentialRequest = useRef(0)
+  useLayoutEffect(() => () => {
+    // Invalidate reads at unmount, before late results can publish or clear pending state.
+    latestAccountRequest.current++
+    latestCredentialRequest.current++
+  }, [])
 
   const loadCredential = useCallback(async () => {
+    const requestId = ++latestCredentialRequest.current
     const info = await operations.describe()
+    if (requestId !== latestCredentialRequest.current) return
     setCredentialState(info === undefined ? { status: 'failed' } : { status: 'ready', info })
   }, [operations])
 
@@ -303,20 +322,6 @@ export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCa
   const currentModels = modelsOf(modelSnapshot.value, currentRegion)
   const canModifyModels = modelSnapshot.status === 'ready' && modelSnapshot.writable
 
-  const handleModelsChange = async (models: QoderCatalogModel[]) => {
-    if (!canModifyModels) return
-    setModelSaveError(undefined)
-    const failure = validateModelCatalog(models)
-    if (failure) {
-      setModelSaveError(t(failure))
-      return
-    }
-    const saved = await operations.storeModels(currentRegion, models)
-    if (!saved) {
-      setModelSaveError(t('saveFailed'))
-    }
-  }
-
   const renderModelCatalogSection = () => {
     return (
       <details className={css.customized}>
@@ -333,16 +338,15 @@ export function QoderAccountCard({ operations, t, activeLocale }: QoderAccountCa
               ? <p className={css.error}>{t('modelsUnavailable')}</p>
               : (
                 <QoderModelCatalog
+                  region={currentRegion}
                   operations={operations}
                   models={currentModels}
                   disabled={!canModifyModels}
                   fetchDisabled={!configured}
                   hideTitle
                   t={t}
-                  onChange={(models) => { void handleModelsChange(models) }}
                 />
               )}
-          {modelSaveError ? <p className={css.error} role="alert">{modelSaveError}</p> : null}
         </div>
       </details>
     )

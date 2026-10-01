@@ -706,3 +706,53 @@ test('the settings service tolerates updates with frozen models containing conte
     1_000_000,
   )
 })
+
+
+test('explicit discovery retains fresh metadata when storage fails and settings updates retry it', async (t) => {
+  t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Remote name', priceFactor: 4, supportsImages: true },
+  ])
+  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: {
+    global: [{ id: 'chosen', name: 'User name', priceFactor: 1 }],
+  } })
+  settings.onPersist = async () => { throw new Error('Storage unavailable') }
+  const discovered = await ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID })
+  assert.equal(discovered.length, 1)
+  await drain()
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
+  assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
+  settings.onPersist = undefined
+  await ctx.settings.update(ns, { webSearchMode: 'always' })
+  await drain()
+  const stored = memorySettings(ctx).get(ns)
+  assert.equal(stored?.modelsByRegion?.global?.[0].priceFactor, 4)
+  assert.equal(stored?.modelsByRegion?.global?.[0].name, 'User name')
+  assert.equal(stored?.webSearchMode, 'always')
+})
+
+test('a late explicit discovery cannot update or persist after switching region away and back', async (t) => {
+  let finish!: (models: readonly QoderCatalogModel[]) => void
+  const started = new Promise<void>(resolve => {
+    t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', () => {
+      resolve()
+      return new Promise<readonly QoderCatalogModel[]>(complete => { finish = complete })
+    })
+  })
+  const { ctx, ns } = await modelRuntime({ modelsByRegion: {
+    global: [{ id: 'chosen', name: 'Global', priceFactor: 1 }],
+    china: [{ id: 'chosen', name: 'China', priceFactor: 2 }],
+  } })
+  const pending = ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID })
+  await started
+  await ctx.settings.update(ns, { region: 'china' })
+  await drain()
+  await ctx.settings.update(ns, { region: 'global' })
+  await drain()
+  finish([{ id: 'chosen', name: 'Obsolete', priceFactor: 9, supportsImages: true }])
+  await pending
+  await drain()
+  assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
+  assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.china?.[0].priceFactor, 2)
+  const resolved = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'chosen' })
+  assert.deepEqual(resolved.inputModalities, ['text'])
+})

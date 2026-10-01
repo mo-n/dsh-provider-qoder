@@ -4,15 +4,12 @@ import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-web'
-import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { initiatingModelProvider, QoderSearchProvider, shouldUseQoderSearch } from './search-provider.ts'
-import {
-  hasSameQoderDiscoveryMetadata,
-  mergeQoderDiscoveryMetadata,
-  type QoderCatalogModel,
-} from '../qoder/catalog.ts'
+import { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
+import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { resolveManagedQoderPat } from './credential.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
@@ -23,7 +20,7 @@ import {
   type QoderTransport,
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
-import { Config, modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } from './config.ts'
+import { modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } from './config.ts'
 import { bindQoderSettings } from './settings.ts'
 import { isQoderRpcEndpoint, type QoderRpcErrorCode } from './rpc-channel.ts'
 import { registerQoderRpc, type QoderRpcHandler } from './rpc.ts'
@@ -101,12 +98,6 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     webSearchMode: config.webSearchMode ?? 'auto',
   }
   let current = (): QoderConfig => baseConfig
-  let persistDiscoveredModels = async (_region: QoderRegion): Promise<void> => {}
-  const discoveredCatalogs: Record<QoderRegion, readonly QoderCatalogModel[]> = {
-    global: [],
-    china: [],
-  }
-
   const createTransport = (
     region: QoderRegion,
     streamIdleTimeoutMs: number,
@@ -128,7 +119,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     const region = value.region ?? 'global'
     return {
       region,
-      models: mergeQoderDiscoveryMetadata(modelsFor(value, region), discoveredCatalogs[region]),
+      models: modelsFor(value, region),
       streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
       responseHeaderTimeoutMs: value.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
       preserveThinking: value.preserveThinking ?? true,
@@ -149,25 +140,22 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     responseHeaderTimeoutMs: initial.responseHeaderTimeoutMs,
     preserveThinking: initial.preserveThinking,
   }
+  const catalog = new QoderCatalogLifecycle({
+    resolveTransport: () => activeTransport,
+    region: () => activeTransportConfig.region,
+    configuredModels: region => modelsFor(current(), region),
+    onDiscovered: () => registration.replace([providerQoder]),
+    onPersistenceError: error => logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error)),
+  })
+  ctx.effect(() => () => catalog.dispose(), 'provider-qoder: catalog lifecycle')
   const adapter = new QoderAdapter({
     resolveTransport: () => activeTransport,
-    models: initial.models,
+    catalog,
     region: () => activeTransportConfig.region,
     providerId: providerQoder,
     providerName: 'Qoder',
     sessions: ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined,
     agents: ctx.get('agents') as import('./adapter.ts').QoderAdapterAgentStore | undefined,
-    onModelsDiscovered: (transport, models) => {
-      if (transport !== activeTransport || ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
-      const region = activeTransportConfig.region
-      discoveredCatalogs[region] = models
-      refreshAdapter()
-      // Persist in the background so a queued settings write never stalls catalog reads.
-      void persistDiscoveredModels(region).catch((error) => {
-        // A settings failure must not discard fresh metadata or break model reads.
-        logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error))
-      })
-    },
   })
 
   const registration = ctx.llm.registerAdapter([providerQoder], adapter)
@@ -190,6 +178,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
         preserveThinking: next.preserveThinking,
       }
     }
+    catalog.observeTransport()
     adapter.replaceModels(next.models)
     registration.replace([providerQoder])
   }
@@ -207,49 +196,27 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       },
     })
     current = () => scope.get()
-    let bindingActive = true
-    const persistCatalog = async (region: QoderRegion): Promise<void> => {
-      while (bindingActive && ctx.fiber.state !== fiberUnloading && ctx.fiber.state !== fiberDisposed) {
-        if (!settingsCtx.settings.writable || discoveredCatalogs[region].length === 0) return
+    catalog.bindSettings({
+      read: region => {
+        if (!settingsCtx.settings.writable) return undefined
         const snapshot = settingsCtx.settings.describe().find(section => section.ns === namespace)
-        if (snapshot === undefined) return
-        const selected = modelsFor(snapshot.value as QoderConfig, region)
-        // Compare the stored schema shape (including empty collection defaults) so
-        // an unchanged catalog does not trigger another settings write on every read.
-        const enriched = modelsFor(Config({
-          modelsByRegion: { [region]: mergeQoderDiscoveryMetadata(selected, discoveredCatalogs[region]) },
-        }), region)
-        if (hasSameQoderDiscoveryMetadata(selected, enriched)) return
-        try {
-          // Discovery is advisory. Never overwrite a user's concurrent model selection
-          // or replay a stale snapshot of another region while persisting metadata.
-          await settingsCtx.settings.update(namespace, {
-            modelsByRegion: { [region]: enriched },
-          }, snapshot.revision)
-          return
-        } catch (error) {
-          if (!(error instanceof SettingsConflictError)) throw error
-          // Reconcile again against the committed selection and latest discovery.
+        return snapshot === undefined ? undefined : {
+          models: modelsFor(snapshot.value as QoderConfig, region), revision: snapshot.revision,
         }
-      }
-    }
-    persistDiscoveredModels = persistCatalog
-    refreshAdapter()
-
-    scope.watch(async () => {
-      if (!bindingActive || ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
-      refreshAdapter()
-      await persistCatalog(scope.get().region ?? 'global')
+      },
+      write: (region, models, revision) => settingsCtx.settings.update(namespace, {
+        modelsByRegion: { [region]: models },
+      }, revision),
     })
-    // Settings may attach after an automatic discovery has already warmed the cache.
-    for (const region of ['global', 'china'] as const) {
-      if (discoveredCatalogs[region].length === 0) continue
-      void persistCatalog(region).catch(error => logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error)))
-    }
-    settingsCtx.effect(() => () => {
-      bindingActive = false
+    refreshAdapter()
+    scope.watch(() => {
       if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
-      persistDiscoveredModels = async () => {}
+      refreshAdapter()
+      catalog.retryPersistence()
+    })
+    settingsCtx.effect(() => () => {
+      catalog.bindSettings(undefined)
+      if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
       current = () => baseConfig
       refreshAdapter()
     })
@@ -257,7 +224,6 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
 
   const discoverModels = async (signal?: AbortSignal, suppliedPat?: string): Promise<readonly QoderCatalogModel[]> => {
     const snapshot = resolveConfig()
-    const snapshotTransport = activeTransport
     const normalizedPat = suppliedPat?.trim()
     const transport = normalizedPat
       ? createTransport(
@@ -267,13 +233,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
           snapshot.preserveThinking,
           () => Promise.resolve(normalizedPat),
         )
-      : snapshotTransport
-    const models = await transport.discoverModels(signal)
-    adapter.updateDiscoveredModels(snapshotTransport, models)
-    discoveredCatalogs[snapshot.region] = models
-    refreshAdapter()
-    await persistDiscoveredModels(snapshot.region)
-    return models
+      : activeTransport
+    return catalog.discover(signal, transport)
   }
 
   ctx.llm.registerModelDiscovery(settingsNamespace, async (request, signal) => {

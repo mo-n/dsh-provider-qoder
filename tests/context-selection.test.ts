@@ -119,9 +119,10 @@ test('model catalog renders context tier select and propagates default tier chan
     exports,
     require: (id: string) => id === 'react' ? {
       useMemo: (fn: () => unknown) => fn(),
-      useState: (value: unknown) => [value, () => {}],
+      useState: (value: unknown) => [typeof value === 'function' ? value() : value, () => {}],
+      useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
       useRef: (value: unknown) => ({ current: value }),
-      useEffect: () => {},
+      useLayoutEffect: () => {},
     } : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) } : require(id),
   })
 
@@ -138,14 +139,23 @@ test('model catalog renders context tier select and propagates default tier chan
 
   let changedModels: QoderCatalogModel[] = []
   type VNode = { type: unknown; props: Record<string, unknown> }
-  const vdom = exports.QoderModelCatalog({
-    operations: { discoverModels: async () => ({ ok: true, value: [] }) },
+  const keyed = exports.QoderModelCatalog({
+    region: 'global',
+    operations: {
+      discoverModels: async () => ({ ok: true, value: [] }),
+      storeModels: async (region: string, models: QoderCatalogModel[]) => {
+        assert.equal(region, 'global')
+        changedModels = models
+        return true
+      },
+    },
     models: [tieredModel, singleModel],
     disabled: false,
-    onChange: (models: QoderCatalogModel[]) => { changedModels = models },
     t: (key: string, values?: Record<string, string | number>) => key === 'modelRate' ? `${values?.value}x` : key,
   }) as VNode
 
+  assert.equal((keyed as VNode & { key: string }).key, 'global')
+  const vdom = (keyed.type as (props: object) => VNode)(keyed.props)
   const children = vdom.props.children as VNode[]
   const modelList = children.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelList'))
   assert.ok(modelList)
@@ -165,7 +175,7 @@ test('model catalog renders context tier select and propagates default tier chan
   const singleTierSection = singleChoice.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelTier'))
   assert.equal(singleTierSection, undefined)
 
-  // Selecting a new tier triggers onChange with updated model
+  // Selecting a new tier saves the updated model to its mounted region
   const selectHandler = tierSelect.props.onChange as (event: { currentTarget: { value: string } }) => void
   selectHandler({ currentTarget: { value: 'large' } })
   assert.equal(changedModels.length, 2)
