@@ -14,12 +14,18 @@ does not constitute an audit of the 1.1.65 CLI implementation.
 | --- | --- |
 | Managed Qoder PAT exchange | Resolve the stable Machine ID before exchange and include `machine_id`. No fabricated UMID token. |
 | Qoder job token expiry | Match CLI seconds/milliseconds compatibility and prefer absolute expiry; accept token and identity aliases used by CLI. |
-| Subscriber organization | Preserve flat and nested organization IDs and tags. Read missing tags through the organization Open API route; retain organization identity if optional enrichment fails. |
+| Subscriber organization | Preserve flat and nested organization IDs and tags. Read missing tags through the organization Open API route with an independent 3-second budget; retain credentials and organization identity if enrichment fails or times out. |
 | Subscriber status | Omit UMID headers when no actual UMID is available. Machine ID is not a UMID fingerprint. |
 | COSY authorization | Encrypt uid, job token and available organization/privacy context; send the CLI business headers and native platform name. Ordinary COSY requests retain the CLI Machine ID fallback. |
 | Model authentication recovery | Refresh once for HTTP 401/403 before SSE starts. Reuse the prepared body and turn identity; do not refresh for duplicate-request code `103`. Never replay a successful HTTP stream. See ADR-0003. |
 | Client metadata | Consistent version, native OS, model MachineHostname, CLI system text blocks, China session branding and `start` → `processing` run stages. |
 | Machine ID lifecycle | Honor CLI config-directory overrides per region; retain a stable process identity if fallback persistence fails. |
+
+The required PAT exchange and subscriber identity lookup share the authentication
+budget (15 seconds by default). Once both succeed, that timer is cleared. Optional
+organization-tag enrichment has its own 3-second budget covering reads and retries;
+its failure returns the core credentials. Caller cancellation remains shared across
+both phases, including last-waiter cancellation for concurrent callers.
 
 ## Offline evidence
 
