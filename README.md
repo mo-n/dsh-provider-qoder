@@ -59,10 +59,6 @@ Open **Settings → Qoder** to view account and quota details, configure the web
   <img src="./assets/account-quota.png" alt="Qoder account quota and model settings" width="650" />
 </p>
 
-### 3. Select a Conversation Context Tier
-
-For models advertising multiple context tiers, use the context selector beside the conversation input. The selection applies to that conversation, model, and service region. Reloading the page restores the host’s accepted selection, and other open windows synchronize changes. Manual selections remain in host memory; restarting DSH restores the applicable request history or model default.
-
 ## Upcoming Features
 
 - [ ] Request rate-limiting queue mechanism
