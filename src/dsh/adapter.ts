@@ -20,6 +20,7 @@ import {
 } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
+import type { QoderSessionTierScope, QoderSessionTierSelection } from './rpc-channel.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
@@ -77,6 +78,7 @@ export class QoderAdapter extends LlmAdapter {
   private historyRegionChanged = false
   private readonly region: () => QoderRegion
   private readonly sessionTiers = new Map<string, string>()
+  private readonly tierListeners = new Set<(scope: QoderSessionTierScope) => void>()
   private readonly sessions?: QoderAdapterSessionStore
   private readonly agents?: QoderAdapterAgentStore
 
@@ -106,6 +108,25 @@ export class QoderAdapter extends LlmAdapter {
       throw new QoderLlmError('Invalid session context tier selection.', 'INVALID_REQUEST')
     }
     this.sessionTiers.set(JSON.stringify([region, sessionId, modelId]), tierKey)
+    for (const listener of this.tierListeners) {
+      try { listener({ region, sessionId, modelId }) } catch { /* A disconnected view cannot reject a committed selection. */ }
+    }
+  }
+
+  subscribeSessionTiers(listener: (scope: QoderSessionTierScope) => void): () => void {
+    this.tierListeners.add(listener)
+    return () => { this.tierListeners.delete(listener) }
+  }
+
+  readSessionTier(scope: QoderSessionTierScope): QoderSessionTierSelection {
+    const { region, sessionId, modelId } = scope
+    if (region !== this.region() || !sessionId || (this.sessions && !this.sessions.get(sessionId))) {
+      throw new QoderLlmError('Invalid session context tier scope.', 'INVALID_REQUEST')
+    }
+    const model = this.resolveEffectiveModelForSession(modelId, sessionId)
+    const tier = model && resolveContextTier(model, model.contextTier)
+    if (!tier) throw new QoderLlmError('Model has no context tiers.', 'INVALID_REQUEST')
+    return { ...scope, tierKey: tier.key, tokenCount: tier.tokenCount }
   }
 
   getSessionTier(sessionId: string, modelId: string): string | undefined {

@@ -257,13 +257,13 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       return await executeRpc('discover Qoder models', () => discoverModels(signal), signal, logger)
     }
 
-    if (endpoint === 'sessionTier') {
+    if (endpoint === 'sessionTier' || endpoint === 'readSessionTier') {
       const data = payload as { sessionId?: string; modelId?: string; tierKey?: string; region?: QoderRegion }
-      if (typeof data?.sessionId === 'string' && typeof data?.modelId === 'string' && typeof data?.tierKey === 'string' && (data.region === 'global' || data.region === 'china')) {
+      if (typeof data?.sessionId === 'string' && typeof data?.modelId === 'string' && (endpoint === 'readSessionTier' || typeof data?.tierKey === 'string') && (data.region === 'global' || data.region === 'china')) {
         const { sessionId, modelId, tierKey, region } = data
-        return await executeRpc('select session context tier', async () => {
-          adapter.setSessionTier(sessionId, modelId, tierKey, region)
-          return { success: true }
+        return await executeRpc(endpoint === 'sessionTier' ? 'select session context tier' : 'read session context tier', async () => {
+          if (endpoint === 'sessionTier') adapter.setSessionTier(sessionId, modelId, tierKey!, region)
+          return adapter.readSessionTier({ sessionId, modelId, region })
         }, signal, logger)
       }
       return publicError('INTERNAL', 'Invalid sessionTier payload')
@@ -284,7 +284,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   }
 
   try {
-    ctx.effect(() => registerQoderRpc(ctx, handler), 'provider-qoder: settings RPC routes')
+    ctx.effect(() => registerQoderRpc(ctx, handler, listener => adapter.subscribeSessionTiers(listener)), 'provider-qoder: settings RPC routes')
   } catch (error) {
     // The settings RPC is an optional surface: a registration failure must not
     // take the model adapter or the web-search router down with it.

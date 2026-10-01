@@ -500,6 +500,8 @@ test('apply mounts the settings RPC on the connection Fetch registry', async () 
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
     '/api/qoder-subscription/sessionTier',
+    '/api/qoder-subscription/readSessionTier',
+    '/api/qoder-subscription/sessionTierEvents',
   ])
 })
 
@@ -755,4 +757,37 @@ test('a late explicit discovery cannot update or persist after switching region 
   assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.china?.[0].priceFactor, 2)
   const resolved = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'chosen' })
   assert.deepEqual(resolved.inputModalities, ['text'])
+})
+
+test('session tier RPC returns the effective host choice and rejects obsolete regions', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  const routes = new Map<string, { fetch(request: Request): Promise<Response> }>()
+  ctx.provide('connection', { fetch: { register: (route: { path: string; fetch(request: Request): Promise<Response> }) => {
+    routes.set(route.path, route)
+    return () => { routes.delete(route.path) }
+  } } } as any)
+  ctx.provide('attachments', {} as any)
+  const model = { id: 'tiered', name: 'Tiered', contextTier: 'large', contextWindow: 1_000_000,
+    contextOptions: { small: { tokenCount: 200_000 }, large: { tokenCount: 1_000_000 } } }
+  const fiber = ctx.plugin({ name: plugin.name, inject: [...plugin.inject, 'settings'], apply: owner => applyWithSettings(owner, { modelsByRegion: { global: [model], china: [model] } }) })
+  await fiber.await()
+  const scope = { region: 'global', sessionId: 's', modelId: 'tiered' }
+  const call = async (endpoint: string, data: unknown) => {
+    const path = `/api/qoder-subscription/${endpoint}`
+    const response = await routes.get(path)!.fetch(new Request(`http://localhost${path}`, { method: 'POST', body: JSON.stringify(data) }))
+    return await response.json()
+  }
+  assert.deepEqual(await call('readSessionTier', scope), { ok: true, value: { ...scope, tierKey: 'large', tokenCount: 1_000_000 } })
+  assert.deepEqual(await call('sessionTier', { ...scope, tierKey: 'small' }), { ok: true, value: { ...scope, tierKey: 'small', tokenCount: 200_000 } })
+  assert.deepEqual(await call('readSessionTier', scope), { ok: true, value: { ...scope, tierKey: 'small', tokenCount: 200_000 } })
+  assert.equal((await call('sessionTier', { ...scope, tierKey: 'unknown' })).ok, false)
+  await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'china' })
+  assert.equal((await call('readSessionTier', scope)).ok, false)
+  assert.equal((await call('sessionTier', { ...scope, tierKey: 'large' })).ok, false)
+  const china = { ...scope, region: 'china' }
+  assert.equal((await call('readSessionTier', china)).value.tierKey, 'large')
+  await fiber.dispose()
 })

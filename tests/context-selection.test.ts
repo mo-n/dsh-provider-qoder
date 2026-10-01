@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
-import { historicalContextWindow, isQoderProvider, saveContextSelection } from '../src/client/context-selection.ts'
+import { isQoderProvider } from '../src/client/context-selection.ts'
 import { resolveContextTier, type QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
@@ -16,58 +16,12 @@ const model: QoderCatalogModel = {
   contextOptions: { small: { tokenCount: 200_000, isDefault: true }, large: { tokenCount: 1_000_000 } },
 }
 
-test('returning from B after restart uses A default, not B capacity', () => {
-  const current = { provider: QODER_PROVIDER_ID, model: 'a' }
-  const history = { provider: QODER_PROVIDER_ID, model: 'b' }
-  assert.equal(resolveContextTier(model, undefined, historicalContextWindow(current, history, 200_000))?.key, 'large')
-  assert.equal(resolveContextTier(model, undefined, historicalContextWindow(current, current, 200_000))?.key, 'small')
-  assert.equal(historicalContextWindow(current, { ...current, provider: 'other' }, 200_000), undefined)
-  assert.equal(isQoderProvider('other'), false)
-})
-
 test('scoped catalogs never fall back to another region or repopulate an empty catalog', () => {
   const section = { modelsByRegion: { global: [model] } }
   assert.equal(regionOf({ region: 'china' }), 'china')
   assert.equal(regionOf({ region: 'unknown' }), 'global')
   assert.ok(!modelsOf(section, 'china').some(candidate => candidate.id === model.id))
   assert.deepEqual(modelsOf({ ...section, modelsByRegion: { china: [] } }, 'china'), [])
-})
-
-test('session tier write failures are reported, including unavailable and throwing RPCs', async () => {
-  let allowSession = false
-  const operations = {
-    setSessionTier: async () => allowSession,
-  }
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'session-failed')
-  allowSession = true
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'saved')
-  operations.setSessionTier = async () => { throw new Error('offline') }
-  assert.equal(await saveContextSelection(operations, 's', 'global', 'a', 'small'), 'session-failed')
-  assert.equal(await saveContextSelection({}, 's', 'global', 'a', 'small'), 'session-failed')
-})
-
-test('composer context selection changes only its session and leaves model defaults untouched', async () => {
-  const defaults = structuredClone(model)
-  const transport = {} as QoderTransport
-  const adapter = new QoderAdapter({ models: [defaults], resolveTransport: () => transport })
-  const calls: unknown[] = []
-  let settingsWrites = 0
-  const operations = {
-    setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region: 'global' | 'china') => {
-      calls.push([sessionId, modelId, tierKey, region])
-      adapter.setSessionTier(sessionId, modelId, tierKey, region)
-      return true
-    },
-    storeModels: async () => { settingsWrites++; return true },
-  }
-  const result = await saveContextSelection(operations, 's', 'global', 'a', 'small')
-  assert.equal(result, 'saved')
-  assert.deepEqual(calls, [['s', 'a', 'small', 'global']])
-  assert.equal(settingsWrites, 0)
-  assert.deepEqual(defaults, model)
-  assert.equal(adapter.resolveEffectiveModelForSession('a', 's')?.contextWindow, 200_000)
-  assert.equal(adapter.resolveEffectiveModelForSession('a', 'other-session')?.contextWindow, 1_000_000)
-  assert.equal(adapter.resolveEffectiveModelForSession('a')?.contextTier, 'large')
 })
 
 test('composer keeps projection hook order stable across unresolved, foreign, single and multi-tier models', async () => {
@@ -183,4 +137,70 @@ test('model catalog renders context tier select and propagates default tier chan
   assert.equal(changedModels[0].contextTier, 'large')
   assert.equal(changedModels[0].contextWindow, 1_000_000)
   assert.equal(changedModels[1].id, 'single')
+})
+
+test('composer renders the host-confirmed tier after remount and keys controls by region, session and model', async () => {
+  const filename = new URL('../src/client/QoderContextSelect.tsx', import.meta.url)
+  const require = createRequire(filename)
+  const source = ts.transpileModule(await readFile(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+  }).outputText
+  interface Cell { value?: unknown; deps?: readonly unknown[]; cleanup?: () => void }
+  let cells: Cell[] = [], cursor = 0
+  const effects: Array<{ cell: Cell; create: () => void | (() => void) }> = []
+  const subscriptions = new Map<unknown, () => void>()
+  const next = () => cells[cursor++] ?? (cells[cursor - 1] = {})
+  const same = (a: readonly unknown[] | undefined, b: readonly unknown[]) => a?.length === b.length && b.every((v, i) => Object.is(v, a[i]))
+  const effect = (create: () => void | (() => void), deps: readonly unknown[]) => {
+    const cell = next()
+    if (!same(cell.deps, deps)) { cell.deps = deps; effects.push({ cell, create }) }
+  }
+  const exports: Record<string, (props: object) => VNode | null> = {}
+  interface VNode { type: unknown; key?: string; props: { children?: unknown; [key: string]: unknown } }
+  const nodes = (value: unknown): VNode[] => Array.isArray(value) ? value.flatMap(nodes)
+    : value && typeof value === 'object' && 'props' in value ? [value as VNode, ...nodes((value as VNode).props.children)] : []
+  runInNewContext(source, { exports, require: (id: string) => id === 'react' ? {
+    useState(initial: unknown) { const cell = next(); if (!('value' in cell)) cell.value = initial; return [cell.value, (value: unknown) => { cell.value = typeof value === 'function' ? value(cell.value) : value }] },
+    useRef(initial: unknown) { const cell = next(); return cell.value ?? (cell.value = { current: initial }) },
+    useMemo(create: () => unknown, deps: readonly unknown[]) { const cell = next(); if (!same(cell.deps, deps)) { cell.deps = deps; cell.value = create() }; return cell.value },
+    useEffect: effect, useLayoutEffect: effect,
+    useSyncExternalStore(subscribe: (fn: () => void) => () => void, read: () => unknown) {
+      if (!subscriptions.has(subscribe)) subscriptions.set(subscribe, subscribe(() => {}))
+      return read()
+    },
+  } : id.endsWith('.css') ? { __esModule: true, default: {} } : require(id) })
+  const adapter = new QoderAdapter({ models: [model], resolveTransport: () => ({}) as QoderTransport })
+  adapter.setSessionTier('s', 'a', 'small')
+  let settings = { value: { region: 'global', modelsByRegion: { global: [model], china: [model] } } }
+  const props = {
+    sessionId: 's', directory: { getSnapshot: () => ({ current: { provider: QODER_PROVIDER_ID, model: 'a' } }), subscribe: () => () => {} },
+    operations: {
+      getModelSnapshot: () => settings, subscribeModels: () => () => {},
+      readSessionTier: async (scope: { region: 'global'; sessionId: string; modelId: string }) => adapter.readSessionTier(scope),
+    },
+  }
+  const unmount = () => { for (const cell of cells) cell.cleanup?.(); for (const off of subscriptions.values()) off(); subscriptions.clear(); cells = [] }
+  const render = () => {
+    cursor = 0
+    const outer = exports.QoderContextSelect(props)!
+    const tree = (outer.type as (props: object) => VNode)(outer.props)
+    for (const { cell, create } of effects.splice(0)) { cell.cleanup?.(); cell.cleanup = create() || undefined }
+    return { outer, trigger: nodes(tree).find(node => node.props['aria-expanded'] !== undefined)! }
+  }
+  try {
+    const first = render()
+    assert.equal(first.trigger.props.disabled, true)
+    assert.equal(first.trigger.props.title, '选择上下文大小: …')
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(render().trigger.props.title, '选择上下文大小: 200K')
+    unmount()
+    assert.equal(render().trigger.props.title, '选择上下文大小: …')
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(render().trigger.props.title, '选择上下文大小: 200K')
+    assert.equal(render().outer.key, JSON.stringify(['global', 's', 'a']))
+    props.sessionId = 'other'
+    assert.equal(exports.QoderContextSelect(props)!.key, JSON.stringify(['global', 'other', 'a']))
+    settings = { ...settings, value: { ...settings.value, region: 'china' } }
+    assert.equal(exports.QoderContextSelect(props)!.key, JSON.stringify(['china', 'other', 'a']))
+  } finally { unmount() }
 })

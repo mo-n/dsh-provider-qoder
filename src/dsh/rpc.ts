@@ -11,6 +11,7 @@ import {
   qoderRpcPath,
   type QoderRpcEndpoint,
   type QoderRpcResult,
+  type QoderSessionTierScope,
 } from './rpc-channel.ts'
 
 /** Qoder's internal dispatcher; Fetch-route authentication remains owned by Connection. */
@@ -27,18 +28,26 @@ export type QoderRpcHandler = (endpoint: string, payload: unknown, signal: Abort
  * @returns disposer removing every registered route.
  * @throws when Connection exposes no exact Fetch registry.
  */
-export function registerQoderRpc(ctx: Context, handler: QoderRpcHandler): () => void {
+export function registerQoderRpc(
+  ctx: Context,
+  handler: QoderRpcHandler,
+  subscribeTiers?: (listener: (scope: QoderSessionTierScope) => void) => () => void,
+): () => void {
   const registry = ctx.connection?.fetch
   if (typeof registry?.register !== 'function') {
     throw new Error('provider-qoder: connection exposes no exact Fetch route registry')
   }
+  const streams = new Set<() => void>()
   const disposers = qoderRpcEndpoints.map(endpoint => registry.register({
     path: qoderRpcPath(endpoint),
     methods: ['POST'],
     requestBody: 'buffered',
-    fetch: request => handleQoderRpcRequest(endpoint, handler, request),
+    fetch: request => endpoint === 'sessionTierEvents' && subscribeTiers
+      ? Promise.resolve(sessionTierEvents(request, subscribeTiers, streams))
+      : handleQoderRpcRequest(endpoint, handler, request),
   }))
   return () => {
+    for (const close of streams) close()
     for (const dispose of disposers) {
       void dispose()
     }
@@ -82,4 +91,36 @@ async function handleQoderRpcRequest(
     }
     return new Response(`handler failure: ${String(error)}`, { status: 500 })
   }
+}
+
+/** Authenticated change stream; reconnecting clients reread on the initial ready item. */
+function sessionTierEvents(
+  request: Request,
+  subscribe: (listener: (scope: QoderSessionTierScope) => void) => () => void,
+  streams: Set<() => void>,
+): Response {
+  let close = () => {}
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      let ended = false
+      let unsubscribe = () => {}
+      const send = (value: unknown) => { if (!ended) controller.enqueue(encoder.encode(JSON.stringify(value) + '\n')) }
+      close = () => {
+        if (ended) return
+        ended = true
+        unsubscribe()
+        request.signal.removeEventListener('abort', close)
+        streams.delete(close)
+        try { controller.close() } catch { /* The reader may already have cancelled. */ }
+      }
+      unsubscribe = subscribe(scope => send(scope))
+      streams.add(close)
+      request.signal.addEventListener('abort', close, { once: true })
+      if (request.signal.aborted) close()
+      else send({ ready: true })
+    },
+    cancel() { close() },
+  })
+  return new Response(body, { headers: { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store', 'x-accel-buffering': 'no' } })
 }

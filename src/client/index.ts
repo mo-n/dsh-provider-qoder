@@ -18,6 +18,8 @@ import type {
   QoderModelSettingsSnapshot,
 } from './credential-operations.ts'
 import { en, zh, type QoderCredentialCopy } from './locales.ts'
+import { createSessionTierEvents } from './session-tier-events.ts'
+import type { QoderSessionTierSelection } from '../dsh/rpc-channel.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
 
 const localeNamespace = 'settings.qoderCredential'
@@ -85,21 +87,10 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
   // the current DSH client exposes it through the same runtime assembly.
   const credentials = (ctx.remote as unknown as { credentials: QoderCredentialsRemote }).credentials
   const rpc = createQoderRpcCaller()
+  const tierEvents = createSessionTierEvents()
+  ctx.effect(() => () => tierEvents.dispose(), 'provider-qoder: session context tier events')
 
-  let historyRegion: string | undefined
-  let historyRegionChanged = false
-  const readModelSnapshot = (): QoderModelSettingsSnapshot => {
-    const snapshot = modelScope.getSnapshot() as QoderModelSettingsSnapshot
-    if (snapshot.value) {
-      const region = snapshot.value.region ?? 'global'
-      if (historyRegion !== undefined && historyRegion !== region) historyRegionChanged = true
-      historyRegion = region
-    }
-    return snapshot
-  }
-  // request/context carries no region. Never reinterpret old capacity after a region switch.
-  readModelSnapshot()
-  ctx.effect(() => modelScope.subscribe(() => { readModelSnapshot() }), 'provider-qoder: context history region')
+  const readModelSnapshot = () => modelScope.getSnapshot()
   const operations: QoderCredentialOperations = {
     describe: async () => {
       try {
@@ -127,7 +118,6 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     },
     getAccount: async (force) => await rpc.call<QoderAccountInfo>('account', { force }),
     getModelSnapshot: readModelSnapshot,
-    canRestoreContextHistory: () => !historyRegionChanged,
     subscribeModels: listener => modelScope.subscribe(listener),
     storeModels: async (region, models) => {
       try {
@@ -158,12 +148,18 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
     setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region) => {
       try {
-        const res = await rpc.call<{ success: boolean }>('sessionTier', { sessionId, modelId, tierKey, region })
-        return res.ok
+        const res = await rpc.call<QoderSessionTierSelection>('sessionTier', { sessionId, modelId, tierKey, region })
+        return res.ok ? res.value : undefined
       } catch {
-        return false
+        return undefined
       }
     },
+
+    readSessionTier: async scope => {
+      const result = await rpc.call<QoderSessionTierSelection>('readSessionTier', scope)
+      return result.ok ? result.value : undefined
+    },
+    subscribeSessionTiers: (scope, listener) => tierEvents.subscribe(scope, listener),
 
     subscribe: (listener) => ctx.remote.$on('credentials/reference-updated', (ref: string) => {
       if (ref === qoderCredentialRef) listener()

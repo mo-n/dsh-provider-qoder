@@ -59,6 +59,10 @@ dsh plugin --profile web add dsh-provider-qoder
   <img src="./assets/account-quota_CN.png" alt="Qoder 账号额度与模型设置" width="650" />
 </p>
 
+### 3. 选择会话上下文档位
+
+模型提供多个上下文档位时，可在会话输入框旁选择 Context Tier。选择按会话、模型和服务区域隔离；刷新页面会恢复宿主已接受的选择，其他打开的窗口会同步变更。手动选择保存在宿主内存中，重启 DSH 后会按可用请求历史或模型默认档位恢复。
+
 ## 后续计划
 
 - [ ] 请求限流排队机制

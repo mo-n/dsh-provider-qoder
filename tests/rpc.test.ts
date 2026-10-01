@@ -48,9 +48,11 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
     '/api/qoder-subscription/sessionTier',
+    '/api/qoder-subscription/readSessionTier',
+    '/api/qoder-subscription/sessionTierEvents',
   ])
-  assert.deepEqual(routes.map(route => [...route.methods]), [['POST'], ['POST'], ['POST']])
-  assert.deepEqual(routes.map(route => route.requestBody), ['buffered', 'buffered', 'buffered'])
+  assert.deepEqual(routes.map(route => [...route.methods]), Array.from({ length: 5 }, () => ['POST']))
+  assert.deepEqual(routes.map(route => route.requestBody), Array(5).fill('buffered'))
   assert.ok(routes.every(route => typeof route.fetch === 'function'))
 
   dispose()
@@ -58,6 +60,8 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
     '/api/qoder-subscription/sessionTier',
+    '/api/qoder-subscription/readSessionTier',
+    '/api/qoder-subscription/sessionTierEvents',
   ])
 })
 

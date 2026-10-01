@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { contextTiersOf, formatContextTokens, resolveContextTier } from '../qoder/catalog.ts'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { contextTiersOf, formatContextTokens, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import { QODER_PROVIDER_ID } from '../dsh/provider.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 import { modelsOf, regionOf, type QoderCredentialOperations } from './credential-operations.ts'
-import { historicalContextWindow, isQoderProvider, saveContextSelection } from './context-selection.ts'
+import { isQoderProvider } from './context-selection.ts'
+import { SessionTierState } from './session-tier-state.ts'
 import css from './QoderContextSelect.module.css'
 
 export interface ModelDirectorySnapshot {
@@ -19,21 +20,14 @@ export interface ModelDirectoryStoreLike {
 export interface QoderContextSelectProps {
   sessionId?: string
   directory?: ModelDirectoryStoreLike
-  operations?: Pick<QoderCredentialOperations, 'getModelSnapshot' | 'canRestoreContextHistory' | 'subscribeModels' | 'setSessionTier'>
+  operations?: Pick<QoderCredentialOperations, 'getModelSnapshot' | 'subscribeModels' | 'setSessionTier' | 'readSessionTier' | 'subscribeSessionTiers'>
   t?: (key: QoderCredentialCopy, values?: Record<string, string | number>) => string
   activeLocale?: () => string
   useProjection?: <T = unknown>(key: string) => T | undefined
 }
 
 export function QoderContextSelect(props: QoderContextSelectProps) {
-  const { directory, operations, t, sessionId, useProjection } = props
-  const [open, setOpen] = useState(false)
-  const [manualTiers, setManualTiers] = useState<Record<string, string>>({})
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<{ key: string } | null>(null)
-  const saving = useRef(false)
-  const rootRef = useRef<HTMLDivElement | null>(null)
-
+  const { directory, operations, sessionId, useProjection } = props
   const directoryState = useSyncExternalStore(
     fn => (directory ? directory.subscribe(fn) : () => () => {}),
     () => (directory ? directory.getSnapshot() : null),
@@ -43,26 +37,6 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
     fn => (operations ? operations.subscribeModels(fn) : () => () => {}),
     () => (operations ? operations.getModelSnapshot() : null),
   )
-
-  useEffect(() => {
-    if (!open) return
-    const handleClickOutside = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [open])
 
   const modelProj = useProjection ? useProjection<{
     lastUsed: { provider?: string; model?: string } | null
@@ -91,29 +65,53 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
   const tiers = contextTiersOf(activeModel)
   if (tiers.length <= 1) return null
 
-  const sessionKey = sessionId ? JSON.stringify([region, sessionId, activeModel.id]) : undefined
-  const historicalWindow = operations.canRestoreContextHistory?.() === false ? undefined
-    : historicalContextWindow(current, modelProj?.lastUsed, pressure?.contextWindow)
-  const currentTier = resolveContextTier(activeModel, sessionKey ? manualTiers[sessionKey] : undefined, historicalWindow)
-  if (!currentTier) return null
-  const selectedTierKey = currentTier.key
+  if (!sessionId) return null
+  return <SessionContextSelect key={JSON.stringify([region, sessionId, activeModel.id])}
+    {...props} sessionId={sessionId} operations={operations} region={region} activeModel={activeModel}
+    historicalWindow={pressure?.contextWindow} lastUsed={modelProj?.lastUsed} />
+}
 
-  const selectTier = async (tierKey: string) => {
-    setOpen(false)
-    if (!sessionId || !sessionKey || saving.current) return
-    if (tierKey === selectedTierKey && error?.key !== sessionKey) return
-    saving.current = true
-    setPending(true)
-    setError(null)
-    try {
-      const result = await saveContextSelection(operations, sessionId, region, activeModel.id, tierKey)
-      if (result === 'saved') setManualTiers(prev => ({ ...prev, [sessionKey]: tierKey }))
-      else setError({ key: sessionKey })
-    } finally {
-      saving.current = false
-      setPending(false)
+function SessionContextSelect({ operations, sessionId, region, activeModel, t, historicalWindow, lastUsed }: QoderContextSelectProps & {
+  sessionId: string
+  operations: NonNullable<QoderContextSelectProps['operations']>
+  region: QoderRegion
+  activeModel: QoderCatalogModel
+  historicalWindow?: number
+  lastUsed?: { provider?: string; model?: string } | null
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const state = useMemo(() => new SessionTierState({ region, sessionId, modelId: activeModel.id }, operations), [region, sessionId, activeModel.id, operations])
+  const snapshot = useSyncExternalStore(state.subscribe, state.getSnapshot)
+  useLayoutEffect(() => { state.activate(); return () => state.dispose() }, [state])
+  // Settings and request history can change the host's fallback without a manual selection event.
+  const catalogSignature = JSON.stringify(activeModel)
+  useEffect(() => { void state.refresh() }, [state, catalogSignature, historicalWindow, lastUsed?.provider, lastUsed?.model])
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
     }
-  }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
+  const tiers = contextTiersOf(activeModel)
+  const currentTier = snapshot.selection
+  const selectedTierKey = currentTier?.tierKey
+  const pending = snapshot.loading || snapshot.saving
+  const selectTier = (tierKey: string) => { setOpen(false); void state.select(tierKey) }
 
   const defaultSuffix = t ? t('contextTierDefaultSuffix').replace(/[（）()]/g, '') : '默认'
   const selectTitle = t ? t('contextSelectTitle') : '选择上下文大小'
@@ -124,10 +122,10 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
       <button
         type="button"
         className={`${css.trigger} ${open ? css.triggerActive : ''}`}
-        disabled={pending || !sessionId}
+        disabled={pending || !currentTier}
         aria-expanded={open}
         aria-label={selectTitle}
-        title={`${selectTitle}: ${formatContextTokens(currentTier.tokenCount)}`}
+        title={`${selectTitle}: ${currentTier ? formatContextTokens(currentTier.tokenCount) : '…'}`}
         onClick={() => setOpen(prev => !prev)}
       >
         <span className={css.icon}>
@@ -135,7 +133,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
             <path d="M2 4.5A2.5 2.5 0 0 1 4.5 2h7A2.5 2.5 0 0 1 14 4.5v7a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 2 11.5v-7zm2.5-1A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 11.5 3.5h-7zM5 6h6v1H5V6zm0 3h4v1H5V9z"/>
           </svg>
         </span>
-        <span className={css.label}>{formatContextTokens(currentTier.tokenCount)}</span>
+        <span className={css.label}>{currentTier ? formatContextTokens(currentTier.tokenCount) : '…'}</span>
         <span className={`${css.chevron} ${open ? css.chevronOpen : ''}`}>
           <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 4.5L6 7.5L9 4.5" />
@@ -143,7 +141,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
         </span>
       </button>
 
-      {error && error.key === sessionKey && <span role="alert" className={css.error}>{t ? t('contextSelectFailed') : 'contextSelectFailed'}</span>}
+      {snapshot.error && <span role="alert" className={css.error}>{t ? t('contextSelectFailed') : 'contextSelectFailed'} <button type="button" disabled={pending} onClick={() => { void state.refresh() }}>{t ? t('refresh') : 'refresh'}</button></span>}
       {open && (
         <div className={css.menu} role="menu" aria-label={selectTitle}>
           <div className={css.menuHeader}>{menuHeader}</div>
@@ -154,6 +152,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
                 key={tier.key}
                 type="button"
                 role="menuitemradio"
+                disabled={pending}
                 aria-checked={isSelected}
                 className={`${css.option} ${isSelected ? css.optionSelected : ''}`}
                 onClick={() => { void selectTier(tier.key) }}
