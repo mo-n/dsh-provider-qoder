@@ -171,6 +171,13 @@ export class DefaultQoderTransport implements QoderTransport {
       region: this.region,
       responseHeaderTimeoutMs: this.responseHeaderTimeoutMs,
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
+      refreshCredentials: async (rejected, signal) => {
+        // A concurrent request may already have refreshed the same PAT.
+        const current = await this.auth.getCredentials(pat, signal)
+        if (current.authToken !== rejected.authToken) return current
+        this.auth.clear(pat)
+        return this.auth.getCredentials(pat, signal)
+      },
     })
   }
 }

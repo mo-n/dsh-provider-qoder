@@ -1,0 +1,45 @@
+{
+  "reference": "@qoder-ai/qodercli 1.1.48, offline WASM; all identities are synthetic",
+  "vectors": [
+    {
+      "plaintext": "",
+      "encoded": ""
+    },
+    {
+      "plaintext": "a",
+      "encoded": "$p$#"
+    },
+    {
+      "plaintext": "{\"message\":\"你好，世界\"}",
+      "encoded": "VQG*SQQSVBEw$Mn*QG(&QPSWXXYmYKtDxj^#SJLB"
+    },
+    {
+      "plaintext": "{\"payload\":\"{\\\"query\\\":\\\"offline\\\",\\\"timeRange\\\":\\\"NoLimit\\\",\\\"contents\\\":{\\\"mainText\\\":false,\\\"markdownText\\\":false,\\\"summary\\\":false}}\",\"encodeVersion\":\"1\"}",
+      "encoded": "iwxoByDOgrN(arxoK^JS.t#xKQxoByDOgrN(FWe,BrBOFh#(WzDFDLNEj)u(I*l*B%BEw$WVPS.)Jgf*Ggf*#(WhJHFhJZjNBM)XxoKt#SLhFHFIJgf*lODiuZjLGgf*uSgYP(CbJ(QaDxmYKf#xLru(gzBMn*m.f*NxFLNELNBM)NBOWODO%)uOFNB*%NBEC)uSF,#SQEDFf*lLf*@O"
+    }
+  ],
+  "infer": {
+    "url": "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1",
+    "headers": {
+      "Accept": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "Content-Type": "application/json",
+      "Cosy-Business-Product": "cli",
+      "Cosy-Business-Type": "agent",
+      "Cosy-ClientType": "5",
+      "Cosy-Data-Policy": "disagree",
+      "Cosy-MachineId": "offline-machine",
+      "Cosy-MachineToken": "offline-machine",
+      "Cosy-MachineType": "5",
+      "Cosy-Organization-Id": "offline-org",
+      "Cosy-Organization-Tags": "Security,JadeKey",
+      "Cosy-Scene": "assistant",
+      "Cosy-User": "offline-user",
+      "Cosy-Version": "1.1.48",
+      "Login-Version": "v2",
+      "X-Model-Key": "cmodel",
+      "X-Model-Source": "system"
+    }
+  }
+}

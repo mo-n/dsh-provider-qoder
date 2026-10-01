@@ -410,3 +410,17 @@ test('history compaction with repeated prompt reconciles claimed counts and open
   assert.notEqual(turn3.businessId, turn2.businessId)
 })
 
+
+
+test('business stage advances within a turn and resets for the next subscriber prompt', async () => {
+  const tracker = new QoderTurnTracker()
+  const prompt = wireUser('First')
+  const first = await buildQoderRequestBody(options([], 'stage-session'), 'offline-user', [prompt], undefined, undefined, tracker)
+  const second = await buildQoderRequestBody(options([], 'stage-session'), 'offline-user', [prompt, injected('context')], undefined, undefined, tracker)
+  const third = await buildQoderRequestBody(options([], 'stage-session'), 'offline-user', [prompt, wireUser('Next')], undefined, undefined, tracker)
+  assert.equal(first.business.stage, 'start')
+  assert.equal(second.business.stage, 'processing')
+  assert.equal(third.business.stage, 'start')
+  assert.equal(first.business.id, second.business.id)
+  assert.notEqual(second.business.id, third.business.id)
+})

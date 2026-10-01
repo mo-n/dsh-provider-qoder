@@ -36,6 +36,7 @@ export interface QoderTurnIdentity {
   readonly chatRecordId: string
   readonly businessId: string
   readonly beginAt: number
+  readonly businessStage: 'start' | 'processing'
 }
 
 /**
@@ -266,6 +267,7 @@ export class QoderTurnTracker {
         chatRecordId: requestId,
         businessId: crypto.randomUUID(),
         beginAt: now,
+        businessStage: 'start',
       }
     }
 
@@ -278,6 +280,7 @@ export class QoderTurnTracker {
         chatRecordId: requestId,
         businessId: crypto.randomUUID(),
         beginAt: now,
+        businessStage: 'start',
       }
     }
 
@@ -357,7 +360,9 @@ export class QoderTurnTracker {
     // Any unaccounted subscriber message or model switch opens the next turn, so a
     // subscriber who sends multiple messages, repeats words, or switches models
     // gets a distinct agent run and consumption record.
+    let businessStage: 'start' | 'processing' = 'processing'
     if ((opening !== undefined && unclaimed > 0) || modelChanged) {
+      businessStage = 'start'
       state.turnCount += 1
       state.currentTurnId = turnIdFor(sessionId, state.turnCount, opening ?? state.currentModel ?? '')
       state.currentBusinessId = crypto.randomUUID()
@@ -365,6 +370,7 @@ export class QoderTurnTracker {
     } else if (state.currentTurnId === '') {
       // A conversation whose first request carries no subscriber input still
       // belongs to a record; it keeps that record until a real prompt arrives.
+      businessStage = 'start'
       state.turnCount += 1
       state.currentTurnId = turnIdFor(sessionId, state.turnCount, state.currentModel ?? '')
       state.currentBusinessId = crypto.randomUUID()
@@ -376,6 +382,7 @@ export class QoderTurnTracker {
       chatRecordId: requestId,
       businessId: state.currentBusinessId,
       beginAt: state.turnOpenedAt,
+      businessStage,
     }
   }
 

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { QoderAuthService } from '../src/qoder/transport/auth.ts'
+import { QoderAuthService, jobTokenExpiry } from '../src/qoder/transport/auth.ts'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 
 test('QoderAuthService exchanges once, resolves identity, and caches credentials', async () => {
@@ -13,7 +13,7 @@ test('QoderAuthService exchanges once, resolves identity, and caches credentials
     if (url.includes('/jobToken/exchange')) {
       exchangeCalls++
       exchangeHeaders = init?.headers as Record<string, string>
-      assert.deepEqual(JSON.parse(String(init?.body)), { personal_token: 'pt-test-token' })
+      assert.deepEqual(JSON.parse(String(init?.body)), { personal_token: 'pt-test-token', machine_id: 'machine-test' })
       return new Response(JSON.stringify({ token: 'jt-token', expires_in: 3_600_000 }), { status: 200 })
     }
     if (url.includes('/userinfo')) {
@@ -160,4 +160,77 @@ test('QoderAuthService classifies malformed exchange JSON as a protocol failure'
   await assert.rejects(service.getCredentials('pt-malformed'), (error: Error) => (
     error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE'
   ))
+})
+
+
+test('job token expiry accepts CLI seconds, milliseconds and absolute timestamps', () => {
+  const now = Date.parse('2026-10-01T00:00:00Z')
+  for (const expires_in of [3600, 3_600_000]) {
+    assert.equal(jobTokenExpiry({ expires_in }, now), now + 3_600_000)
+  }
+  for (const expires_at of ['2026-10-01T01:00:00Z', (now + 3_600_000) / 1000, now + 3_600_000]) {
+    assert.equal(jobTokenExpiry({ expires_at, expires_in: 1 }, now), now + 3_600_000)
+  }
+  assert.equal(jobTokenExpiry({ expireTime: (now + 3_600_000) / 1000 }, now), now + 3_600_000)
+  assert.equal(jobTokenExpiry({ expires_at: 'invalid', expires_in: 3600 }, now), now + 3_600_000)
+  for (const expires_in of [NaN, Infinity, -1]) {
+    assert.equal(jobTokenExpiry({ expires_in }, now), now + 86_400_000)
+  }
+})
+
+test('second-based job tokens remain cached and device binding precedes exchange', async () => {
+  let exchanges = 0
+  let resolved = false
+  const service = new QoderAuthService({
+    resolveMachineId: () => { resolved = true; return 'offline-machine' },
+    fetch: (async (input, init) => {
+      if (String(input).includes('/exchange')) {
+        assert.equal(resolved, true)
+        assert.deepEqual(JSON.parse(String(init?.body)), { personal_token: 'pt-offline', machine_id: 'offline-machine' })
+        exchanges++
+        return new Response(JSON.stringify({ token: 'jt-offline', expires_in: 3600 }))
+      }
+      return new Response(JSON.stringify({ id: 'offline-user' }))
+    }) as typeof fetch,
+  })
+  assert.equal(await service.getCredentials('pt-offline'), await service.getCredentials('pt-offline'))
+  assert.equal(exchanges, 1)
+})
+
+test('authentication preserves organization context and reads organization tags from Open API', async () => {
+  const requests: string[] = []
+  const service = new QoderAuthService({
+    region: 'china',
+    resolveMachineId: () => 'offline-machine',
+    fetch: (async (input, init) => {
+      const url = String(input)
+      requests.push(url)
+      if (url.includes('/exchange')) return new Response(JSON.stringify({ device_token: 'jt-offline' }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({
+        user_id: 'offline-user', organization: { org_id: 'org/offline' }, data_policy_agreed: false,
+      }))
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer jt-offline')
+      return new Response(JSON.stringify({ tags: ['Security', 42, 'JadeKey'] }))
+    }) as typeof fetch,
+  })
+  const credentials = await service.getCredentials('pt-offline')
+  assert.equal(credentials.organizationId, 'org/offline')
+  assert.deepEqual(credentials.organizationTags, ['Security', 'JadeKey'])
+  assert.equal(credentials.dataPolicyAgreed, false)
+  assert.equal(requests[2], 'https://openapi.qoder.com.cn/api/v1/organizations/org%2Foffline/tags')
+})
+
+test('authentication retains organization when optional tag lookup fails', async () => {
+  const service = new QoderAuthService({
+    resolveMachineId: () => 'offline-machine',
+    fetch: (async input => {
+      const url = String(input)
+      if (url.includes('/exchange')) return new Response(JSON.stringify({ token: 'jt-offline' }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user', orgId: 'org-offline' }))
+      return new Response('', { status: 403 })
+    }) as typeof fetch,
+  })
+  const credentials = await service.getCredentials('pt-offline')
+  assert.equal(credentials.organizationId, 'org-offline')
+  assert.equal(credentials.organizationTags, undefined)
 })

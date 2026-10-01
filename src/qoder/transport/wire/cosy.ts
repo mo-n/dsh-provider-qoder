@@ -8,6 +8,7 @@
  */
 
 import crypto from 'node:crypto'
+import { hostname } from 'node:os'
 import { getMachineId } from '../machine-id.ts'
 
 const qoderRSAPublicKey = `-----BEGIN PUBLIC KEY-----
@@ -17,19 +18,18 @@ MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`
 
-export const qoderIdeVersion = '1.1.60'
+// Declared upstream client version; offline protocol fixtures retain their audited version.
+export const qoderIdeVersion = '1.1.65'
 export const qoderClientType = '5'
 export const defaultUserAgent = `qoder/${qoderIdeVersion}`
 const qoderDataPolicy = 'disagree'
 const qoderLoginVersion = 'v2'
-const qoderMachineOs = process.platform === 'win32'
-  ? process.arch === 'arm64'
-    ? 'aarch64_windows'
-    : 'x86_64_windows'
-  : process.arch === 'arm64'
-    ? 'aarch64_linux'
-    : 'x86_64_linux'
 const qoderMachineTypeMagic = '5'
+
+export function qoderMachineOs(platform: string = process.platform, arch: string = process.arch): string {
+  const architecture = arch === 'arm64' ? 'aarch64' : arch === 'x64' ? 'x86_64' : arch
+  return `${architecture}_${platform}`
+}
 
 export interface CosyCredentials {
   userID: string
@@ -37,14 +37,17 @@ export interface CosyCredentials {
   name: string
   email: string
   machineID?: string
+  organizationId?: string
+  organizationTags?: string[]
+  dataPolicyAgreed?: boolean
 }
 
 interface UserInfo {
   uid: string
   security_oauth_token: string
-  name: string
-  aid: string
-  email: string
+  organization_id?: string
+  organization_tags?: string[]
+  data_policy_agreed?: boolean
 }
 
 interface CosyPayload {
@@ -96,9 +99,9 @@ export function buildAuthHeaders(
   const userInfo: UserInfo = {
     uid: creds.userID,
     security_oauth_token: creds.authToken,
-    name: creds.name || '',
-    aid: '',
-    email: creds.email || '',
+    ...creds.organizationId === undefined ? {} : { organization_id: creds.organizationId },
+    ...creds.organizationTags === undefined ? {} : { organization_tags: creds.organizationTags },
+    ...creds.dataPolicyAgreed === undefined ? {} : { data_policy_agreed: creds.dataPolicyAgreed },
   }
 
   const infoB64 = aesEncryptCBCBase64(JSON.stringify(userInfo), aesKey)
@@ -122,13 +125,10 @@ export function buildAuthHeaders(
   const sigInput = `${payloadB64}\n${cosyKey}\n${timestamp}\n${bodyStr}\n${sigPath}`
   const sig = crypto.createHash('md5').update(sigInput).digest('hex')
 
-  const bodyHash = crypto
-    .createHash('md5')
-    .update(body || '')
-    .digest('hex')
-  const bodyLen = body ? (Buffer.isBuffer(body) ? body.length : Buffer.from(body).length).toString() : '0'
-
   const machineID = creds.machineID || getMachineId()
+
+  const isModelRequest = sigPath === '/api/v2/service/pro/sse/agent_chat_generation'
+  const machineHostname = hostname().replace(/[^\x20-\x7e]/gu, '').trim()
 
   return {
     Authorization: `Bearer COSY.${payloadB64}.${sig}`,
@@ -139,16 +139,16 @@ export function buildAuthHeaders(
     'Cosy-Machineid': machineID,
     'Cosy-Machinetoken': machineID,
     'Cosy-Machinetype': qoderMachineTypeMagic,
-    'Cosy-Machineos': qoderMachineOs,
+    'Cosy-Machineos': qoderMachineOs(),
+    ...isModelRequest && machineHostname ? { 'Cosy-MachineHostname': machineHostname } : {},
     'Cosy-Clienttype': qoderClientType,
-    'Cosy-Clientip': '127.0.0.1',
-    'Cosy-Bodyhash': bodyHash,
-    'Cosy-Bodylength': bodyLen,
-    'Cosy-Sigpath': sigPath,
-    'Cosy-Data-Policy': qoderDataPolicy,
-    'Cosy-Organization-Id': '',
-    'Cosy-Organization-Tags': '',
+    'Cosy-Business-Product': 'cli',
+    'Cosy-Business-Type': 'agent',
+    'Cosy-Scene': 'assistant',
+    ...isModelRequest ? {} : { 'Cosy-Clientip': machineID },
+    'Cosy-Data-Policy': creds.dataPolicyAgreed === true ? 'agree' : qoderDataPolicy,
+    ...creds.organizationId ? { 'Cosy-Organization-Id': creds.organizationId } : {},
+    ...creds.organizationTags?.length ? { 'Cosy-Organization-Tags': creds.organizationTags.join(',') } : {},
     'Login-Version': qoderLoginVersion,
-    'X-Request-Id': crypto.randomUUID(),
   }
 }

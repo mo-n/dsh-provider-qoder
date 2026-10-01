@@ -265,7 +265,8 @@ test('fetchQoderModels calls the encoded Global catalog with COSY authentication
   assert.equal(request?.init?.method, 'GET')
   const headers = request?.init?.headers as Record<string, string>
   assert.match(headers.Authorization, /^Bearer COSY\./u)
-  assert.equal(headers['Cosy-Sigpath'], '/api/v2/model/list')
+  assert.equal(headers['Cosy-Sigpath'], undefined)
+  assert.equal(headers['Cosy-Scene'], 'assistant')
   assert.equal(typeof (logs[1]?.details as { durationMs?: unknown }).durationMs, 'number')
   assert.deepEqual(logs.map((entry) => {
     if (entry.message !== '[Qoder Models] Catalog request completed') return entry

@@ -7,7 +7,7 @@ import { translateTools, validateAndTranslateMessages } from './translate.ts'
 import type { QoderWireMessage, QoderWireRequest } from './wire-types.ts'
 import { selectedContextTier, type QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
-import type { CosyCredentials } from './cosy.ts'
+import { qoderIdeVersion, type CosyCredentials } from './cosy.ts'
 import {
   QoderTurnTracker,
   wireMessageText,
@@ -169,7 +169,9 @@ export async function buildQoderRequestBody(
     chat_prompt: '',
     image_urls: null,
     aliyun_user_type: '',
-    system: '',
+    system: messages.filter(message => message.role === 'system').flatMap(message =>
+      typeof message.content === 'string' && message.content.length > 0
+        ? [{ type: 'text' as const, text: message.content }] : []),
     messages,
     tools,
     parameters: {
@@ -199,9 +201,9 @@ export async function buildQoderRequestBody(
     },
     business: {
       product: 'cli',
-      version: '1.0.60',
+      version: qoderIdeVersion,
       type: 'agent',
-      stage: 'start',
+      stage: identity.businessStage,
       // One agent run reports one business id for all of its requests, exactly
       // as the official client does; the service aggregates consumption by it.
       id: identity.businessId,
