@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { QoderCatalogLifecycle } from '../src/dsh/catalog-lifecycle.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderTransport } from '../src/qoder/transport/index.ts'
@@ -29,19 +30,20 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
     ? Promise.resolve(old)
     : new Promise(resolve => { complete = resolve }))
   const published: Array<readonly QoderCatalogModel[]> = []
-  const adapter = new QoderAdapter({
-    resolveTransport: () => remote,
-    models: old,
-    onModelsDiscovered: (_transport, models) => { published.push(models) },
+  const catalog = new QoderCatalogLifecycle({
+    resolveTransport: () => remote, region: () => 'global', configuredModels: () => old,
+    onDiscovered: (_transport, models) => { published.push(models) },
   })
+  const adapter = new QoderAdapter({ resolveTransport: () => remote, catalog })
   await adapter.listModels(QODER_PROVIDER_ID)
   t.mock.timers.tick(300000)
   const pending = adapter.listModels(QODER_PROVIDER_ID)
   await Promise.resolve()
   const fresh = [{ id: 'chosen', name: 'Chosen', supportsImages: true, priceFactor: 4,
     reasoningEfforts: [{ id: 'high', name: 'High' }] }]
-  adapter.updateDiscoveredModels(remote, fresh)
-  adapter.replaceModels(fresh)
+  // Both automatic and explicit discovery cross the same lifecycle seam.
+  const freshTransport = transport(async () => fresh)
+  await catalog.discover(undefined, freshTransport)
   const resolved = await adapter.resolveModel(QODER_PROVIDER_ID, 'chosen')
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
   assert.equal(resolved.reasoning?.efforts[0].id, 'high')
@@ -50,7 +52,7 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
   assert.match((await pending)[0].name, /4x/u)
   assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
   assert.equal(calls, 2)
-  assert.deepEqual(published, [old])
+  assert.deepEqual(published, [old, fresh])
 })
 
 test('model reads share discovery, cache for five minutes, and preserve enabled models', async (t) => {

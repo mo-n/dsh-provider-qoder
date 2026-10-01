@@ -500,6 +500,8 @@ test('apply mounts the settings RPC on the connection Fetch registry', async () 
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
     '/api/qoder-subscription/sessionTier',
+    '/api/qoder-subscription/readSessionTier',
+    '/api/qoder-subscription/sessionTierEvents',
   ])
 })
 
@@ -705,4 +707,87 @@ test('the settings service tolerates updates with frozen models containing conte
     (await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'tiered' })).context?.contextWindow,
     1_000_000,
   )
+})
+
+
+test('explicit discovery retains fresh metadata when storage fails and settings updates retry it', async (t) => {
+  t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Remote name', priceFactor: 4, supportsImages: true },
+  ])
+  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: {
+    global: [{ id: 'chosen', name: 'User name', priceFactor: 1 }],
+  } })
+  settings.onPersist = async () => { throw new Error('Storage unavailable') }
+  const discovered = await ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID })
+  assert.equal(discovered.length, 1)
+  await drain()
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
+  assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
+  settings.onPersist = undefined
+  await ctx.settings.update(ns, { webSearchMode: 'always' })
+  await drain()
+  const stored = memorySettings(ctx).get(ns)
+  assert.equal(stored?.modelsByRegion?.global?.[0].priceFactor, 4)
+  assert.equal(stored?.modelsByRegion?.global?.[0].name, 'User name')
+  assert.equal(stored?.webSearchMode, 'always')
+})
+
+test('a late explicit discovery cannot update or persist after switching region away and back', async (t) => {
+  let finish!: (models: readonly QoderCatalogModel[]) => void
+  const started = new Promise<void>(resolve => {
+    t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', () => {
+      resolve()
+      return new Promise<readonly QoderCatalogModel[]>(complete => { finish = complete })
+    })
+  })
+  const { ctx, ns } = await modelRuntime({ modelsByRegion: {
+    global: [{ id: 'chosen', name: 'Global', priceFactor: 1 }],
+    china: [{ id: 'chosen', name: 'China', priceFactor: 2 }],
+  } })
+  const pending = ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID })
+  await started
+  await ctx.settings.update(ns, { region: 'china' })
+  await drain()
+  await ctx.settings.update(ns, { region: 'global' })
+  await drain()
+  finish([{ id: 'chosen', name: 'Obsolete', priceFactor: 9, supportsImages: true }])
+  await pending
+  await drain()
+  assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
+  assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.china?.[0].priceFactor, 2)
+  const resolved = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'chosen' })
+  assert.deepEqual(resolved.inputModalities, ['text'])
+})
+
+test('session tier RPC returns the effective host choice and rejects obsolete regions', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  const routes = new Map<string, { fetch(request: Request): Promise<Response> }>()
+  ctx.provide('connection', { fetch: { register: (route: { path: string; fetch(request: Request): Promise<Response> }) => {
+    routes.set(route.path, route)
+    return () => { routes.delete(route.path) }
+  } } } as any)
+  ctx.provide('attachments', {} as any)
+  const model = { id: 'tiered', name: 'Tiered', contextTier: 'large', contextWindow: 1_000_000,
+    contextOptions: { small: { tokenCount: 200_000 }, large: { tokenCount: 1_000_000 } } }
+  const fiber = ctx.plugin({ name: plugin.name, inject: [...plugin.inject, 'settings'], apply: owner => applyWithSettings(owner, { modelsByRegion: { global: [model], china: [model] } }) })
+  await fiber.await()
+  const scope = { region: 'global', sessionId: 's', modelId: 'tiered' }
+  const call = async (endpoint: string, data: unknown) => {
+    const path = `/api/qoder-subscription/${endpoint}`
+    const response = await routes.get(path)!.fetch(new Request(`http://localhost${path}`, { method: 'POST', body: JSON.stringify(data) }))
+    return await response.json()
+  }
+  assert.deepEqual(await call('readSessionTier', scope), { ok: true, value: { ...scope, tierKey: 'large', tokenCount: 1_000_000 } })
+  assert.deepEqual(await call('sessionTier', { ...scope, tierKey: 'small' }), { ok: true, value: { ...scope, tierKey: 'small', tokenCount: 200_000 } })
+  assert.deepEqual(await call('readSessionTier', scope), { ok: true, value: { ...scope, tierKey: 'small', tokenCount: 200_000 } })
+  assert.equal((await call('sessionTier', { ...scope, tierKey: 'unknown' })).ok, false)
+  await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'china' })
+  assert.equal((await call('readSessionTier', scope)).ok, false)
+  assert.equal((await call('sessionTier', { ...scope, tierKey: 'large' })).ok, false)
+  const china = { ...scope, region: 'china' }
+  assert.equal((await call('readSessionTier', china)).value.tierKey, 'large')
+  await fiber.dispose()
 })

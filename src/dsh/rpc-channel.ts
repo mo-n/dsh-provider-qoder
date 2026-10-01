@@ -17,14 +17,22 @@ export const qoderRpcChannel = '/qoder-subscription'
 export const qoderRpcApiPath = `/api${qoderRpcChannel}`
 
 /** Endpoints the account card, the model catalog, and the composer context select call. */
-export const qoderRpcEndpoints = ['account', 'models', 'sessionTier'] as const
+export const qoderRpcEndpoints = ['account', 'models', 'sessionTier', 'readSessionTier', 'sessionTierEvents'] as const
 
 export type QoderRpcEndpoint = (typeof qoderRpcEndpoints)[number]
 
-export interface QoderSessionTierPayload {
+export interface QoderSessionTierScope {
   region: QoderRegion
   sessionId: string
   modelId: string
+}
+
+export interface QoderSessionTierSelection extends QoderSessionTierScope {
+  tierKey: string
+  tokenCount: number
+}
+
+export interface QoderSessionTierPayload extends QoderSessionTierScope {
   tierKey: string
 }
 

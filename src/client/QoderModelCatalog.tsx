@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import {
   contextTiersOf,
   formatContextTokens,
@@ -7,75 +7,43 @@ import {
   type QoderCatalogModel,
 } from '../qoder/catalog.ts'
 import {
-  reconcileQoderModels,
   type QoderCredentialOperations,
   type QoderCredentialInjected,
 } from './credential-operations.ts'
-import type { QoderCredentialCopy } from './locales.ts'
+import type { QoderRegion } from '../qoder/region.ts'
+import { QoderModelCatalogEditor } from './model-catalog-editor.ts'
 import css from './QoderCredentialCard.module.css'
 
 interface QoderModelCatalogProps extends Pick<QoderCredentialInjected, 't'> {
-  operations: Pick<QoderCredentialOperations, 'discoverModels'>
+  region: QoderRegion
+  operations: Pick<QoderCredentialOperations, 'discoverModels' | 'storeModels'>
   models: QoderCatalogModel[]
   disabled: boolean
   fetchDisabled?: boolean
   hideTitle?: boolean
-  onChange(models: QoderCatalogModel[]): void
 }
 
-export function validateModelCatalog(models: readonly QoderCatalogModel[]): QoderCredentialCopy | undefined {
-  return models.length === 0 ? 'modelsRequired' : undefined
-}
-
+/** The key resets directory state whenever the active Qoder service region changes. */
 export function QoderModelCatalog(props: QoderModelCatalogProps) {
-  const { operations, models, disabled, fetchDisabled, hideTitle, onChange, t } = props
-  const [fetching, setFetching] = useState(false)
-  const [failure, setFailure] = useState<string | undefined>()
-  const [catalog, setCatalog] = useState<QoderCatalogModel[] | undefined>()
-  const [unavailableIds, setUnavailableIds] = useState<Set<string>>(new Set())
-  const displayedModels = catalog ?? models
-  const selectedIds = useMemo(() => new Set(models.map(model => model.id)), [models])
+  return <RegionModelCatalog key={props.region} {...props} />
+}
 
-  const fetchModels = async (): Promise<void> => {
-    setFetching(true)
-    setFailure(undefined)
-    const result = await operations.discoverModels()
-    setFetching(false)
-    if (!result.ok) {
-      setFailure(result.error.message || t('modelsFetchFailed'))
-      return
-    }
-    const reconciled = reconcileQoderModels(catalog ?? models, result.value)
-    setCatalog(reconciled.catalog)
-    setUnavailableIds(reconciled.unavailableIds)
-    onChange(reconciled.selected)
-  }
-
-  const toggleModel = (id: string, enabled: boolean): void => {
-    if (unavailableIds.has(id)) return
-    const source = catalog ?? models
-    if (catalog === undefined) setCatalog(source)
-    const nextSelected = new Set(selectedIds)
-    if (enabled) nextSelected.add(id)
-    else nextSelected.delete(id)
-    onChange(source.filter(model => nextSelected.has(model.id) && !unavailableIds.has(model.id)))
-  }
-
-  // Selecting a tier moves both the DSH context budget and the tier a request asks
-  // the provider for, so the entry keeps the chosen key alongside its capacity.
-  const changeContextTier = (id: string, tierKey: string): void => {
-    const source = catalog ?? models
-    if (catalog === undefined) setCatalog(source)
-    const apply = (model: QoderCatalogModel): QoderCatalogModel => {
-      if (model.id !== id) return model
-      const tokenCount = model.contextOptions?.[tierKey]?.tokenCount
-      if (typeof tokenCount !== 'number' || !Number.isFinite(tokenCount) || tokenCount <= 0) return model
-      return { ...model, contextTier: tierKey, contextWindow: tokenCount }
-    }
-    const nextCatalog = source.map(apply)
-    setCatalog(nextCatalog)
-    onChange(models.map(apply))
-  }
+function RegionModelCatalog({ operations, models, region, disabled, fetchDisabled, hideTitle, t }: QoderModelCatalogProps) {
+  const [editor] = useState(() => new QoderModelCatalogEditor(region, models, operations))
+  const snapshot = useSyncExternalStore(editor.subscribe, editor.getSnapshot, editor.getSnapshot)
+  useLayoutEffect(() => {
+    editor.activate()
+    return () => editor.dispose()
+  }, [editor])
+  useLayoutEffect(() => {
+    editor.replaceModels(models)
+  }, [editor, models])
+  const displayedModels = snapshot.catalog
+  const unavailableIds = snapshot.unavailableIds
+  const selectedIds = new Set(snapshot.models.map(model => model.id))
+  const busy = snapshot.pending !== undefined
+  const fetching = snapshot.pending === 'discovering'
+  const failure = snapshot.failureMessage || (snapshot.failure ? t(snapshot.failure) : undefined)
 
   const renderRate = (model: QoderCatalogModel): string => {
     if (model.isFree || model.priceFactor === 0) return t('modelRateFree')
@@ -98,14 +66,14 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
         {!hideTitle ? (
           <div>
             <strong className={css.modelCatalogTitle}>{t('modelsTitle')}</strong>
-            <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: models.length })}</p>
+            <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: snapshot.models.length })}</p>
           </div>
         ) : null}
         <button
           type="button"
           className={css.linkButton}
-          disabled={disabled || fetching || Boolean(fetchDisabled)}
-          onClick={() => { void fetchModels() }}
+          disabled={disabled || busy || Boolean(fetchDisabled)}
+          onClick={() => { if (!disabled && !fetchDisabled) void editor.discover() }}
         >
           {fetching ? t('modelsFetching') : t('modelsFetch')}
         </button>
@@ -123,8 +91,8 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
                 <input
                   type="checkbox"
                   checked={!unavailable && selectedIds.has(model.id)}
-                  disabled={disabled || unavailable}
-                  onChange={event => { toggleModel(model.id, event.currentTarget.checked) }}
+                  disabled={disabled || busy || unavailable}
+                  onChange={event => { if (!disabled) void editor.toggle(model.id, event.currentTarget.checked) }}
                 />
                 <span className={css.modelChoiceName}>{model.name}</span>
                 <span className={css.modelRate}>
@@ -140,8 +108,8 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
                     <select
                       className={css.modelTierSelect}
                       value={selectedTier ?? ''}
-                      disabled={disabled || unavailable || !selectedIds.has(model.id)}
-                      onChange={event => { changeContextTier(model.id, event.currentTarget.value) }}
+                      disabled={disabled || busy || unavailable || !selectedIds.has(model.id)}
+                      onChange={event => { if (!disabled) void editor.selectTier(model.id, event.currentTarget.value) }}
                     >
                       {tiers.map(tier => (
                         <option key={tier.key} value={tier.key}>

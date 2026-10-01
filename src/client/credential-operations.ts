@@ -2,7 +2,7 @@ import type { QoderAccountInfo } from '../qoder/account.ts'
 import { cloneCatalogModel, defaultModels, mergeAdvertisedContext, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
-import type { QoderRpcResult } from '../dsh/rpc-channel.ts'
+import type { QoderSessionTierScope, QoderSessionTierSelection, QoderRpcResult } from '../dsh/rpc-channel.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 
 export interface QoderCredentialOperations {
@@ -10,14 +10,15 @@ export interface QoderCredentialOperations {
   store(value: string): Promise<boolean>
   remove(): Promise<boolean>
   getAccount(force?: boolean): Promise<QoderAccountResult | undefined>
-  canRestoreContextHistory?(): boolean
   getModelSnapshot(): QoderModelSettingsSnapshot
   subscribeModels(listener: () => void): () => void
   storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<boolean>
   storeRegion(region: QoderRegion): Promise<boolean>
   storeWebSearchMode(mode: QoderWebSearchMode): Promise<boolean>
   discoverModels(): Promise<QoderModelDiscoveryResult>
-  setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<boolean>
+  setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<QoderSessionTierSelection | undefined>
+  readSessionTier?(scope: QoderSessionTierScope): Promise<QoderSessionTierSelection | undefined>
+  subscribeSessionTiers?(scope: QoderSessionTierScope, listener: () => void): () => void
   subscribe(listener: () => void): () => void
 }
 
