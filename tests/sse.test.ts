@@ -74,6 +74,61 @@ test('parseQoderSse extracts thinking tags split across content chunks', async (
   ])
 })
 
+test('parseQoderSse keeps a tag the answer quotes inside inline code as text', async () => {
+  const content = 'A reply that quotes `<think>` and `</think>` inline keeps them as text.'
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+    done,
+  ]))) chunks.push(chunk)
+
+  const blocks = chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block)
+  assert.deepEqual(blocks, [{ type: 'text', text: content }])
+})
+
+test('parseQoderSse keeps a quoted tag inside a fenced code block as text', async () => {
+  const content = 'Example:\n```\n<think>literal</think>\n```\nafter'
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+    done,
+  ]))) chunks.push(chunk)
+
+  const blocks = chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block)
+  assert.deepEqual(blocks, [{ type: 'text', text: content }])
+})
+
+test('parseQoderSse keeps an unclosed opener visible instead of swallowing the answer', async () => {
+  const content = 'Reasoning about <think> and the rest of the answer stays visible.'
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+    done,
+  ]))) chunks.push(chunk)
+
+  const blocks = chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block)
+  assert.deepEqual(blocks, [{ type: 'text', text: content }])
+})
+
+test('parseQoderSse still extracts a live tag that follows a quoted one', async () => {
+  const chunks = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data({ choices: [{ delta: { content: 'quoted `<think>` then <think>real</think>\nvisible' } }] }),
+    data({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+    done,
+  ]))) chunks.push(chunk)
+
+  const blocks = chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block)
+  assert.deepEqual(blocks, [
+    { type: 'text', text: 'quoted `<think>` then ' },
+    { type: 'reasoning', text: 'real' },
+    { type: 'text', text: 'visible' },
+  ])
+})
+
 test('parseQoderSse assembles interleaved parallel tool calls', async () => {
   const chunks = []
   for await (const chunk of parseQoderSse(streamOf([
