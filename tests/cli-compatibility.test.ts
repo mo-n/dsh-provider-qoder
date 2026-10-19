@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { createQoderTransport } from '../src/qoder/transport/index.ts'
-import { qoderEncodeBody } from '../src/qoder/transport/wire/encoding.ts'
+import { qoderEncodeBody, qoderEncodeBodyBytes } from '../src/qoder/transport/wire/encoding.ts'
 import { qoderIdeVersion } from '../src/qoder/transport/wire/cosy.ts'
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/qoder-cli-1.1.48.json', import.meta.url), 'utf8')) as {
@@ -25,6 +25,8 @@ test('body encoding matches frozen qodercli WASM vectors including UTF-8 and sea
   for (const { plaintext, encoded } of fixture.vectors) {
     assert.equal(qoderEncodeBody(plaintext), encoded)
     assert.equal(qoderEncodeBody(Buffer.from(plaintext)), encoded)
+    assert.deepEqual(qoderEncodeBodyBytes(plaintext), Buffer.from(encoded, 'utf8'))
+    assert.deepEqual(qoderEncodeBodyBytes(Buffer.from(plaintext)), Buffer.from(encoded, 'utf8'))
   }
 })
 
