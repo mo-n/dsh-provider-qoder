@@ -228,3 +228,25 @@ test('unmount invalidates pending credential reads before they can start an acco
   assert.equal(card.requests.length, 0)
   assert.equal(card.lateUpdates(), 0)
 })
+
+
+for (const planTotal of [0, 100]) {
+  test(`add-on credits render without a subscription reset date when plan quota is ${planTotal}`, async () => {
+    const card = await mountCard()
+    card.requests[0].result.resolve({ ok: true, value: {
+      profile: { id: 'addon-user', name: 'Add-on subscriber', email: '' },
+      usage: {
+        expiresAt: '2027-01-01T00:00:00.000Z',
+        userQuota: { total: planTotal, used: 0, remaining: planTotal, percentage: 0, unit: 'credits' },
+        addOnQuota: { total: 2600, used: 688, remaining: 1912, percentage: 27, unit: 'credits' },
+      },
+      updatedAt: '2026-10-19T00:00:00.000Z',
+    } })
+    await card.settle()
+    assert.match(card.text(), /addOnQuotaTitle/)
+    assert.doesNotMatch(card.text(), /noQuota/)
+    assert.equal((card.text().match(/resetsAt/g) ?? []).length, planTotal > 0 ? 1 : 0,
+      'only the subscription quota may display its reset date')
+    card.unmount()
+  })
+}

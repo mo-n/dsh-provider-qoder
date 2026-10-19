@@ -54,6 +54,8 @@ interface RawQuota {
 interface RawUsageInfo {
   userQuota?: RawQuota
   orgResourcePackage?: RawQuota
+  addOnQuota?: RawQuota
+  add_on_quota?: RawQuota
   dedicatedResourcePackages?: unknown
   totalUsagePercentage?: number
   isQuotaExceeded?: boolean
@@ -371,6 +373,11 @@ export class QoderUsageReader {
    * `dedicatedResourcePackages`: those entries carry the campaign identifiers
    * that the normalized list deliberately discards, and this payload crosses
    * the seam into the browser.
+   *
+   * `addOnQuota` is the pool a plan holds separately from its own subscription
+   * quota. A plan whose subscription quota is zero — Free in particular —
+   * reports its whole balance there, so dropping the bucket left the card with
+   * nothing to render.
    */
   private async fetchUsage(jobToken: string, signal?: AbortSignal): Promise<QoderQuotaUsage> {
     const data = await openApiJsonRequest<RawUsageInfo>(this.fetchImpl, {
@@ -390,6 +397,7 @@ export class QoderUsageReader {
     return {
       userQuota: normalizeQuota(data.userQuota),
       orgResourcePackage: normalizeQuota(data.orgResourcePackage),
+      addOnQuota: normalizeQuota(data.add_on_quota ?? data.addOnQuota),
       ...dedicatedResourcePackages !== undefined ? { dedicatedResourcePackages } : {},
       totalUsagePercentage: typeof data.totalUsagePercentage === 'number' ? data.totalUsagePercentage : undefined,
       isQuotaExceeded: typeof data.isQuotaExceeded === 'boolean' ? data.isQuotaExceeded : false,

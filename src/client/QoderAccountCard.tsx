@@ -202,6 +202,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
     const { profile, usage, plan } = accountState.account
     const userQuota = usage?.userQuota
     const orgPackage = usage?.orgResourcePackage
+    const addOnQuota = usage?.addOnQuota
     const dedicatedPackages = usage?.dedicatedResourcePackages ?? []
     const locale = activeLocale()
     const avatarInitial = (profile.name || profile.email || 'Q').charAt(0).toUpperCase()
@@ -210,6 +211,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
     const isSuspended = plan?.organization?.isSuspended === true
     const hasQuota = (userQuota?.total ?? 0) > 0
       || (orgPackage?.total ?? 0) > 0
+      || (addOnQuota?.total ?? 0) > 0
       || dedicatedPackages.some(pkg => pkg.total > 0)
     return (
       <div className={css.accountSection}>
@@ -253,6 +255,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
         {usage?.isQuotaExceeded ? <p className={css.error}>{t('quotaExceeded')}</p> : null}
         {renderQuota('userQuota', t('userQuotaTitle'), userQuota, { resetDate })}
         {renderQuota('orgResource', t('orgResourceTitle'), orgPackage, { resetDate })}
+        {renderQuota('addOnQuota', t('addOnQuotaTitle'), addOnQuota)}
         {dedicatedPackages.map((pkg, index) => renderQuota(
           `dedicatedResource-${pkg.id ?? index}`,
           resolveLocalizedText(pkg.title, locale) ?? t('dedicatedResourceTitle'),

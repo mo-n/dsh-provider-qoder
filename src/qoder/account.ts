@@ -46,6 +46,12 @@ export interface QoderResourcePackage {
 export interface QoderQuotaUsage {
   userQuota?: QoderQuota
   orgResourcePackage?: QoderQuota
+  /**
+   * Credit pool the plan holds separately from its own subscription quota.
+   * A plan whose subscription quota is zero reports its whole balance here,
+   * so a card that ignores this bucket shows no quota at all.
+   */
+  addOnQuota?: QoderQuota
   dedicatedResourcePackages?: QoderResourcePackage[]
   totalUsagePercentage?: number
   isQuotaExceeded?: boolean
