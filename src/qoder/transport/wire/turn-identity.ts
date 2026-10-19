@@ -159,10 +159,10 @@ const injectedContextOpenings: readonly string[] = [
 const hostNotificationTemplate = /^(?:Agent|Background subagent) \S{3,} (?:sent a message:|finished\b)/
 
 /**
- * Text this transport synthesizes while translating a turn's own tool results.
+ * Compatibility with image markers synthesized by older transport versions.
  *
- * A tool result carrying images becomes a user-role message, so it must be
- * recognized as part of the open record rather than as new subscriber input.
+ * Current tool images stay in tool-role messages. Historical user-role markers
+ * still belong to the open record rather than to new subscriber input.
  */
 const syntheticMarkerTemplate = /^\[\d+ images? returned by the previous tool call\]/
 

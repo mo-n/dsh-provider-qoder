@@ -37,6 +37,8 @@ export type QoderWireContent = string | Array<QoderWireTextPart | QoderWireImage
 export interface QoderWireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: QoderWireContent | null
+  /** Alternate content field for multimodal tool results. */
+  contents?: Array<QoderWireTextPart | QoderWireImagePart>
   tool_calls?: QoderWireToolCall[]
   tool_call_id?: string
   reasoning_content?: string

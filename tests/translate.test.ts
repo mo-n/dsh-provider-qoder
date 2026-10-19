@@ -10,6 +10,7 @@ import {
   type Message,
 } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
+import { QoderTurnTracker } from '../src/qoder/transport/wire/turn-identity.ts'
 import { normalizeQoderModels } from '../src/qoder/catalog.ts'
 import { buildQoderRequestBody, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
 import {
@@ -225,7 +226,7 @@ test('validateAndTranslateMessages inlines user images as ordered OpenAI data UR
   }])
 })
 
-test('validateAndTranslateMessages forwards tool-result images in a following user message', async () => {
+test('validateAndTranslateMessages keeps inline tool-result images in their tool message', async () => {
   const result = createToolResultMessage({
     callId: ToolCallId('call-image'),
     content: [{ type: 'text', text: 'captured' }, { type: 'image', attachment: imageRef }],
@@ -233,11 +234,15 @@ test('validateAndTranslateMessages forwards tool-result images in a following us
   })
 
   assert.deepEqual(await validateAndTranslateMessages([result], undefined, imageAttachments()), [
-    { role: 'tool', tool_call_id: 'call-image', content: 'captured' },
     {
-      role: 'user',
+      role: 'tool',
+      tool_call_id: 'call-image',
       content: [
-        { type: 'text', text: '[1 image returned by the previous tool call]' },
+        { type: 'text', text: 'captured' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+      ],
+      contents: [
+        { type: 'text', text: 'captured' },
         { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
       ],
     },
@@ -452,7 +457,7 @@ test('validateAndTranslateMessages preserves order across many published images'
   ])
 })
 
-test('validateAndTranslateMessages publishes tool-result images in the following user message', async () => {
+test('validateAndTranslateMessages keeps published tool-result images in their tool message', async () => {
   const stub = stubUploader()
   const result = createToolResultMessage({
     callId: ToolCallId('call-image'),
@@ -466,11 +471,15 @@ test('validateAndTranslateMessages publishes tool-result images in the following
       credentials: stubCredentials,
     }),
     [
-      { role: 'tool', tool_call_id: 'call-image', content: 'captured' },
       {
-        role: 'user',
+        role: 'tool',
+        tool_call_id: 'call-image',
         content: [
-          { type: 'text', text: '[1 image returned by the previous tool call]' },
+          { type: 'text', text: 'captured' },
+          { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/published.png' } },
+        ],
+        contents: [
+          { type: 'text', text: 'captured' },
           { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/published.png' } },
         ],
       },
@@ -692,3 +701,143 @@ test('an explicit context tier selects a tier the provider left ambiguous', asyn
 })
 
 
+
+// Issue #24: tool images must never insert a non-tool role inside a tool-call group.
+for (const format of ['modern', 'legacy separate', 'legacy grouped', 'mixed'] as const) {
+  for (const publication of [false, true]) {
+    test(`${format} parallel tool results keep ${publication ? 'published' : 'inline'} images paired with their calls`, async () => {
+      const ids = ['c0', 'c1', 'c2'].map(ToolCallId)
+      const assistant = createAssistantMessage({
+        content: ids.map(id => ({ type: 'tool-call', id, name: 'read', arguments: '{}' })),
+        source: { provider: 'dsh-provider-qoder', model: 'vision' },
+      })
+      const content: Message['content'][] = [
+        [{ type: 'text', text: 'before' }, { type: 'image', attachment: imageRef }, { type: 'text', text: 'after' }],
+        [{ type: 'image', attachment: imageRef }],
+        [{ type: 'text', text: 'plain' }],
+      ]
+      const modern = ids.map((callId, index) => createToolResultMessage({ callId, content: content[index], isError: false }))
+      const legacy = ids.map((toolCallId, index) => ({ type: 'tool-result' as const, toolCallId, content: content[index] }))
+      // Explicit IDs must remain correct even when completion order differs from call order.
+      const results = format === 'modern' ? [modern[1], modern[0], modern[2]]
+        : format === 'legacy separate' ? [1, 0, 2].map(index => ({ role: 'user', content: [legacy[index]] }))
+        : format === 'legacy grouped' ? [{ role: 'user', content: [legacy[1], legacy[0], legacy[2]] }]
+        : [modern[1], { role: 'user', content: [legacy[0]] }, modern[2]]
+      const user = createUserMessage({ content: [{ type: 'text', text: 'continue' }], source: { kind: 'user' } })
+      const answer = createAssistantMessage({ content: [{ type: 'text', text: 'done' }], source: { provider: 'dsh-provider-qoder', model: 'vision' } })
+      for (const tail of [[], [user], [answer]]) {
+        const stub = stubUploader()
+        const translated = await validateAndTranslateMessages(
+          [assistant, ...results, ...tail], undefined, imageAttachments(), undefined,
+          publication ? { uploader: stub.uploader, credentials: stubCredentials } : undefined,
+        )
+        const imagePart = { type: 'image_url', image_url: { url: publication ? 'https://oss.qoder.sh/published.png' : 'data:image/png;base64,AQID' } }
+        const firstContent = [{ type: 'text', text: 'before' }, imagePart, { type: 'text', text: 'after' }]
+        assert.deepEqual(translated.map(message => message.role), ['assistant', 'tool', 'tool', 'tool', ...tail.map(message => message.role)])
+        assert.deepEqual(translated.slice(1, 4), [
+          { role: 'tool', tool_call_id: 'c1', content: [imagePart], contents: [imagePart] },
+          { role: 'tool', tool_call_id: 'c0', content: firstContent, contents: firstContent },
+          { role: 'tool', tool_call_id: 'c2', content: 'plain' },
+        ])
+        if (tail.length > 0) assert.equal(translated.at(-1)?.content, tail[0] === user ? 'continue' : 'done')
+        assert.equal(stub.calls, publication ? 2 : 0)
+      }
+    })
+  }
+}
+
+test('legacy tool images preserve sibling user content after all tool results', async () => {
+  const result = await validateAndTranslateMessages([{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'summarize' },
+      { type: 'tool-result', toolCallId: 'c0', content: [{ type: 'image', attachment: imageRef }] },
+      { type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'plain' }] },
+    ],
+  }], undefined, imageAttachments())
+  assert.deepEqual(result.map(message => message.role), ['tool', 'tool', 'user'])
+  assert.equal(result[0].tool_call_id, 'c0')
+  assert.ok(Array.isArray(result[0].content))
+  assert.equal(result[0].content[0].type, 'image_url')
+  assert.deepEqual(result[1], { role: 'tool', tool_call_id: 'c1', content: 'plain' })
+  assert.deepEqual(result[2], { role: 'user', content: 'summarize' })
+})
+
+test('tool image limits and invalid blocks reject before attachment reads', async () => {
+  for (const legacy of [false, true]) {
+    for (const invalid of [false, true]) {
+      let reads = 0
+      const base = imageAttachments(() => { reads++ })
+      const attachments: QoderImageAttachments = {
+        ...base,
+        imageLimits: { ...base.imageLimits, maxImagesPerMessage: 1 },
+      }
+      const content = [
+        { type: 'image' as const, attachment: imageRef },
+        invalid ? { type: 'reasoning' as const, text: 'invalid' } : { type: 'image' as const, attachment: imageRef },
+      ]
+      const message = legacy
+        ? { role: 'user', content: [{ type: 'tool-result' as const, toolCallId: 'c0', content }] }
+        : createToolResultMessage({ callId: ToolCallId('c0'), content, isError: false })
+      await assert.rejects(
+        () => validateAndTranslateMessages([message], undefined, attachments),
+        (error: unknown) => error instanceof QoderLlmError && error.code === 'UNSUPPORTED_CONTENT',
+      )
+      assert.equal(reads, 0)
+    }
+  }
+})
+
+test('tool images preserve the subscriber turn identity and request text', async () => {
+  const tracker = new QoderTurnTracker()
+  const prompt = createUserMessage({ content: [{ type: 'text', text: 'Inspect the screenshot' }], source: { kind: 'user' } })
+  const options: GenerateOptions = {
+    provider: 'dsh-provider-qoder', model: 'vision', sessionId: 'tool-image-turn' as GenerateOptions['sessionId'], messages: [prompt],
+  }
+  const model = { id: 'vision', name: 'Vision', supportsImages: true }
+  const opening = await buildQoderRequestBody(options, 'user-1', undefined, model, imageAttachments(), tracker)
+  const callId = ToolCallId('c0')
+  const assistant = createAssistantMessage({
+    content: [{ type: 'tool-call', id: callId, name: 'read_image', arguments: '{}' }],
+    source: { provider: 'dsh-provider-qoder', model: 'vision' },
+  })
+  const result = createToolResultMessage({ callId, content: [{ type: 'image', attachment: imageRef }], isError: false })
+  const step = await buildQoderRequestBody({ ...options, messages: [prompt, assistant, result] }, 'user-1', undefined, model, imageAttachments(), tracker)
+  assert.deepEqual(step.messages.map(message => message.role), ['user', 'assistant', 'tool'])
+  assert.equal(step.business.id, opening.business.id)
+  assert.equal(step.request_set_id, opening.request_set_id)
+  assert.equal(step.chat_context.text, 'Inspect the screenshot')
+  assert.equal(step.chat_context.extra.originalContent, 'Inspect the screenshot')
+})
+
+test('tool image publication preserves interleaved content when images resolve out of order', async () => {
+  for (const legacy of [false, true]) {
+    const content: Message['content'] = [
+      { type: 'text', text: 'before' },
+      { type: 'image', attachment: imageRef },
+      { type: 'text', text: 'between' },
+      { type: 'image', attachment: imageRef },
+      { type: 'text', text: 'after' },
+    ]
+    const message = legacy
+      ? { role: 'user', content: [{ type: 'tool-result' as const, toolCallId: 'c0', content }] }
+      : createToolResultMessage({ callId: ToolCallId('c0'), content, isError: false })
+    let index = 0
+    const uploader: QoderImageResolver = {
+      async resolveImageUrl() {
+        const current = index++
+        await new Promise(resolve => setTimeout(resolve, current === 0 ? 8 : 1))
+        return `https://oss.qoder.sh/${current}.png`
+      },
+    }
+    const translated = await validateAndTranslateMessages([message], undefined, imageAttachments(), undefined, { uploader, credentials: stubCredentials })
+    const expected = [
+      { type: 'text', text: 'before' },
+      { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/0.png' } },
+      { type: 'text', text: 'between' },
+      { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/1.png' } },
+      { type: 'text', text: 'after' },
+    ]
+    assert.deepEqual(translated, [{ role: 'tool', tool_call_id: 'c0', content: expected, contents: expected }])
+  }
+})

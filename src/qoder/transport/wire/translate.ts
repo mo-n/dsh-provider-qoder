@@ -47,16 +47,24 @@ function unsupported(message: string): QoderLlmError {
   return new QoderLlmError(message, 'UNSUPPORTED_CONTENT')
 }
 
-function toolResultText(block: ToolResultBlock): string {
-  let text = ''
-  for (const nested of block.content) {
-    if (nested.type === 'image') continue
-    if (nested.type !== 'text') {
-      throw unsupported(`Qoder tool results support text only; received nested ${String(nested.type)} content.`)
-    }
-    text += nested.text
+/** Keep multimodal tool results attached to their call. */
+async function translateToolResultContent(
+  blocks: QoderMessage['content'],
+  context: QoderTranslateContext,
+): Promise<Pick<QoderWireMessage, 'content' | 'contents'>> {
+  const supportedBlocks = blocks.map(block => {
+    if (block.type === 'text' || block.type === 'image') return block
+    throw unsupported(`Qoder tool results support text and images only; received ${String(block.type)} content.`)
+  })
+  const images = supportedBlocks.filter((block): block is ImageBlock => block.type === 'image')
+  if (images.length === 0) {
+    return { content: supportedBlocks.map(block => block.type === 'text' ? block.text : '').join('') }
   }
-  return text
+  if (context.attachments !== undefined) enforceImageLimits(images, context.attachments)
+  const content = await Promise.all(supportedBlocks.map(block => block.type === 'image'
+    ? resolveImagePart(block, context)
+    : { type: 'text' as const, text: block.text }))
+  return { content, contents: content }
 }
 
 /** Reject a batch that exceeds the deployment image policy before any upload work starts. */
@@ -196,22 +204,8 @@ export async function validateAndTranslateMessages(
         output.push({
           role: 'tool',
           tool_call_id: callId,
-          content: toolResultText(result),
+          ...await translateToolResultContent(result.content, context),
         })
-        const images = result.content.filter((block): block is ImageBlock => block.type === 'image')
-        if (images.length > 0) {
-          if (attachments !== undefined) enforceImageLimits(images, attachments)
-          output.push({
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: `[${images.length} image${images.length === 1 ? '' : 's'} returned by the previous tool call]`,
-              },
-              ...await Promise.all(images.map(image => resolveImagePart(image, context))),
-            ],
-          })
-        }
       }
       if (nonToolBlocks.length === 0) {
         continue
@@ -220,6 +214,16 @@ export async function validateAndTranslateMessages(
 
     const contentBlocks = toolResults.length > 0 ? nonToolBlocks : message.content
 
+    if (message.role === 'tool') {
+      const callId = consumeToolCallId(message, undefined, lastAssistantToolCallIds, output.length)
+      output.push({
+        role: 'tool',
+        tool_call_id: callId,
+        ...await translateToolResultContent(contentBlocks, context),
+      })
+      continue
+    }
+
     let text = ''
     let reasoningText = ''
     const userContent: Array<QoderWireTextPart | QoderWireImagePart | undefined> = []
@@ -227,16 +231,13 @@ export async function validateAndTranslateMessages(
     let hasImage = false
     const toolCalls: QoderWireToolCall[] = []
     for (const block of contentBlocks) {
-      if (message.role === 'tool' && block.type !== 'text' && block.type !== 'image') {
-        throw unsupported(`Qoder tool results support text and images only; received ${block.type} content.`)
-      }
       if (block.type === 'text') {
         text += block.text
         if (message.role === 'user' || toolResults.length > 0) userContent.push({ type: 'text', text: block.text })
         continue
       }
       if (block.type === 'image') {
-        if (message.role !== 'user' && message.role !== 'tool' && toolResults.length === 0) {
+        if (message.role !== 'user' && toolResults.length === 0) {
           throw unsupported('Qoder image content is valid only in user messages.')
         }
         hasImage = true
@@ -272,31 +273,6 @@ export async function validateAndTranslateMessages(
         ...toolCalls.length === 0 ? {} : { tool_calls: toolCalls },
         ...hasReasoning ? { reasoning_content: reasoningText } : {},
       })
-      continue
-    }
-
-    if ((message.role as string) === 'tool') {
-      const callId = consumeToolCallId(message, undefined, lastAssistantToolCallIds, output.length)
-      output.push({
-        role: 'tool',
-        tool_call_id: callId,
-        content: text,
-      })
-      if (pendingImages.length > 0) {
-        if (attachments !== undefined) {
-          enforceImageLimits(pendingImages.map(pending => pending.block), attachments)
-        }
-        output.push({
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `[${pendingImages.length} image${pendingImages.length === 1 ? '' : 's'} returned by the previous tool call]`,
-            },
-            ...await Promise.all(pendingImages.map(pending => resolveImagePart(pending.block, context))),
-          ],
-        })
-      }
       continue
     }
 
