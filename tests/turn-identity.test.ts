@@ -242,12 +242,12 @@ test('an auxiliary host call never moves the open turn', async () => {
   assert.notEqual(continuation.business.id, titleBody.business.id)
 })
 
-test('a step that adds the transport image marker keeps the same turn', async () => {
+test('a historical transport image marker keeps the same turn', async () => {
   const session = 'identity-session-image-marker'
   const prompt = user('Describe this screenshot')
   const first = await buildQoderRequestBody(options([prompt], session), 'user-42')
-  // The translation layer materializes tool-result images as a user-role
-  // message, so an image-returning tool must not split the turn.
+  // Older transport versions materialized tool images as user-role markers.
+  // Retain compatibility when such a marker appears in historical input.
   const second = await buildQoderRequestBody(options([
     prompt,
     user('[1 image returned by the previous tool call]'),
