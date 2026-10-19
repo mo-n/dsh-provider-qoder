@@ -7,7 +7,6 @@ import {
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError, qoderModelError } from '../../errors.ts'
-import { QoderThinkingParser, type QoderContentSegment } from './thinking.ts'
 import type { QoderInnerChunk, QoderSseEnvelope } from './wire-types.ts'
 
 const doneMarker = '[DONE]'
@@ -129,7 +128,6 @@ export async function* parseQoderSse(
 ): AsyncGenerator<StreamChunk> {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
-  const thinkingParser = new QoderThinkingParser()
   const toolCalls = new Map<number, ToolCallState>()
   let buffer = ''
   let sourceEnded = false
@@ -155,7 +153,7 @@ export async function* parseQoderSse(
     }]
   }
 
-  const appendSegment = (segment: QoderContentSegment): StreamChunk[] => {
+  const appendSegment = (segment: Pick<TextualBlockState, 'type' | 'text'>): StreamChunk[] => {
     if (!segment.text) return []
     const chunks: StreamChunk[] = []
     sawContent = true
@@ -244,14 +242,12 @@ export async function* parseQoderSse(
           if (!delta) continue
 
           if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
-            for (const segment of thinkingParser.pushReasoning(delta.reasoning_content)) {
-              for (const chunk of appendSegment(segment)) yield chunk
-            }
+            // Qoder already identifies reasoning by field; preserve its text verbatim.
+            for (const chunk of appendSegment({ type: 'reasoning', text: delta.reasoning_content })) yield chunk
           }
           if (typeof delta.content === 'string' && delta.content) {
-            for (const segment of thinkingParser.pushContent(delta.content)) {
-              for (const chunk of appendSegment(segment)) yield chunk
-            }
+            // Thinking tags in visible content are literal text, including code examples.
+            for (const chunk of appendSegment({ type: 'text', text: delta.content })) yield chunk
           }
 
           if (delta.tool_calls !== undefined) {
@@ -339,9 +335,6 @@ export async function* parseQoderSse(
   // truncation.
   if (!sawDone && !sawFinishReason) throw new QoderLlmError('SSE stream ended prematurely without [DONE].', 'TRANSPORT')
 
-  for (const segment of thinkingParser.finish()) {
-    for (const chunk of appendSegment(segment)) yield chunk
-  }
   for (const chunk of closeTextual()) yield chunk
 
   for (const [, state] of [...toolCalls.entries()].sort(([left], [right]) => left - right)) {
