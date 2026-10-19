@@ -13,7 +13,7 @@ import { getQoderChatUrl } from './endpoints.ts'
 import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
 import { redactLogValue, type QoderLogger } from './logging.ts'
 import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
-import { qoderEncodeBody } from './wire/encoding.ts'
+import { qoderEncodeBodyBytes } from './wire/encoding.ts'
 import { buildQoderRequestBody } from './wire/serialize.ts'
 import { parseQoderSse } from './wire/sse.ts'
 import type { QoderWireMessage } from './wire/wire-types.ts'
@@ -40,8 +40,7 @@ export async function* streamQoderChat(
 ): AsyncGenerator<StreamChunk> {
   const request = await buildQoderRequestBody(options, credentials.userID, messages, model)
   request.session_type = dependencies.region === 'china' ? 'qoderclicn' : 'qodercli'
-  const encodedBody = qoderEncodeBody(JSON.stringify(request))
-  const encodedBytes = Buffer.from(encodedBody, 'utf8')
+  const encodedBytes = qoderEncodeBodyBytes(JSON.stringify(request))
   const chatUrl = getQoderChatUrl(dependencies.region)
   const requestController = new AbortController()
   let headerTimedOut = false

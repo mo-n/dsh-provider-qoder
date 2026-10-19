@@ -85,11 +85,14 @@ test('COSY metadata requests use the CLI Machine ID fallback and explicit privac
 
 
 test('Machine ID lookup honors CLI config overrides and China branding', () => {
-  assert.equal(qoderMachineIdPaths('global', { QODER_CONFIG_DIR: '/tmp/offline-cli' }, '/tmp/offline-home')[0],
-    '/tmp/offline-cli/.auth/machine_id')
-  assert.equal(qoderMachineIdPaths('china', { QODERCN_CLI_HOME: '/tmp/offline-cn' }, '/tmp/offline-home')[0],
-    '/tmp/offline-cn/.qoder-cn/.auth/machine_id')
-  assert.equal(qoderMachineIdPaths('global', {}, '/tmp/offline-home')[0], '/tmp/offline-home/.qoder/.auth/machine_id')
+  const home = join(tmpdir(), 'offline-home')
+  const configDir = join(tmpdir(), 'offline-cli')
+  const cliHome = join(tmpdir(), 'offline-cn')
+  assert.equal(qoderMachineIdPaths('global', { QODER_CONFIG_DIR: configDir }, home)[0],
+    join(configDir, '.auth', 'machine_id'))
+  assert.equal(qoderMachineIdPaths('china', { QODERCN_CLI_HOME: cliHome }, home)[0],
+    join(cliHome, '.qoder-cn', '.auth', 'machine_id'))
+  assert.equal(qoderMachineIdPaths('global', {}, home)[0], join(home, '.qoder', '.auth', 'machine_id'))
 })
 
 test('an unwritable Machine ID fallback remains stable across authentication refreshes', () => {

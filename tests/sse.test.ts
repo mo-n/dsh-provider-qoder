@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { parseQoderSse } from '../src/qoder/transport/wire/sse.ts'
 
@@ -42,35 +43,71 @@ test('parseQoderSse unwraps text, disjoint usage, and envelope-body DONE', async
   })
 })
 
-test('parseQoderSse separates native reasoning and removes cross-channel thinking tags', async () => {
+test('parseQoderSse preserves Qoder reasoning content verbatim and streams each delta immediately', async () => {
   const chunks = []
   for await (const chunk of parseQoderSse(streamOf([
-    data({ choices: [{ delta: { reasoning_content: '<thinking>inspect the input' } }] }),
+    data({ choices: [{ delta: { reasoning_content: '<thi' } }] }),
+    data({ choices: [{ delta: { reasoning_content: 'nking>inspect</thinking>' } }] }),
     data({ choices: [{ delta: { content: '</thinking>\n\nFinal answer' }, finish_reason: 'stop' }] }),
     done,
   ]))) chunks.push(chunk)
 
-  assert.deepEqual(chunks.map(chunk => chunk.type), [
-    'block-start', 'reasoning-delta', 'block-end',
-    'block-start', 'text-delta', 'block-end', 'finish',
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'reasoning-delta').map(chunk => chunk.text), [
+    '<thi', 'nking>inspect</thinking>',
   ])
-  assert.deepEqual((chunks[2] as { block: unknown }).block, { type: 'reasoning', text: 'inspect the input' })
-  assert.deepEqual((chunks[5] as { block: unknown }).block, { type: 'text', text: 'Final answer' })
-  assert.equal((chunks[6] as { reason: { kind: string } }).reason.kind, 'stop')
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+    { type: 'reasoning', text: '<thinking>inspect</thinking>' },
+    { type: 'text', text: '</thinking>\n\nFinal answer' },
+  ])
 })
 
-test('parseQoderSse extracts thinking tags split across content chunks', async () => {
+test('parseQoderSse preserves content as visible text regardless of thinking tags or chunk boundaries', async () => {
+  const examples = [
+    'Reasoning about <think> and the rest of the answer',
+    '<think>careful</think>\nanswer',
+    'A reply that quotes `<think>` and `</think>` inline',
+    'Example:\n```text\nsee ``` here\n<thinking>literal</thinking>\n```\nafter',
+    '<think>real</think>\n~~~text\n<think>literal</think>\n~~~\nafter',
+    'it`s plain text\n\n<think>real</think>\nanswer',
+    '</thinking>\n\nAn orphan closing tag stays visible too.',
+    'A partial tag at EOF: <thi',
+  ]
+  for (const content of examples) {
+    for (let split = 0; split <= content.length; split++) {
+      const chunks = []
+      for await (const chunk of parseQoderSse(streamOf([
+        data({ choices: [{ delta: { content: content.slice(0, split) } }] }),
+        data({ choices: [{ delta: { content: content.slice(split) }, finish_reason: 'stop' }] }),
+        done,
+      ]))) chunks.push(chunk)
+      assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+        { type: 'text', text: content },
+      ], `split=${split}, content=${JSON.stringify(content)}`)
+    }
+  }
+})
+
+test('parseQoderSse separates Qoder reasoning content and visible content in the same delta', async () => {
   const chunks = []
   for await (const chunk of parseQoderSse(streamOf([
-    data({ choices: [{ delta: { content: '<thi' } }] }),
-    data({ choices: [{ delta: { content: 'nk>careful</th' } }] }),
-    data({ choices: [{ delta: { content: 'ink>\nanswer' }, finish_reason: 'stop' }] }),
+    data({ choices: [{ delta: { reasoning_content: '<think>inspect</think>', content: '<think>example</think>' }, finish_reason: 'stop' }] }),
     done,
   ]))) chunks.push(chunk)
-  const blocks = chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block)
-  assert.deepEqual(blocks, [
-    { type: 'reasoning', text: 'careful' },
-    { type: 'text', text: 'answer' },
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+    { type: 'reasoning', text: '<think>inspect</think>' },
+    { type: 'text', text: '<think>example</think>' },
+  ])
+})
+
+test('parseQoderSse emits partial Qoder reasoning content before reporting an interrupted stream', async () => {
+  const chunks: StreamChunk[] = []
+  await assert.rejects(async () => {
+    for await (const chunk of parseQoderSse(streamOf([
+      data({ choices: [{ delta: { reasoning_content: '<think>partial reasoning' } }] }),
+    ]))) chunks.push(chunk)
+  }, (error: unknown) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'reasoning-delta').map(chunk => chunk.text), [
+    '<think>partial reasoning',
   ])
 })
 
