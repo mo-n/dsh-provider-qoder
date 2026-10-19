@@ -241,10 +241,6 @@ test('validateAndTranslateMessages keeps inline tool-result images in their tool
         { type: 'text', text: 'captured' },
         { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
       ],
-      contents: [
-        { type: 'text', text: 'captured' },
-        { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
-      ],
     },
   ])
 })
@@ -475,10 +471,6 @@ test('validateAndTranslateMessages keeps published tool-result images in their t
         role: 'tool',
         tool_call_id: 'call-image',
         content: [
-          { type: 'text', text: 'captured' },
-          { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/published.png' } },
-        ],
-        contents: [
           { type: 'text', text: 'captured' },
           { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/published.png' } },
         ],
@@ -735,8 +727,8 @@ for (const format of ['modern', 'legacy separate', 'legacy grouped', 'mixed'] as
         const firstContent = [{ type: 'text', text: 'before' }, imagePart, { type: 'text', text: 'after' }]
         assert.deepEqual(translated.map(message => message.role), ['assistant', 'tool', 'tool', 'tool', ...tail.map(message => message.role)])
         assert.deepEqual(translated.slice(1, 4), [
-          { role: 'tool', tool_call_id: 'c1', content: [imagePart], contents: [imagePart] },
-          { role: 'tool', tool_call_id: 'c0', content: firstContent, contents: firstContent },
+          { role: 'tool', tool_call_id: 'c1', content: [imagePart] },
+          { role: 'tool', tool_call_id: 'c0', content: firstContent },
           { role: 'tool', tool_call_id: 'c2', content: 'plain' },
         ])
         if (tail.length > 0) assert.equal(translated.at(-1)?.content, tail[0] === user ? 'continue' : 'done')
@@ -838,6 +830,6 @@ test('tool image publication preserves interleaved content when images resolve o
       { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/1.png' } },
       { type: 'text', text: 'after' },
     ]
-    assert.deepEqual(translated, [{ role: 'tool', tool_call_id: 'c0', content: expected, contents: expected }])
+    assert.deepEqual(translated, [{ role: 'tool', tool_call_id: 'c0', content: expected }])
   }
 })

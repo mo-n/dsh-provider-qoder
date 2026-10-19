@@ -74,8 +74,7 @@ for (const region of ['global', 'china'] as const) {
   })
 }
 
-// Tool images stay inside their tool message, with identical content/contents
-// arrays and no synthetic user message.
+// Tool images stay inside their tool message without synthetic user messages.
 for (const region of ['global', 'china'] as const) {
   for (const publication of [true, false]) {
     test(`${region} model transport preserves tool images with ${publication ? 'published URLs' : 'inline fallback'}`, async () => {
@@ -108,8 +107,8 @@ for (const region of ['global', 'china'] as const) {
           assert.deepEqual(messages.map(message => message.role), ['user', 'assistant', 'tool', 'tool', 'tool'])
           const part = { type: 'image_url', image_url: { url: publication ? 'https://oss.qoder.sh/tool.png' : 'data:image/png;base64,AQID' } }
           assert.deepEqual(messages.slice(2), [
-            { role: 'tool', tool_call_id: 'c0', content: [part], contents: [part] },
-            { role: 'tool', tool_call_id: 'c1', content: [part], contents: [part] },
+            { role: 'tool', tool_call_id: 'c0', content: [part] },
+            { role: 'tool', tool_call_id: 'c1', content: [part] },
             { role: 'tool', tool_call_id: 'c2', content: 'plain' },
           ])
           chatCalls++

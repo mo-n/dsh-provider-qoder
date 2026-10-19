@@ -51,7 +51,7 @@ function unsupported(message: string): QoderLlmError {
 async function translateToolResultContent(
   blocks: QoderMessage['content'],
   context: QoderTranslateContext,
-): Promise<Pick<QoderWireMessage, 'content' | 'contents'>> {
+): Promise<Pick<QoderWireMessage, 'content'>> {
   const supportedBlocks = blocks.map(block => {
     if (block.type === 'text' || block.type === 'image') return block
     throw unsupported(`Qoder tool results support text and images only; received ${String(block.type)} content.`)
@@ -64,7 +64,7 @@ async function translateToolResultContent(
   const content = await Promise.all(supportedBlocks.map(block => block.type === 'image'
     ? resolveImagePart(block, context)
     : { type: 'text' as const, text: block.text }))
-  return { content, contents: content }
+  return { content }
 }
 
 /** Reject a batch that exceeds the deployment image policy before any upload work starts. */
