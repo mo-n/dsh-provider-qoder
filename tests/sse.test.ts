@@ -8,7 +8,7 @@ function streamOf(lines: readonly string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
   return new ReadableStream({
     start(controller) {
-      for (const line of lines) controller.enqueue(encoder.encode(`${line}\n`))
+      for (const line of lines) controller.enqueue(encoder.encode(`${line}\n\n`))
       controller.close()
     },
   })
@@ -245,7 +245,7 @@ test('parseQoderSse accepts a final frame without a trailing newline', async () 
   const inner = JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}\n`))
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}\n\n`))
       controller.enqueue(encoder.encode('data: [DONE]'))
       controller.close()
     },

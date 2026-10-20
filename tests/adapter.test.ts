@@ -54,7 +54,7 @@ function successfulFetch(assertChat?: (init?: RequestInit) => void): typeof fetc
       `data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}`,
       'data: [DONE]',
       '',
-    ].join('\n'))
+    ].join('\n\n'))
   }) as typeof fetch
 }
 
@@ -417,7 +417,7 @@ test('QoderAdapter routes chat streaming to the configured region endpoint', asy
         `data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}`,
         'data: [DONE]',
         '',
-      ].join('\n'))
+      ].join('\n\n'))
     }
     throw new Error(`unexpected URL: ${url}`)
   }

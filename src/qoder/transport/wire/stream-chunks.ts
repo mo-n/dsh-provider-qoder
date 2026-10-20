@@ -17,12 +17,31 @@ export interface QoderSseOptions {
   queueRecovery?: boolean
   onActivity?: () => void
   onControlFrame?: (kind: QoderControlFrameKind) => void
+  onMalformedFrame?: (details: QoderMalformedFrameDetails) => void
   maxBufferChars?: number
   headers?: Pick<Headers, 'get'>
   httpStatus?: number
 }
 
-export type QoderFrameDecoder = (rawData: string, options: QoderSseOptions) => QoderInnerChunk | '[DONE]' | undefined
+/** Structural diagnostics only; never include raw model text or upstream error bodies. */
+export interface QoderMalformedFrameDetails {
+  eventType?: string
+  marker?: string
+  chars: number
+  lines: number
+  shape: 'object' | 'array' | 'string' | 'nested-data' | 'other'
+  endsWith: 'object' | 'array' | 'string' | 'other'
+  syntax: 'truncated' | 'trailing-data' | 'invalid-control' | 'invalid-json'
+  syntaxOffset?: number
+  hasCarriageReturn?: true
+  hasReplacementCharacter?: true
+  atEof?: boolean
+  afterFinish?: boolean
+  emptyChoicesPrefix?: boolean
+  disposition?: 'skipped-after-finish' | 'skipped-auxiliary' | 'recovered-continuation' | 'rejected'
+}
+
+export type QoderFrameDecoder = (rawData: string, options: QoderSseOptions, eventType?: string) => QoderInnerChunk | '[DONE]' | undefined
 
 interface TextualBlockState {
   type: 'text' | 'reasoning'
@@ -42,6 +61,17 @@ type SuccessfulFinishKind = 'stop' | 'tool-calls' | 'max-tokens'
 
 function malformed(message: string): QoderLlmError {
   return new QoderLlmError(message, 'MALFORMED_RESPONSE')
+}
+
+/** Distinguish invalid JSON from a valid JSON value with an invalid model shape. */
+export class QoderMalformedJsonFrameError extends QoderLlmError {
+  readonly incomplete: boolean
+  readonly auxiliary: boolean
+  constructor(incomplete = false, auxiliary = false) {
+    super('Malformed model-server SSE JSON payload.', 'MALFORMED_RESPONSE')
+    this.incomplete = incomplete
+    this.auxiliary = auxiliary
+  }
 }
 
 function tokenUsage(innerChunk: QoderInnerChunk): TokenUsage | undefined {
@@ -87,11 +117,20 @@ export async function* parseQoderChunks(
   stream: ReadableStream<Uint8Array>,
   decodeFrame: QoderFrameDecoder,
   options: QoderSseOptions = {},
+  behavior: {
+    ignoreMalformedAfterFinish?: boolean
+    allowIncompleteAuxiliaryFrames?: boolean
+    recoverUnprefixedContinuations?: boolean
+  } = {},
 ): AsyncGenerator<StreamChunk> {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   const toolCalls = new Map<number, ToolCallState>()
   let buffer = ''
+  let eventData: string[] = []
+  let continuedEventData: string[] = []
+  let eventDataChars = 0
+  let eventType: string | undefined
   let sourceEnded = false
   let sawDone = false
   let nextBlockIndex = 0
@@ -156,6 +195,8 @@ export async function* parseQoderChunks(
         sourceEnded = true
         buffer += decoder.decode()
         if (buffer.length > 0 && !buffer.endsWith('\n')) buffer += '\n'
+        // Dispatch the final event even if the provider omits its blank terminator.
+        buffer += '\n'
       } else {
         options.onActivity?.()
         buffer += decoder.decode(value, { stream: true })
@@ -170,10 +211,43 @@ export async function* parseQoderChunks(
         let line = buffer.substring(0, lineEnd)
         buffer = buffer.substring(lineEnd + 1)
         if (line.endsWith('\r')) line = line.slice(0, -1)
-        line = line.trim()
-        if (!line.startsWith('data:')) continue
+        if (line.startsWith('event:')) {
+          eventType = line.substring(6).trim()
+          continue
+        }
+        if (line.startsWith('data:')) {
+          const value = line.substring(5)
+          const data = value.startsWith(' ') ? value.substring(1) : value
+          eventData.push(data)
+          if (behavior.recoverUnprefixedContinuations) continuedEventData.push(data)
+          eventDataChars += data.length + 1
+          if (eventDataChars > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
+          continue
+        }
+        if (line !== '') {
+          // Preserve possible unprefixed JSON continuations, excluding SSE fields and comments.
+          // These bytes are used only if the standard data payload fails JSON decoding.
+          // A split immediately before a JSON property separator can resemble an SSE comment
+          // (e.g. `"created"\n:1792486219,...`). Retain only colon lines starting a JSON value;
+          // the complete reconstructed event must still pass the normal decoder.
+          const jsonPropertyContinuation = /^:\s*(?:-?\d|true\b|false\b|null\b|["{\[\\])/u.test(line)
+          if (behavior.recoverUnprefixedContinuations && continuedEventData.length > 0
+            && (!line.startsWith(':') || jsonPropertyContinuation) && !/^[a-zA-Z][\w-]*(?::|$)/u.test(line)) {
+            const index = continuedEventData.length - 1
+            continuedEventData[index] += line
+            eventDataChars += line.length
+            if (eventDataChars > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
+          }
+          continue
+        }
 
-        const rawData = line.substring(5).trim()
+        const rawData = eventData.join('\n').trim()
+        const continuedData = continuedEventData.join('\n').trim()
+        const frameEventType = eventType
+        eventData = []
+        continuedEventData = []
+        eventDataChars = 0
+        eventType = undefined
         if (!rawData) continue
         if (rawData === doneMarker) {
           options.onControlFrame?.('done')
@@ -181,7 +255,50 @@ export async function* parseQoderChunks(
           break
         }
 
-        const innerChunk = decodeFrame(rawData, options)
+        let innerChunk: QoderInnerChunk | '[DONE]' | undefined
+        let malformedDetails: QoderMalformedFrameDetails | undefined
+        try {
+          const frameOptions: QoderSseOptions = {
+            ...options,
+            onMalformedFrame: details => {
+              malformedDetails = {
+                ...details,
+                atEof: sourceEnded,
+                afterFinish: sawFinishReason,
+              }
+            },
+          }
+          try {
+            innerChunk = decodeFrame(rawData, frameOptions, frameEventType)
+          } catch (error) {
+            if (!(error instanceof QoderMalformedJsonFrameError) || !continuedData || continuedData === rawData) throw error
+            const originalDetails = malformedDetails
+            innerChunk = decodeFrame(continuedData, frameOptions, frameEventType)
+            if (originalDetails) options.onMalformedFrame?.({ ...originalDetails, disposition: 'recovered-continuation' })
+          }
+        } catch (error) {
+          // qodercli 1.1.73 ignores non-JSON trailers after a model finish reason.
+          // A malformed frame before that point is still a protocol failure.
+          const malformedJson = error instanceof QoderMalformedJsonFrameError ? error : undefined
+          const skippedAfterFinish = behavior.ignoreMalformedAfterFinish && sawFinishReason
+            && frameEventType !== 'error' && malformedJson !== undefined
+          const skippedAuxiliary = !sourceEnded && behavior.allowIncompleteAuxiliaryFrames
+            && malformedJson?.incomplete && malformedJson.auxiliary && frameEventType !== 'error'
+          if (malformedDetails !== undefined) options.onMalformedFrame?.({
+            ...malformedDetails,
+            emptyChoicesPrefix: malformedJson?.auxiliary ?? false,
+            disposition: skippedAfterFinish ? 'skipped-after-finish'
+              : skippedAuxiliary ? 'skipped-auxiliary' : 'rejected',
+          })
+          if (skippedAfterFinish) continue
+          if (sourceEnded && error instanceof QoderMalformedJsonFrameError && error.incomplete) {
+            throw new QoderLlmError('Qoder SSE connection ended with an incomplete JSON event before model completion.', 'TRANSPORT')
+          }
+          // An empty-choices metadata frame carries no model delta. Keep reading for
+          // independent completion evidence; the EOF check still rejects an unfinished turn.
+          if (skippedAuxiliary) continue
+          throw error
+        }
         if (innerChunk === undefined) continue
         if (innerChunk === doneMarker) {
           options.onControlFrame?.('done')

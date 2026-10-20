@@ -1,10 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile, rmdir, unlink } from 'node:fs/promises'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { Config } from '../src/dsh/config.ts'
 import { QoderAuthService } from '../src/qoder/transport/auth.ts'
 import { createQoderTransport } from '../src/qoder/transport/index.ts'
 import { parseModelServerSse } from '../src/qoder/transport/wire/model-server-sse.ts'
+import type { QoderMalformedFrameDetails } from '../src/qoder/transport/wire/stream-chunks.ts'
 import { qoderIdeVersion } from '../src/qoder/transport/wire/client-identity.ts'
 
 function request(): GenerateOptions {
@@ -35,10 +37,12 @@ test('existing settings select Bearer HTTP and legacy remains explicit', () => {
 
 test('default transport sends Bearer model-server request and reads direct SSE', async () => {
   let chatCalls = 0
+  const debug: unknown[][] = []
   const transport = createQoderTransport({
     region: 'global',
     resolvePat: async () => 'pt-model',
     resolveMachineId: () => 'machine-test',
+    logger: { debug: (...details) => debug.push(details) },
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-model', expires_in: 3600 }))
@@ -59,6 +63,18 @@ test('default transport sends Bearer model-server request and reads direct SSE',
   })
   assert.equal(await collect(transport), 'Bearer response')
   assert.equal(chatCalls, 1)
+  const capture = debug.find(entry => entry[0] === '[Qoder Stream] SSE capture saved')?.[1] as {
+    requestPath: string; responsePath: string; complete: boolean
+  }
+  assert.equal(capture.complete, true)
+  try {
+    assert.equal(JSON.parse(await readFile(capture.requestPath, 'utf8')).model, 'cmodel')
+    assert.match(await readFile(capture.responsePath, 'utf8'), /Bearer response/u)
+  } finally {
+    await unlink(capture.requestPath)
+    await unlink(capture.responsePath)
+    await rmdir(capture.requestPath.replace(/[/\\]request\.json$/u, ''))
+  }
 })
 
 test('model-server HTTP 401 refreshes the rejected job token once and keeps request identity', async () => {
@@ -202,8 +218,221 @@ test('model-server ignores top-level success codes and known control frames', as
 })
 
 test('unknown model-server control frames remain protocol errors', async () => {
+  const diagnostics: QoderMalformedFrameDetails[] = []
   await assert.rejects(async () => {
-    for await (const _chunk of parseModelServerSse(new Response('data: [NEW_CONTROL]#{}\n\n').body!)) continue
+    for await (const _chunk of parseModelServerSse(new Response('data: [NEW_CONTROL]#{"secret":"private"}\n\n').body!, {
+      onMalformedFrame: details => diagnostics.push(details),
+    })) continue
+  }, (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
+  assert.equal(diagnostics[0]?.marker, '[NEW_CONTROL]')
+  assert.equal(diagnostics[0]?.chars, 34)
+  assert.equal(diagnostics[0]?.lines, 1)
+  assert.equal(diagnostics[0]?.shape, 'array')
+  assert.doesNotMatch(JSON.stringify(diagnostics), /private/u)
+})
+
+test('model-server assembles multiline SSE data before decoding JSON', async () => {
+  const chunks = []
+  const stream = new Response('event: message\n' +
+    'data: {"choices":[{"delta":\n' +
+    'data: {"content":"joined"},"finish_reason":"stop"}]}\n\n' +
+    'data: [DONE]\n\n').body!
+  for await (const chunk of parseModelServerSse(stream)) chunks.push(chunk)
+  assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), 'joined')
+})
+
+test('model-server preserves frames across every byte split including usage and UTF-8', async () => {
+  const wire = new TextEncoder().encode(
+    'data: {"choices":[{"delta":{"content":"你好🌍"}}]}\n\n' +
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
+    'data: {"choices":[],"raw_usage":{"account_discount":0,"data":{"completion_tokens":21}},"usage":{"prompt_tokens":10,"completion_tokens":21}}\n\n' +
+    'data: [DONE]\n\n',
+  )
+  for (let split = 1; split < wire.length; split++) {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(wire.slice(0, split))
+        controller.enqueue(wire.slice(split))
+        controller.close()
+      },
+    })
+    const diagnostics: QoderMalformedFrameDetails[] = []
+    const chunks = []
+    for await (const chunk of parseModelServerSse(stream, {
+      onMalformedFrame: details => diagnostics.push(details),
+    })) chunks.push(chunk)
+    assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), '你好🌍')
+    assert.ok(chunks.some(chunk => chunk.type === 'usage' && chunk.usage.outputTokens === 21))
+    assert.deepEqual(diagnostics, [], `unexpected JSON failure at byte split ${split}`)
+  }
+})
+
+test('model-server recovers unprefixed JSON continuations without losing tool argument deltas', async () => {
+  const frame = JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-image',
+    function: { name: 'read_image', arguments: '{"file_path":"a.png"}' } }] } }], model: 'dfmodel' })
+  // Exercise inserted newlines throughout JSON, including escaped quotes and model metadata.
+  for (let split = 1; split < frame.length; split++) {
+    const wire = new TextEncoder().encode(`data: ${frame.slice(0, split)}\r\n${frame.slice(split)}\r\n\r\ndata: [DONE]\n\n`)
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      for (let offset = 0; offset < wire.length; offset += 7) controller.enqueue(wire.slice(offset, offset + 7))
+      controller.close()
+    } })
+    const chunks = []
+    const diagnostics: QoderMalformedFrameDetails[] = []
+    for await (const chunk of parseModelServerSse(stream, {
+      onMalformedFrame: details => diagnostics.push(details),
+    })) chunks.push(chunk)
+    const call = chunks.find(chunk => chunk.type === 'block-end' && chunk.block.type === 'tool-call')
+    assert.ok(call?.type === 'block-end' && call.block.type === 'tool-call')
+    assert.equal(call.block.arguments, '{"file_path":"a.png"}', `split ${split}`)
+    assert.equal(diagnostics[0]?.disposition, 'recovered-continuation')
+  }
+})
+
+test('model-server prefers standard SSE data and excludes fields and comments from recovery', async () => {
+  const wires = [
+    'data: {"choices":[\ndata: {"delta":{"content":"ok\\nnext"},"finish_reason":"stop"}]}\nignored continuation\n\n',
+    'data: {"choices":[{"delta":{"content":"o\n: heartbeat\nid: event-id\nretry: 1000\ncustom: ignored\nk"},"finish_reason":"stop"}]}\n\n',
+  ]
+  for (const [index, wire] of wires.entries()) {
+    const chunks = []
+    const diagnostics: QoderMalformedFrameDetails[] = []
+    for await (const chunk of parseModelServerSse(new Response(wire).body!, {
+      onMalformedFrame: details => diagnostics.push(details),
+    })) chunks.push(chunk)
+    assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), index ? 'ok' : 'ok\nnext')
+    assert.equal(diagnostics.length, index ? 1 : 0)
+  }
+})
+
+test('model-server recovers a newline before the created property separator', async () => {
+  const chunks = []
+  for await (const chunk of parseModelServerSse(new Response(
+    'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"created"\n:1792486219}\n\n',
+  ).body!)) chunks.push(chunk)
+  assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), 'ok')
+})
+
+test('model-server never recovers across events or ignores invalid recovered payloads', async () => {
+  for (const wire of [
+    'data: {"choices":[\n\n{"delta":{"content":"lost"}}]}\n\ndata: [DONE]\n\n',
+    'data: {"choices":[\nnot JSON\n\ndata: [DONE]\n\n',
+    'data: {"choices":[\ndata: {"delta":{"content":"split\ndata: string"}}]}\n\ndata: [DONE]\n\n',
+  ]) {
+    await assert.rejects(async () => {
+      for await (const _chunk of parseModelServerSse(new Response(wire).body!)) continue
+    }, (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
+  }
+  await assert.rejects(async () => {
+    const wire = 'data: {"choices":[\n' + 'x'.repeat(100) + '\n\n'
+    for await (const _chunk of parseModelServerSse(new Response(wire).body!, { maxBufferChars: 60 })) continue
+  }, /size limit/)
+})
+
+test('model-server rejects an unfinished stream after a truncated frame', async () => {
+  for (const terminator of ['', '\n\n']) {
+    const diagnostics: QoderMalformedFrameDetails[] = []
+    await assert.rejects(async () => {
+      const stream = new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' +
+        'data: {"choices":[{"delta":{"content":"cut' + terminator).body!
+      for await (const _chunk of parseModelServerSse(stream, {
+        onMalformedFrame: details => diagnostics.push(details),
+      })) continue
+    }, (error: Error & { code?: string }) => error.code === (terminator ? 'MALFORMED_RESPONSE' : 'TRANSPORT'))
+    assert.equal(diagnostics[0]?.atEof, !terminator)
+    assert.equal(diagnostics[0]?.afterFinish, false)
+    assert.equal(diagnostics[0]?.syntax, 'truncated')
+    assert.equal(diagnostics[0]?.emptyChoicesPrefix, false)
+    assert.equal(diagnostics[0]?.disposition, 'rejected')
+  }
+})
+
+test('model-server rejects a truncated content frame even when a later event finishes', async () => {
+  const diagnostics: QoderMalformedFrameDetails[] = []
+  const stream = new Response(
+    'data: {"choices":[{"delta":{"content":"","reasoning_content":"partial reasoning"},"finish_reason":null,"index":0}],"created":1792484887,"model":"qfmodel",\n\n' +
+    'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop","index":0}]}\n\n',
+  ).body!
+  await assert.rejects(async () => {
+    for await (const _chunk of parseModelServerSse(stream, {
+      onMalformedFrame: details => diagnostics.push(details),
+    })) continue
+  }, (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
+  assert.equal(diagnostics.length, 1)
+  assert.equal(diagnostics[0]?.afterFinish, false)
+  assert.equal(diagnostics[0]?.emptyChoicesPrefix, false)
+  assert.equal(diagnostics[0]?.disposition, 'rejected')
+})
+
+test('model-server rejects a truncated frame before consuming a later error event', async () => {
+  await assert.rejects(async () => {
+    const stream = new Response('data: {"choices":[{"delta":{"content":"lost"}}],\n\n' +
+      'event: error\ndata: {"code":105,"message":"expired"}\n\n').body!
+    for await (const _chunk of parseModelServerSse(stream)) continue
+  }, (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
+})
+
+test('model-server waits for independent completion after a truncated empty-choices metadata frame', async () => {
+  const partial = 'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n' +
+    'data: {"choices":[],"created":179248\n\n'
+  const diagnostics: QoderMalformedFrameDetails[] = []
+  const chunks = []
+  for await (const chunk of parseModelServerSse(new Response(partial + 'data: [DONE]\n\n').body!, {
+    onMalformedFrame: details => diagnostics.push(details),
+  })) chunks.push(chunk)
+  assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), 'answer')
+  assert.equal(chunks.at(-1)?.type, 'finish')
+  assert.equal(diagnostics[0]?.emptyChoicesPrefix, true)
+  assert.equal(diagnostics[0]?.disposition, 'skipped-auxiliary')
+  await assert.rejects(async () => {
+    for await (const _chunk of parseModelServerSse(new Response(partial).body!)) continue
+  }, (error: Error & { code?: string }) => error.code === 'TRANSPORT')
+})
+
+test('model-server classifies a plain-text SSE error event without exposing its payload', async () => {
+  const diagnostics: unknown[] = []
+  await assert.rejects(async () => {
+    for await (const _chunk of parseModelServerSse(new Response('event: error\ndata: provider private details\n\n').body!, {
+      onMalformedFrame: details => diagnostics.push(details),
+    })) continue
+  }, (error: Error & { code?: string }) => error.code === 'PROVIDER_ERROR'
+    && !error.message.includes('private details'))
+  assert.equal((diagnostics[0] as Record<string, unknown>)?.eventType, 'error')
+  assert.equal((diagnostics[0] as Record<string, unknown>)?.chars, 24)
+  assert.equal((diagnostics[0] as Record<string, unknown>)?.lines, 1)
+})
+
+test('model-server preserves the upstream code from a JSON SSE error event', async () => {
+  await assert.rejects(async () => {
+    for await (const _chunk of parseModelServerSse(new Response('event: error\ndata: {"code":105,"message":"expired"}\n\n').body!)) continue
+  }, (error: Error & { code?: string; upstreamCode?: string }) => error.code === 'AUTH' && error.upstreamCode === '105')
+})
+
+test('model-server ignores a truncated raw_usage trailer after a terminal finish reason', async () => {
+  for (const ending of ['', 'data: [DONE]\n\n']) {
+    const diagnostics: QoderMalformedFrameDetails[] = []
+    const stream = new Response('data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}\n\n' +
+      'data: {"choices":[],"raw_usage":{"completion_tokens\n\n' + ending).body!
+    const chunks = []
+    for await (const chunk of parseModelServerSse(stream, {
+      onMalformedFrame: details => diagnostics.push(details),
+    })) chunks.push(chunk)
+    assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), 'answer')
+    assert.equal(chunks.at(-1)?.type, 'finish')
+    assert.equal(diagnostics.length, 1)
+    assert.equal(diagnostics[0]?.shape, 'object')
+    assert.equal(diagnostics[0]?.syntax, 'truncated')
+    assert.equal(diagnostics[0]?.emptyChoicesPrefix, true)
+    assert.equal(diagnostics[0]?.disposition, 'skipped-after-finish')
+  }
+})
+
+test('model-server does not ignore a valid JSON value with an invalid shape after finish', async () => {
+  await assert.rejects(async () => {
+    for await (const _chunk of parseModelServerSse(new Response(
+      'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}\n\n' +
+      'data: null\n\n',
+    ).body!)) continue
   }, (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
 })
 
@@ -240,6 +469,64 @@ test('model-server records response timing and request ID without logging creden
   assert.deepEqual(warnings.filter(entry => entry.message === '[Qoder Stream] Control frame skipped')
     .map(entry => (entry.details[0] as { kind: string }).kind), ['notifications'])
   assert.doesNotMatch(JSON.stringify([entries, warnings]), /private notice|pt-model|jt-model/u)
+})
+
+test('model-server logs only structural diagnostics after a streamed frame fails to decode', async () => {
+  const warnings: unknown[][] = []
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: async () => 'pt-model',
+    logger: { warn: (...details) => warnings.push(details) },
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-model', expires_in: 3600 }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-model' }))
+      return new Response('data: {"choices":[{"delta":{"content":"first"}}]}\n\n' +
+        'event: message\ndata: [NEW_CONTROL]#{"secret":"private"}\n\n', {
+        headers: { 'x-request-id': 'upstream-request' },
+      })
+    }) as typeof fetch,
+  })
+  await assert.rejects(collect(transport), (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
+  const diagnostic = warnings.find(entry => entry[0] === '[Qoder Stream] Malformed SSE frame')?.[1] as Record<string, unknown>
+  assert.equal(diagnostic?.marker, '[NEW_CONTROL]')
+  assert.equal(diagnostic?.eventType, 'message')
+  assert.equal(diagnostic?.requestId, 'upstream-request')
+  assert.equal(diagnostic?.rawFrame, undefined)
+  assert.doesNotMatch(JSON.stringify(warnings), /private|pt-model|jt-model/u)
+})
+
+test('failed tool-call parsing saves the complete request body and raw SSE response', async () => {
+  const warnings: unknown[][] = []
+  const rawResponse = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_image","arguments":"{\\"path\\":"}}]},"finish_reason":"tool_calls"}]}\n\n' +
+    'data: [DONE]\n\n'
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: async () => 'pt-model',
+    logger: { warn: (...details) => warnings.push(details) },
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-model', expires_in: 3600 }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-model' }))
+      return new Response(rawResponse, { headers: { 'content-type': 'text/event-stream' } })
+    }) as typeof fetch,
+  })
+  await assert.rejects(collect(transport), (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
+  const capture = warnings.find(entry => entry[0] === '[Qoder Stream] SSE capture saved')?.[1] as {
+    requestPath: string; responsePath: string
+  }
+  assert.ok(capture?.requestPath)
+  assert.ok(capture?.responsePath)
+  try {
+    const requestBody = await readFile(capture.requestPath, 'utf8')
+    assert.equal(JSON.parse(requestBody).model, 'cmodel')
+    assert.equal(await readFile(capture.responsePath, 'utf8'), rawResponse)
+    assert.doesNotMatch(requestBody, /jt-model|pt-model/u)
+  } finally {
+    await unlink(capture.requestPath)
+    await unlink(capture.responsePath)
+    await rmdir(capture.requestPath.replace(/[/\\]request\.json$/u, ''))
+  }
 })
 
 test('invalidating credentials prevents an old exchange from repopulating the cache', async () => {
