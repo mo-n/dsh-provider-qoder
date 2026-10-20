@@ -36,6 +36,7 @@ for (const region of ['global', 'china'] as const) {
   test(`${region} model requests preserve the CLI header contract and regional session identity`, async () => {
     let seen = false
     const transport = createQoderTransport({
+      modelTransport: 'legacy',
       region, resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
       fetch: (async (input, init) => {
         const url = String(input)
@@ -92,6 +93,7 @@ for (const publication of [true, false]) {
     }
     let chatCalls = 0
     const transport = createQoderTransport({
+      modelTransport: 'legacy',
       region: 'global', attachments, resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
       fetch: (async (input, init) => {
         const url = String(input)

@@ -139,6 +139,42 @@ export function canRefreshModelCredentials(error: QoderLlmError): boolean {
     && error.code === 'AUTH' && (error.upstreamCode === undefined || error.upstreamCode === '105')
 }
 
+/** Model-server errors have their own wire contract; do not apply legacy business codes. */
+export function qoderModelServerError(
+  status: number,
+  cause: unknown,
+  source: 'http' | 'sse',
+  headers?: Pick<Headers, 'get'>,
+): QoderLlmError {
+  let payload: unknown = cause
+  if (typeof payload === 'string') {
+    try { payload = JSON.parse(payload) } catch { /* An unstructured provider error. */ }
+  }
+  const root = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+  const nested = root.error !== null && typeof root.error === 'object' ? root.error as Record<string, unknown> : root
+  const rawCode = nested.code ?? root.code
+  const upstreamCode = typeof rawCode === 'string' || typeof rawCode === 'number' ? String(rawCode) : undefined
+  const effectiveStatus = upstreamCode === '105' ? 401 : status
+  const fallback = qoderHttpError(`Qoder model-server returned HTTP ${status}.`, { status: effectiveStatus, headers })
+
+  const quotaCodes = new Set(['110', '112', '114', '115', '116', '117', '118', '119', '122'])
+  const code = upstreamCode === '105' ? 'AUTH'
+    : upstreamCode === '10605' ? 'RATE_LIMIT'
+      : upstreamCode && quotaCodes.has(upstreamCode) ? QUOTA_EXCEEDED_CODE
+        : upstreamCode === '430' ? 'INVALID_REQUEST'
+          : upstreamCode === undefined ? fallback.code : 'PROVIDER_ERROR'
+  const message = typeof nested.message === 'string' ? nested.message.slice(0, 300) : fallback.message
+  const error = new QoderLlmError(message, code, {
+    status: effectiveStatus,
+    ...fallback.failure.requestId === undefined ? {} : { requestId: fallback.failure.requestId },
+    ...fallback.failure.providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs: fallback.failure.providerRetryAfterMs },
+  })
+  error.source = source
+  error.httpStatus = source === 'http' ? status : undefined
+  error.upstreamCode = upstreamCode
+  return error
+}
+
 export function qoderHttpError(
   message: string,
   response: { status: number; headers?: Pick<Headers, 'get'>; cause?: unknown },

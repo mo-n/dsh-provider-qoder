@@ -32,3 +32,20 @@ Ordinary failure delay hints still follow DSH's retry policy.
 Other transport capabilities retain their own error protocols. DSH owns the
 existing retry and generic quota presentation, while transport diagnostics retain
 the concrete upstream code and distinguish HTTP status from SSE business status.
+
+## Model-server HTTP and legacy model transport
+
+The model transport defaults to Qoder's model-server HTTP SSE protocol with a
+Bearer Qoder job token. The COSY `/algo/` model protocol remains selectable as
+`legacy`. These are separate wire protocols; both remain inside Qoder transport.
+Model discovery, account reads, image publication, and web search continue to use
+their independently verified endpoints and authentication formats.
+
+Qoder transport owns one auth manager per region-bound instance. It exchanges the
+Managed Qoder PAT, merges concurrent refreshes, rejects stale credential results,
+and performs at most one same-protocol recovery before a model stream starts.
+An HTTP-successful stream is never replayed after a later error. The first version
+does not automatically switch model protocols after a failure; users can select
+`legacy` explicitly. This preserves DSH ownership of model-generation retries.
+Refresh remains request-driven, so this decision does not introduce a background
+refresh timer.

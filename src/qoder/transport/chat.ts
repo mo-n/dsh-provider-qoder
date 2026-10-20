@@ -227,7 +227,19 @@ async function* streamAttempt(
     let finishReason: string | undefined
     const streamStartedAt = performance.now()
 
-    for await (const chunk of parseQoderSse(response.body, { queueRecovery: true, onActivity: resetIdleTimer, headers: response.headers, httpStatus: response.status })) {
+    for await (const chunk of parseQoderSse(response.body, {
+      queueRecovery: true,
+      onActivity: resetIdleTimer,
+      headers: response.headers,
+      httpStatus: response.status,
+      onControlFrame: kind => {
+        if (kind !== 'done') dependencies.logger?.warn?.('[Qoder Stream] Control frame skipped', {
+          transport: 'legacy',
+          kind,
+          ...reqId === undefined ? {} : { requestId: reqId },
+        })
+      },
+    })) {
       chunkCount++
       if (firstChunkDurationMs === undefined) {
         firstChunkDurationMs = Math.round(performance.now() - startedAt)

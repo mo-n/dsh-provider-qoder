@@ -3,7 +3,8 @@
 import { createHash } from 'node:crypto'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
 import { logParsedResponse, redactLogPayload, type QoderLogger } from './logging.ts'
-import { defaultUserAgent, qoderClientType, qoderIdeVersion, qoderMachineOs } from './wire/cosy.ts'
+import { qoderMachineOs } from './wire/cosy.ts'
+import { defaultUserAgent, qoderClientType, qoderIdeVersion } from './wire/client-identity.ts'
 
 export const defaultMetadataTimeoutMs = 15_000
 export const defaultResponseHeaderTimeoutMs = 60_000

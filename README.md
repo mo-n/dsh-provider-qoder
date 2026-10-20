@@ -56,7 +56,7 @@ Browser authorization is stored per region, shared across the DSH instance and r
 
 ### 2. View Account & Manage Models
 
-Open **Settings → Qoder** to view account and quota details, configure the web search policy, and adjust enabled models:
+Open **Settings → Qoder** to view account and quota details, configure model transport and web search, and adjust enabled models.
 
 <p align="center">
   <img src="./assets/account-quota.png" alt="Qoder account quota and model settings" width="650" />

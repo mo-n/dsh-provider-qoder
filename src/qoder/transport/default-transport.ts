@@ -2,7 +2,7 @@
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import { QoderAuthService } from './auth.ts'
+import { QoderAuthManager } from './auth.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from './endpoints.ts'
 import { QoderLlmError } from '../errors.ts'
@@ -14,17 +14,18 @@ import {
   retryMetadataRead,
   SingleFlight,
 } from './request.ts'
-import { translateQoderMessages, validateQoderRequestShape } from './wire/serialize.ts'
+import { translateQoderMessages, validateQoderRequestShape } from './wire/prepare.ts'
 import { QoderImageUploader } from './image-upload.ts'
 import { QoderUsageReader } from './account-reader.ts'
 import { QoderSearchClient } from './search.ts'
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 import type { QoderAccountInfo } from '../account.ts'
-import type { QoderTransport, QoderTransportOptions } from './index.ts'
+import type { QoderModelTransport, QoderTransport, QoderTransportOptions } from './index.ts'
 import { streamQoderChat } from './chat.ts'
 import { QoderBrowserAuthorization } from './browser-authorization.ts'
 import type { QoderCredentialLease } from '../authorization.ts'
 import type { CosyCredentials } from './wire/cosy.ts'
+import { streamModelServerChat } from './model-server.ts'
 
 export const defaultStreamIdleTimeoutMs = 5 * 60 * 1000
 
@@ -36,13 +37,14 @@ export class DefaultQoderTransport implements QoderTransport {
   readonly authorization: QoderBrowserAuthorization
   private readonly resolveCredential: QoderTransportOptions['resolveCredential']
   private readonly region: QoderRegion
+  private readonly modelTransport: QoderModelTransport
   private readonly resolvePat: () => Promise<string>
   private readonly fetchImpl: typeof fetch
   private readonly logger?: QoderLogger
   private readonly streamIdleTimeoutMs: number
   private readonly responseHeaderTimeoutMs: number
   private readonly metadataTimeoutMs?: number
-  private readonly auth: QoderAuthService
+  private readonly auth: QoderAuthManager
   private readonly usage: QoderUsageReader
   private readonly modelFlights = new SingleFlight<readonly QoderCatalogModel[]>()
   private readonly attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
@@ -58,6 +60,7 @@ export class DefaultQoderTransport implements QoderTransport {
     this.onQueueUpdate = options.onQueueUpdate
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
+    this.modelTransport = options.modelTransport ?? 'http'
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
     this.authorization = new QoderBrowserAuthorization(options)
@@ -68,7 +71,7 @@ export class DefaultQoderTransport implements QoderTransport {
     this.metadataTimeoutMs = options.metadataTimeoutMs
     this.attachments = options.attachments
     this.preserveThinking = options.preserveThinking
-    this.auth = new QoderAuthService({
+    this.auth = new QoderAuthManager({
       fetch: this.fetchImpl,
       logger: this.logger,
       region: this.region,
@@ -87,7 +90,7 @@ export class DefaultQoderTransport implements QoderTransport {
       region: this.region,
       ...options.imageUploadTimeoutMs === undefined ? {} : { timeoutMs: options.imageUploadTimeoutMs },
       ...options.imageUrlCacheTtlMs === undefined ? {} : { cacheTtlMs: options.imageUrlCacheTtlMs },
-      refreshCredentials: async (signal, rejected) => {
+      refreshCredentials: async (rejected, signal) => {
         const lease = rejected && this.credentialLeases.get(rejected)
         if (!lease) throw aborted('Qoder image credentials are no longer available.')
         return lease.resolve(signal, rejected.authToken)
@@ -149,7 +152,7 @@ export class DefaultQoderTransport implements QoderTransport {
         token = credentials.authToken
         return credentials
       },
-      refreshCredentials: nextSignal => lease.resolve(nextSignal, token),
+      refreshCredentials: (rejected, nextSignal) => lease.resolve(nextSignal, rejected.authToken),
     })
     return client.search(request, signal)
   }
@@ -175,8 +178,7 @@ export class DefaultQoderTransport implements QoderTransport {
     return { key: opaqueCredentialKey(pat), resolve: async (nextSignal, rejectedToken) => {
       const current = await this.auth.getCredentials(pat, nextSignal)
       if (rejectedToken !== undefined && current.authToken === rejectedToken) {
-        this.auth.clear(pat)
-        return this.auth.getCredentials(pat, nextSignal)
+        return this.auth.refreshCredentials(pat, current, nextSignal)
       }
       return current
     } }
@@ -204,7 +206,8 @@ export class DefaultQoderTransport implements QoderTransport {
     })
     // Image publication may have refreshed a rejected job token.
     const chatCredentials = await lease.resolve(options.signal)
-    yield* streamQoderChat(options, model, chatCredentials, messages, {
+    const stream = this.modelTransport === 'legacy' ? streamQoderChat : streamModelServerChat
+    yield* stream(options, model, chatCredentials, messages, {
       fetch: this.fetchImpl,
       logger: this.logger,
       region: this.region,

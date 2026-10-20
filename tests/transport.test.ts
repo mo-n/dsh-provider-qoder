@@ -8,7 +8,7 @@ const catalog = JSON.stringify({ assistant: [{ key: 'cmodel', enable: true, disp
 
 test('QoderTransport shares concurrent model discovery', async () => {
   let catalogCalls = 0
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => Promise.resolve('pt-shared'),
     resolveMachineId: () => 'machine-test',
@@ -35,7 +35,7 @@ test('QoderTransport shares concurrent model discovery', async () => {
 
 test('QoderTransport retries an idempotent model discovery once', async () => {
   let catalogCalls = 0
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => Promise.resolve('pt-retry'),
     resolveMachineId: () => 'machine-test',
@@ -61,7 +61,7 @@ test('QoderTransport aborts a shared discovery only after its last waiter leaves
   let upstreamAborted = false
   let notifyStarted: (() => void) | undefined
   const started = new Promise<void>(resolve => { notifyStarted = resolve })
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => Promise.resolve('pt-shared'),
     resolveMachineId: () => 'machine-test',
@@ -101,7 +101,7 @@ test('QoderTransport aborts a shared discovery only after its last waiter leaves
 })
 
 test('QoderTransport separates response-header timeout from stream idle timeout', async () => {
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => Promise.resolve('pt-timeout'),
     resolveMachineId: () => 'machine-test',
@@ -188,7 +188,7 @@ function imageRequest(): GenerateOptions {
 test('QoderTransport publishes images to the center service before streaming', async () => {
   let uploads = 0
   let chatBody = ''
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => Promise.resolve('pt-image'),
     resolveMachineId: () => 'machine-test',
@@ -220,7 +220,7 @@ test('QoderTransport publishes images to the center service before streaming', a
 test('QoderTransport rejects images for a non-vision model before authenticating', async () => {
   let patCalls = 0
   let fetchCalls = 0
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => {
       patCalls++
@@ -245,7 +245,7 @@ test('QoderTransport rejects images for a non-vision model before authenticating
 
 test('QoderTransport still streams when center image publication fails', async () => {
   let chatCalls = 0
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => Promise.resolve('pt-degrade'),
     resolveMachineId: () => 'machine-test',
@@ -272,7 +272,7 @@ test('QoderTransport signs chat with the job token refreshed during image public
   let exchanges = 0
   let uploads = 0
   let chatUser = ''
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: async () => 'pt-refresh',
     resolveMachineId: () => 'machine-test',
@@ -320,7 +320,7 @@ for (const status of [401, 403]) {
     let exchanges = 0
     const bodies: string[] = []
     const authorizations: string[] = []
-    const transport = createQoderTransport({
+    const transport = createQoderTransport({ modelTransport: 'legacy',
       region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
       fetch: (async (input, init) => {
         const url = String(input)
@@ -346,7 +346,7 @@ for (const [status, body, attempts] of [
   test(`model rejection ${status}/${body} has bounded authentication recovery`, async () => {
     let exchanges = 0
     let chats = 0
-    const transport = createQoderTransport({
+    const transport = createQoderTransport({ modelTransport: 'legacy',
       region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
       fetch: (async input => {
         const url = String(input)
@@ -365,7 +365,7 @@ for (const [status, body, attempts] of [
 test('model HTTP success with later SSE authentication error is never replayed', async () => {
   let chats = 0
   let exchanges = 0
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
     fetch: (async input => {
       const url = String(input)
@@ -383,7 +383,7 @@ test('model HTTP success with later SSE authentication error is never replayed',
 test('subscriber changes during authentication recovery do not resend the old request', async () => {
   let exchanges = 0
   let chats = 0
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
     fetch: (async input => {
       const url = String(input)
@@ -401,7 +401,7 @@ test('caller cancellation during credential refresh prevents a model replay', as
   const controller = new AbortController()
   let exchanges = 0
   let chats = 0
-  const transport = createQoderTransport({
+  const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
     fetch: (async input => {
       const url = String(input)
@@ -426,7 +426,7 @@ for (const bodyFailure of ['oversized', 'interrupted'] as const) {
     test(`HTTP ${status} retains recovery and error metadata with ${bodyFailure} diagnostics`, async () => {
       let exchanges = 0
       const bodies: string[] = []
-      const transport = createQoderTransport({
+      const transport = createQoderTransport({ modelTransport: 'legacy',
         region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
         fetch: (async (input, init) => {
           const url = String(input)
@@ -459,7 +459,7 @@ for (const cancellation of ['caller', 'timeout'] as const) {
     const caller = new AbortController()
     let exchanges = 0
     let chats = 0
-    const transport = createQoderTransport({
+    const transport = createQoderTransport({ modelTransport: 'legacy',
       region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
       streamIdleTimeoutMs: 10,
       fetch: (async (input, init) => {
@@ -491,7 +491,7 @@ for (const source of ['http', 'sse'] as const) {
       const body = JSON.stringify({ code: '403', message: JSON.stringify({
         code: businessCode, message: JSON.stringify({ retryAfterSeconds: 30 }),
       }) })
-      const transport = createQoderTransport({
+      const transport = createQoderTransport({ modelTransport: 'legacy',
         region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
         fetch: (async input => {
           const url = String(input)

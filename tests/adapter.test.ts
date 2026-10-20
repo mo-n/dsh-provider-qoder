@@ -21,6 +21,7 @@ function testAdapter(options: TestAdapterOptions): QoderAdapter {
   const transport = createQoderTransport({
     ...transportOptions,
     region: options.region ?? 'global',
+    modelTransport: options.modelTransport ?? 'legacy',
   })
   return new QoderAdapter({
     resolveTransport: () => transport,
