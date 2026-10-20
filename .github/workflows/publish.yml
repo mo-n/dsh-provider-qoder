@@ -19,6 +19,8 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      issues: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -66,3 +68,8 @@ jobs:
             RELEASE_ARGS+=(--prerelease)
           fi
           gh release create "${RELEASE_ARGS[@]}"
+
+      - name: Close linked issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-issues.ts close
