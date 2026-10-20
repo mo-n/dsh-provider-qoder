@@ -64,8 +64,6 @@ dsh plugin --profile web add dsh-provider-qoder
 
 高级 YAML 配置（排队等待上限、请求超时与历史推理内容保留）见 [配置说明](./docs/wiki/configuration_CN.md)。
 
-对于提供多个 Qoder 上下文档位的模型，可通过聊天输入框旁的选择器调整档位。打开历史聊天时，选择器会等待 DSH 恢复会话后读取生效档位；手动选择优先于历史档位和模型设置。
-
 ## 后续计划
 
 - [ ] 接入 Qoder 的 Protobuf 协议

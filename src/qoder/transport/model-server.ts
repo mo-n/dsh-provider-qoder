@@ -4,6 +4,7 @@ import { attributionHeaders, type GenerateOptions, type StreamChunk } from '@dee
 import { mkdir, open, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { QoderRequestCompression } from './request-compression.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import { canRefreshModelCredentials, qoderModelServerError, qoderRequestId, QoderLlmError } from '../errors.ts'
 import { getQoderModelServerUrl, type QoderRegion } from './endpoints.ts'
@@ -11,7 +12,7 @@ import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
 import { type QoderLogger } from './logging.ts'
 import { prepareQoderRequest, type PreparedQoderRequest } from './wire/prepare.ts'
 import { parseModelServerSse } from './wire/model-server-sse.ts'
-import { qoderClientType } from './wire/client-identity.ts'
+import { qoderClientType, qoderModelClientHeaders } from './wire/client-identity.ts'
 import type { QoderCredentials } from './wire/credentials.ts'
 import type { QoderWireMessage } from './wire/model-types.ts'
 
@@ -19,6 +20,7 @@ export interface QoderModelServerDependencies {
   fetch: typeof fetch
   logger?: QoderLogger
   region: QoderRegion
+  requestCompression?: boolean
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   refreshCredentials: (rejected: QoderCredentials, signal?: AbortSignal) => Promise<QoderCredentials>
@@ -29,6 +31,24 @@ interface ModelServerCapture {
   requestPath: string
   responsePath: string
   done: Promise<void>
+}
+
+async function captureHttpRejection(
+  requestId: string, requestBody: string,
+  fileName: 'compression-rejection.json' | 'response-error.json',
+  details: Record<string, unknown>, logger?: QoderLogger,
+): Promise<void> {
+  const label = fileName === 'compression-rejection.json' ? 'Compression rejection' : 'HTTP rejection'
+  try {
+    const directory = join(tmpdir(), 'dsh-provider-qoder', 'sse-captures', `${requestId}-${crypto.randomUUID()}`)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await writeFile(join(directory, 'request.json'), requestBody, { flag: 'wx', mode: 0o600 })
+    const responsePath = join(directory, fileName)
+    await writeFile(responsePath, JSON.stringify({ requestId, ...details }, null, 2), { flag: 'wx', mode: 0o600 })
+    logger?.warn?.(`[Qoder Stream] ${label} capture saved`, { requestId, status: details.status, responsePath, request: details.request })
+  } catch {
+    logger?.warn?.(`[Qoder Stream] ${label} capture could not be saved`, { requestId })
+  }
 }
 
 /** Temporary local capture for diagnosing malformed model-server tool arguments. */
@@ -134,24 +154,36 @@ export async function* streamModelServerChat(
   }
 
   try {
+    const compression = new QoderRequestCompression()
     let activeCredentials = credentials
     for (let attempt = 0; attempt < 2; attempt++) {
       if (controller.signal.aborted) throw new QoderLlmError('Qoder model request was aborted.', 'ABORTED')
-      headerTimer = setTimeout(() => { headerTimedOut = true; controller.abort('response header timeout') }, dependencies.responseHeaderTimeoutMs)
       let response: Response
       try {
-        response = await dependencies.fetch(getQoderModelServerUrl(dependencies.region), {
-          method: 'POST',
+        response = await compression.send({
+          url: getQoderModelServerUrl(dependencies.region), protocol: 'http', body,
+          enabled: dependencies.requestCompression, signal: controller.signal,
+          logger: dependencies.logger, requestId: request.requestId,
+          onRejection: rejection => captureHttpRejection(request.requestId, body, 'compression-rejection.json', {
+            ...rejection, request: compression.diagnostics,
+          }, dependencies.logger),
+          dispatch: async (wireBody, headers) => {
+            headerTimer = setTimeout(() => { headerTimedOut = true; controller.abort('response header timeout') }, dependencies.responseHeaderTimeoutMs)
+            try {
+              return await dependencies.fetch(getQoderModelServerUrl(dependencies.region), {
+                method: 'POST', headers, body: wireBody, signal: controller.signal,
+              })
+            } finally { if (headerTimer) clearTimeout(headerTimer) }
+          },
           headers: {
             ...attributionHeaders(),
+            ...qoderModelClientHeaders(),
             'Accept': 'text/event-stream',
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${activeCredentials.authToken}`,
             'X-Request-ID': request.requestId,
             'X-Session-ID': request.sessionId,
           },
-          body,
-          signal: controller.signal,
         })
       } finally {
         if (headerTimer) clearTimeout(headerTimer)
@@ -174,6 +206,12 @@ export async function* streamModelServerChat(
         catch { cause = undefined }
         if (idleTimer) clearTimeout(idleTimer)
         if (controller.signal.aborted) throw new QoderLlmError('Qoder model-server error body was interrupted.', 'ABORTED')
+        // Persist bounded diagnostics without authentication headers.
+        await captureHttpRejection(request.requestId, body, 'response-error.json', {
+          status: response.status, contentType: response.headers.get('content-type'),
+          serverRequestId: responseRequestId, request: compression.diagnostics,
+          body: cause, bodyAvailable: typeof cause === 'string',
+        }, dependencies.logger)
         const error = qoderModelServerError(response.status, cause, 'http', response.headers)
         if (attempt === 0 && canRefreshModelCredentials(error)) {
           activeCredentials = await dependencies.refreshCredentials(activeCredentials, options.signal)
@@ -221,6 +259,7 @@ export async function* streamModelServerChat(
             ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
           }),
         })) {
+          compression.confirm()
           chunkCount++
           if (!firstChunkReceived) {
             firstChunkReceived = true

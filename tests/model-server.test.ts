@@ -51,7 +51,12 @@ test('default transport sends Bearer model-server request and reads direct SSE',
       chatCalls++
       const headers = init?.headers as Record<string, string>
       assert.equal(headers.Authorization, 'Bearer jt-model')
-      assert.ok(!Object.keys(headers).some(key => key.toLowerCase().startsWith('cosy-')))
+      assert.equal(headers['Cosy-Version'], qoderIdeVersion)
+      assert.equal(headers['Cosy-ClientType'], '5')
+      assert.match(headers['Cosy-MachineOS'], /^(?:x86_64|aarch64|[^_]+)_[a-z0-9]+$/u)
+      if (headers['Cosy-MachineHostname']) assert.match(headers['Cosy-MachineHostname'], /^[\x20-\x7e]+$/u)
+      assert.ok(!('Cosy-Key' in headers))
+      assert.ok(!('Cosy-User' in headers))
       const body = JSON.parse(String(init?.body))
       assert.equal(body.model, 'cmodel')
       assert.equal(body.metadata.context.request_id, headers['X-Request-ID'])

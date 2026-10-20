@@ -31,6 +31,8 @@ export interface QoderTransportOptions {
   onQueueUpdate?: (update: QoderQueueUpdate) => void
   /** Capture the current host run before I/O; reject late leases after its boundary closes. */
   captureQueueLeaseOwner?: (sessionId: string) => QoderQueueOwner | undefined
+
+  requestCompression?: boolean
   modelTransport?: QoderModelTransport
   resolvePat: () => Promise<string>
   /** Resolve an instance-managed browser authorization; undefined retains legacy PAT behavior. */

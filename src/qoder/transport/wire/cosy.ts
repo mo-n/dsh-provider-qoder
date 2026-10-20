@@ -10,10 +10,10 @@
 import crypto from 'node:crypto'
 import { hostname } from 'node:os'
 import { getMachineId } from '../machine-id.ts'
-import { qoderClientType, qoderIdeVersion } from './client-identity.ts'
+import { qoderClientType, qoderIdeVersion, qoderMachineOs } from './client-identity.ts'
 import type { QoderCredentials } from './credentials.ts'
 
-export { defaultUserAgent, qoderClientType, qoderIdeVersion } from './client-identity.ts'
+export { defaultUserAgent, qoderClientType, qoderIdeVersion, qoderMachineOs } from './client-identity.ts'
 export type { QoderCredentials as CosyCredentials } from './credentials.ts'
 
 const qoderRSAPublicKey = `-----BEGIN PUBLIC KEY-----
@@ -26,11 +26,6 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 const qoderDataPolicy = 'disagree'
 const qoderLoginVersion = 'v2'
 const qoderMachineTypeMagic = '5'
-
-export function qoderMachineOs(platform: string = process.platform, arch: string = process.arch): string {
-  const architecture = arch === 'arm64' ? 'aarch64' : arch === 'x64' ? 'x86_64' : arch
-  return `${architecture}_${platform}`
-}
 
 interface UserInfo {
   uid: string

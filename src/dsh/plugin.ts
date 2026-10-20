@@ -108,6 +108,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     modelQueueMaxWaitMs: config.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
     preserveThinking: config.preserveThinking ?? true,
     webSearchMode: config.webSearchMode ?? 'auto',
+    requestCompression: config.requestCompression ?? true,
     modelTransport: config.modelTransport ?? 'http',
   }
   let current = (): QoderConfig => baseConfig
@@ -122,6 +123,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     region,
     resolvePat: resolvePat ?? (() => resolveManagedQoderPat(ctx.credentials)),
     resolveCredential: resolvePat ? undefined : signal => authorization.lease(region, signal),
+
+    requestCompression: current().requestCompression ?? true,
     modelTransport: current().modelTransport ?? 'http',
     logger,
     streamIdleTimeoutMs,
@@ -144,6 +147,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       modelQueueMaxWaitMs: value.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
       preserveThinking: value.preserveThinking ?? true,
       webSearchMode: value.webSearchMode ?? 'auto',
+      requestCompression: value.requestCompression ?? true,
       modelTransport: value.modelTransport ?? 'http',
     }
   }
@@ -161,6 +165,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     responseHeaderTimeoutMs: initial.responseHeaderTimeoutMs,
     modelQueueMaxWaitMs: initial.modelQueueMaxWaitMs,
     preserveThinking: initial.preserveThinking,
+    requestCompression: initial.requestCompression,
     modelTransport: initial.modelTransport,
   }
   const authorizationTransports = new Map<QoderRegion, NonNullable<QoderTransport['authorization']>>()
@@ -221,6 +226,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       || next.streamIdleTimeoutMs !== activeTransportConfig.streamIdleTimeoutMs
       || next.responseHeaderTimeoutMs !== activeTransportConfig.responseHeaderTimeoutMs
       || next.modelQueueMaxWaitMs !== activeTransportConfig.modelQueueMaxWaitMs
+
+      || next.requestCompression !== activeTransportConfig.requestCompression
       || next.modelTransport !== activeTransportConfig.modelTransport
       || next.preserveThinking !== activeTransportConfig.preserveThinking) {
       authorization.activateRegion(next.region)
@@ -236,6 +243,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
         responseHeaderTimeoutMs: next.responseHeaderTimeoutMs,
         modelQueueMaxWaitMs: next.modelQueueMaxWaitMs,
         preserveThinking: next.preserveThinking,
+        requestCompression: next.requestCompression,
         modelTransport: next.modelTransport,
       }
     }

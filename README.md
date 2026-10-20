@@ -64,8 +64,6 @@ Open **Settings → Qoder** to view account and quota details, configure model t
 
 For advanced YAML options (queue wait limits, request timeouts, and historical reasoning preservation), see [Configuration](./docs/wiki/configuration.md).
 
-For models offering multiple Qoder context tiers, use the context selector beside the conversation input. When opening a historical conversation, the selector waits for DSH to restore the session before reading its effective tier; manual selections take precedence over the historical tier and model settings.
-
 ## Upcoming Features
 
 - [ ] Connect with Qoder's Protobuf protocol

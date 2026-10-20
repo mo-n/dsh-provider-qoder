@@ -37,6 +37,7 @@ export class DefaultQoderTransport implements QoderTransport {
   readonly authorization: QoderBrowserAuthorization
   private readonly resolveCredential: QoderTransportOptions['resolveCredential']
   private readonly region: QoderRegion
+  private readonly requestCompression: boolean
   private readonly modelTransport: QoderModelTransport
   private readonly resolvePat: () => Promise<string>
   private readonly fetchImpl: typeof fetch
@@ -60,12 +61,18 @@ export class DefaultQoderTransport implements QoderTransport {
     this.onQueueUpdate = options.onQueueUpdate
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
+    this.requestCompression = options.requestCompression ?? true
     this.modelTransport = options.modelTransport ?? 'http'
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
     this.authorization = new QoderBrowserAuthorization(options)
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.logger = options.logger
+    this.logger?.debug?.('[Qoder Transport] Request compression configuration', {
+      implementation: 'zstd-v1', node: process.version,
+      requestCompression: this.requestCompression,
+      environmentOverrideConfigured: process.env.QODER_ZSTD_REQUEST_BODIES !== undefined,
+    })
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs
     this.responseHeaderTimeoutMs = options.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs
     this.metadataTimeoutMs = options.metadataTimeoutMs
@@ -211,6 +218,7 @@ export class DefaultQoderTransport implements QoderTransport {
       fetch: this.fetchImpl,
       logger: this.logger,
       region: this.region,
+      requestCompression: this.requestCompression,
       responseHeaderTimeoutMs: this.responseHeaderTimeoutMs,
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
       modelQueueMaxWaitMs: this.modelQueueMaxWaitMs,
