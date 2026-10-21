@@ -32,7 +32,7 @@ test('client settings declares required services', async () => {
   assert.deepEqual([...plugin.inject], ['slots', 'locale', 'remote', 'remote.credentials', 'configForms'])
 })
 
-test('client settings mounts through configForms and reports rejected writes', async () => {
+test('client settings mounts with declared services and reports rejected writes', async () => {
   const plugin = await loadClientPlugin()
   let namespace: string | undefined
   let operations!: {
@@ -69,7 +69,21 @@ test('client settings mounts through configForms and reports rejected writes', a
       },
     },
   }
-  plugin.apply(ctx)
+  const frameworkApis = new Set(['effect', 'inject'])
+  const guardedContext = (declared: ReadonlySet<string>) => new Proxy(ctx, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'string' && !declared.has(prop) && !frameworkApis.has(prop)) {
+        throw new Error(`dynamic ctx does not expose "${prop}"`)
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  })
+  const declared = new Set(plugin.inject)
+  // Existing fake services must still be inaccessible when their declaration is missing.
+  const missingConfigForms = new Set(declared)
+  missingConfigForms.delete('configForms')
+  assert.throws(() => plugin.apply(guardedContext(missingConfigForms)), /dynamic ctx does not expose "configForms"/u)
+  plugin.apply(guardedContext(declared))
   assert.equal(namespace, 'provider-qoder')
   assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
   assert.equal(await operations.storeRegion('china'), true)
@@ -81,41 +95,6 @@ test('client settings mounts through configForms and reports rejected writes', a
   assert.deepEqual(JSON.parse(JSON.stringify(writes[2])), [{
     op: 'set', path: ['modelsByRegion', 'china'], value: [],
   }])
-})
-
-test('client settings uses declared services on guarded context', async () => {
-  const plugin = await loadClientPlugin()
-  const declared = new Set(plugin.inject)
-  let mounted = false
-  const form = {
-    getSnapshot: () => ({ value: { modelsByRegion: {} } }),
-    subscribe: () => () => {},
-    set: async () => true,
-  }
-  const rawCtx = {
-    configForms: { get: () => { mounted = true; return form } },
-    effect: (callback: () => unknown) => callback(),
-    locale: { register() {}, bind: () => (key: string) => key },
-    remote: { credentials: {} },
-    inject: () => {},
-    slots: {
-      inject: (_name: string, callback: () => void) => callback(),
-      register: () => {},
-    },
-  }
-  // Simulate cordis-client-runner dynamicCordisContext: undeclared property access throws
-  const guardedCtx = new Proxy(rawCtx, {
-    get(target, prop, receiver) {
-      if (typeof prop === 'string' && !declared.has(prop) && !(prop in rawCtx)) {
-        throw new Error(`dynamic ctx does not expose "${prop}"`)
-      }
-      return Reflect.get(target, prop, receiver)
-    },
-  })
-  assert.doesNotThrow(() => {
-    plugin.apply(guardedCtx)
-  })
-  assert.equal(mounted, true)
 })
 
 test('new conversation receives the default model directory before a model selection', async () => {

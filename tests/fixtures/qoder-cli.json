@@ -1,5 +1,5 @@
 {
-  "reference": "@qoder-ai/qodercli 1.1.48, offline WASM; all identities are synthetic",
+  "reference": "@qoder-ai/qodercli, offline WASM; all identities are synthetic",
   "vectors": [
     {
       "plaintext": "",
@@ -36,7 +36,6 @@
       "Cosy-Organization-Tags": "Security,JadeKey",
       "Cosy-Scene": "assistant",
       "Cosy-User": "offline-user",
-      "Cosy-Version": "1.1.48",
       "Login-Version": "v2",
       "X-Model-Key": "cmodel",
       "X-Model-Source": "system"

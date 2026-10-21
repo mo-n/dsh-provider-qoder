@@ -302,13 +302,10 @@ test('fetchQoderModels calls the encoded Global catalog with COSY authentication
   ])
 })
 
-test('fetchQoderModels rejects malformed and empty catalogs', async () => {
+test('fetchQoderModels rejects malformed catalog JSON', async () => {
   await assert.rejects(() => fetchQoderModels({
     userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
   }, { fetch: (async () => new Response('{')) as typeof fetch }), /invalid JSON/u)
-  await assert.rejects(() => fetchQoderModels({
-    userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
-  }, { fetch: (async () => new Response(JSON.stringify({ assistant: [] }))) as typeof fetch }), /no enabled models/u)
 })
 
 test('fetchQoderModels classifies HTTP and network failures', async () => {

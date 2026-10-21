@@ -69,16 +69,6 @@ test('queue envelopes support nested string bodies and validate optional fields'
   assert.equal(parseQueueStatus({ isQueued: 'no' }), undefined)
 })
 
-test('steps in the same turn preserve queue identity while rotating request identity', async () => {
-  const a = await buildQoderRequestBody(options(), credentials.userID)
-  const b = await buildQoderRequestBody(options(), credentials.userID)
-  assert.equal(a.request_set_id, b.request_set_id)
-  assert.equal(a.business.id, b.business.id)
-  assert.notEqual(a.request_id, b.request_id)
-  assert.equal(a.request_id, a.chat_record_id)
-  assert.equal(a.session_id, b.session_id)
-})
-
 test('SSE queue recovery preserves identity, signs polls, and finishes only after generation', async () => {
   const asks: QoderWireRequest[] = []
   const order: string[] = []

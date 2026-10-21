@@ -9,7 +9,7 @@ import type { QoderImageAttachments } from '../src/qoder/transport/wire/translat
 import type { QoderWireMessage } from '../src/qoder/transport/wire/wire-types.ts'
 import { qoderIdeVersion } from '../src/qoder/transport/wire/cosy.ts'
 
-const fixture = JSON.parse(readFileSync(new URL('./fixtures/qoder-cli-1.1.48.json', import.meta.url), 'utf8')) as {
+const fixture = JSON.parse(readFileSync(new URL('./fixtures/qoder-cli.json', import.meta.url), 'utf8')) as {
   vectors: Array<{ plaintext: string; encoded: string }>
   infer: { url: string; headers: Record<string, string> }
 }
@@ -53,9 +53,9 @@ for (const region of ['global', 'china'] as const) {
         assert.equal(url, region === 'global' ? fixture.infer.url : fixture.infer.url.replace('api3.qoder.sh', 'gateway.qoder.com.cn'))
         const headers = new Headers(init?.headers)
         for (const [key, value] of Object.entries(fixture.infer.headers)) {
-          // Keep the audited fixture intact while checking the configured client version.
-          assert.equal(headers.get(key), key === 'Cosy-Version' ? qoderIdeVersion : value, key)
+          assert.equal(headers.get(key), value, key)
         }
+        assert.equal(headers.get('Cosy-Version'), qoderIdeVersion)
         assert.equal(headers.get('Cosy-ClientIp'), null)
         assert.equal(headers.get('Cosy-Sigpath'), null)
         const request = decodeBody(init?.body as Uint8Array)
