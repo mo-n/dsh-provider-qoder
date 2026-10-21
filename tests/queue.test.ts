@@ -110,7 +110,7 @@ test('SSE queue recovery preserves identity, signs polls, and finishes only afte
     assert.equal(new Headers(init?.headers).get('x-session-id'), asks.at(-1)!.session_id)
     return asks.length === 1 ? new Response(queueFrame) : success()
   }) as typeof globalThis.fetch
-  const chunks = await collect(streamQoderChat(options(), undefined, credentials, [], deps(fetch, { queueClock: fakeClock, onQueueUpdate: update => updates.push(update) })))
+  const chunks = await collect(streamQoderChat(options(), { id: 'test-model', name: 'Qoder Ultimate' }, credentials, [], deps(fetch, { queueClock: fakeClock, onQueueUpdate: update => updates.push(update) })))
   assert.deepEqual(order, ['ask', 'poll', 'poll', 'ask', 'finish'])
   assert.deepEqual(fakeClock.sleeps, [500, 500])
   assert.equal(asks[0].request_set_id, asks[1].request_set_id)
@@ -123,6 +123,7 @@ test('SSE queue recovery preserves identity, signs polls, and finishes only afte
   assert.equal(typeof finishPayload?.time_consumed, 'number')
   assert.equal(chunks.filter(chunk => chunk.type === 'finish').length, 1)
   assert.ok(updates.some(update => update.type === 'waiting' && update.snapshot.waitTimeMs === 4000))
+  assert.ok(updates.some(update => update.type === 'waiting' && update.snapshot.modelName === 'Qoder Ultimate' && update.snapshot.model === 'test-model'))
   assert.equal(updates.at(-1)?.type, 'clear')
 })
 

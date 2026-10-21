@@ -3,6 +3,10 @@ import type { QoderLocalizedText } from '../qoder/account.ts'
 export const zh = {
   queueTitle: 'Qoder 模型排队',
   queueWaiting: '{model} 正在排队',
+  queueRunningFor: '{model} 正在排队，用时 {duration} ···',
+  queueHourUnit: '小时',
+  queueMinuteUnit: '分',
+  queueSecondUnit: '秒',
   queueCount: '排队数量：{count}',
   queueEstimate: '预计等待 {seconds} 秒',
   queueElapsed: '已等待 {seconds} 秒',
@@ -86,6 +90,10 @@ export const zh = {
 export const en: typeof zh = {
   queueTitle: 'Qoder model queue',
   queueWaiting: '{model} is queued',
+  queueRunningFor: '{model} queued for {duration} ···',
+  queueHourUnit: 'h',
+  queueMinuteUnit: 'm',
+  queueSecondUnit: 's',
   queueCount: 'Queue count: {count}',
   queueEstimate: 'Estimated wait: {seconds}s',
   queueElapsed: 'Waited {seconds}s',

@@ -14,6 +14,8 @@ export interface QoderQueueSnapshot {
   callId: string
   sessionId: string
   model: string
+  /** Advertised name of the selected model, independent of its upstream key. */
+  modelName?: string
   queueCount?: number
   waitTimeMs?: number
   serviceAvailable?: boolean

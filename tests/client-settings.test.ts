@@ -16,7 +16,7 @@ const loadClientPlugin = async () => {
           const require = createRequire(import.meta.url)
           // DSH's browser shell supplies this static shared module. Node does not load its CSS entry.
           plugin = factory((id: string) => id === '@deepseek-ai/dsh-client-ui-primitives'
-            ? { DisclosureRow: () => null, StateDot: () => null, Input: () => null } : require(id))
+            ? { TextShimmer: () => null, IconQueueOutlineRegular: () => null, Input: () => null } : require(id))
         },
       },
     },

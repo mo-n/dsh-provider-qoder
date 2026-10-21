@@ -73,7 +73,7 @@ export async function* streamQoderChat(
     requestSetId: request.request_set_id, sessionId: request.session_id,
     dshSessionId: options.purpose === undefined && options.sessionId !== undefined ? String(options.sessionId) : undefined,
     runStartedAt: request.business.begin_at,
-    model: request.model_config.key, signal: options.signal,
+    model: request.model_config.key, modelName: model?.name, signal: options.signal,
     maxWaitMs: dependencies.modelQueueMaxWaitMs, credentials: resolveCredentials,
     onUpdate: dependencies.onQueueUpdate, onLease: dependencies.onQueueLease,
     logger: dependencies.logger, clock: dependencies.queueClock,

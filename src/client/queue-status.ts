@@ -1,6 +1,18 @@
 /** Poll plugin snapshots only; browser presence never controls upstream queue lifetime. */
 import type { QoderQueueSnapshot } from '../qoder/queue.ts'
 import type { QoderRpcCaller } from './rpc-client.ts'
+import type { QoderCredentialCopy } from './locales.ts'
+
+/** Match DSH's running status clock: whole hours, minutes and seconds. */
+export function formatQueueDuration(ms: number, t: (key: QoderCredentialCopy) => string): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor(total / 60) % 60
+  const seconds = total % 60
+  return (hours > 0 ? `${hours}${t('queueHourUnit')}` : '')
+    + (total >= 60 ? `${minutes}${t('queueMinuteUnit')}` : '')
+    + `${seconds}${t('queueSecondUnit')}`
+}
 
 export interface QueueViewState {
   items: readonly QoderQueueSnapshot[]
@@ -13,6 +25,7 @@ export function parseQueueSnapshots(value: unknown, sessionId: string): QoderQue
     if (!item || typeof item !== 'object'
       || item.sessionId !== sessionId || typeof item.callId !== 'string' || !item.callId
       || typeof item.model !== 'string'
+      || (item.modelName !== undefined && (typeof item.modelName !== 'string' || !item.modelName.trim()))
       || !['waitElapsedMs', 'maxWaitMs', 'updatedAt'].every(key => typeof item[key] === 'number' && Number.isFinite(item[key]) && item[key] >= 0)
       || !['queueCount', 'waitTimeMs'].every(key => item[key] === undefined || (typeof item[key] === 'number' && Number.isFinite(item[key]) && item[key] >= 0))) {
       throw new Error('Invalid queue snapshot')

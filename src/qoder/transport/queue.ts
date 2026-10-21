@@ -105,6 +105,7 @@ export interface ModelQueueOptions {
   /** DSH session identity, separate from the upstream session ID. */
   dshSessionId?: string
   model: string
+  modelName?: string
   signal?: AbortSignal
   maxWaitMs?: number
   credentials: (refresh: boolean, signal: AbortSignal) => Promise<CosyCredentials>
@@ -177,6 +178,7 @@ export class ModelQueue {
             callId: this.callId,
             sessionId: this.options.dshSessionId,
             model: status.modelKey ?? this.options.model,
+            ...this.options.modelName ? { modelName: this.options.modelName } : {},
             ...status.queueCount === undefined ? {} : { queueCount: status.queueCount },
             ...status.waitTime === undefined ? {} : { waitTimeMs: status.waitTime * 1000 },
             ...status.serviceAvailable === undefined ? {} : { serviceAvailable: status.serviceAvailable },

@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { setImmediate } from 'node:timers/promises'
 import { QoderQueueStatusStore } from '../src/dsh/queue-status.ts'
-import { parseQueueSnapshots, watchQueueStatus, type QueueViewState } from '../src/client/queue-status.ts'
+import { formatQueueDuration, parseQueueSnapshots, watchQueueStatus, type QueueViewState } from '../src/client/queue-status.ts'
+import { zh, en } from '../src/client/locales.ts'
 import type { QoderRpcCaller } from '../src/client/rpc-client.ts'
 import type { QoderQueueSnapshot } from '../src/qoder/queue.ts'
 
@@ -35,6 +36,15 @@ test('browser snapshots reject cross-session and malformed responses', () => {
   assert.throws(() => parseQueueSnapshots([snapshot()], 'other'))
   assert.throws(() => parseQueueSnapshots([{ ...snapshot(), waitTimeMs: Infinity }], 'session'))
   assert.throws(() => parseQueueSnapshots({ items: [] }, 'session'))
+  assert.deepEqual(parseQueueSnapshots([{ ...snapshot(), model: 'qfmodel', modelName: 'Qoder Ultimate' }], 'session')[0].modelName, 'Qoder Ultimate')
+  assert.throws(() => parseQueueSnapshots([{ ...snapshot(), modelName: 123 }], 'session'))
+})
+
+test('queue duration follows the DSH running status format in both locales', () => {
+  assert.equal(formatQueueDuration(169_999, key => zh[key]), '2分49秒')
+  assert.equal(formatQueueDuration(169_999, key => en[key]), '2m49s')
+  assert.equal(formatQueueDuration(3_661_000, key => zh[key]), '1小时1分1秒')
+  assert.equal(formatQueueDuration(-1000, key => zh[key]), '0秒')
 })
 
 test('visible polling marks failures stale and recovers without retaining finished entries', async t => {
