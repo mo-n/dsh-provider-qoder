@@ -45,7 +45,7 @@ export interface QoderModelSettingsSnapshot {
   user: unknown
   revision: number | undefined
   writable: boolean
-  mode: 'host' | 'memory'
+  mode?: 'host' | 'memory'
 }
 
 export type QoderModelDiscoveryResult = QoderRpcResult<QoderCatalogModel[]>

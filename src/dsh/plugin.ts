@@ -1,5 +1,10 @@
 /** Register the Qoder subscription provider with DSH. */
 
+import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-session'
+import { QoderQueueLeases, bindQoderQueueLeases } from './queue-leases.ts'
+import { QoderQueueStatusStore } from './queue-status.ts'
+import { defaultModelQueueMaxWaitMs } from '../qoder/queue.ts'
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
@@ -86,6 +91,10 @@ async function executeRpc<T>(
 }
 
 export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void {
+  const leases = new QoderQueueLeases()
+  const queueStatus = new QoderQueueStatusStore()
+  ctx.effect(() => async () => { queueStatus.dispose(); await leases.dispose() }, 'provider-qoder: queue lifecycle')
+  bindQoderQueueLeases(ctx, leases)
   const config = readConfig(input)
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
   const initialRegion = config.region ?? 'global'
@@ -94,6 +103,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     modelsByRegion: { ...config.modelsByRegion },
     streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
     responseHeaderTimeoutMs: config.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
+    modelQueueMaxWaitMs: config.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
     preserveThinking: config.preserveThinking ?? true,
     webSearchMode: config.webSearchMode ?? 'auto',
   }
@@ -112,6 +122,9 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     responseHeaderTimeoutMs,
     attachments: ctx.attachments,
     preserveThinking,
+    modelQueueMaxWaitMs: current().modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
+    onQueueUpdate: queueStatus.update,
+    captureQueueLeaseOwner: leases.capture,
   })
 
   const resolveConfig = () => {
@@ -122,6 +135,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       models: modelsFor(value, region),
       streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
       responseHeaderTimeoutMs: value.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
+      modelQueueMaxWaitMs: value.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
       preserveThinking: value.preserveThinking ?? true,
       webSearchMode: value.webSearchMode ?? 'auto',
     }
@@ -138,6 +152,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     region: initial.region,
     streamIdleTimeoutMs: initial.streamIdleTimeoutMs,
     responseHeaderTimeoutMs: initial.responseHeaderTimeoutMs,
+    modelQueueMaxWaitMs: initial.modelQueueMaxWaitMs,
     preserveThinking: initial.preserveThinking,
   }
   const catalog = new QoderCatalogLifecycle({
@@ -164,6 +179,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     if (next.region !== activeTransportConfig.region
       || next.streamIdleTimeoutMs !== activeTransportConfig.streamIdleTimeoutMs
       || next.responseHeaderTimeoutMs !== activeTransportConfig.responseHeaderTimeoutMs
+      || next.modelQueueMaxWaitMs !== activeTransportConfig.modelQueueMaxWaitMs
       || next.preserveThinking !== activeTransportConfig.preserveThinking) {
       activeTransport = createTransport(
         next.region,
@@ -175,6 +191,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
         region: next.region,
         streamIdleTimeoutMs: next.streamIdleTimeoutMs,
         responseHeaderTimeoutMs: next.responseHeaderTimeoutMs,
+        modelQueueMaxWaitMs: next.modelQueueMaxWaitMs,
         preserveThinking: next.preserveThinking,
       }
     }
@@ -252,6 +269,12 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   const handler: QoderRpcHandler = async (endpoint, payload, signal) => {
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
+
+    if (endpoint === 'queue') {
+      const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId
+      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 256) return publicError('INTERNAL', 'A valid sessionId is required')
+      return { ok: true, value: queueStatus.read(sessionId) }
+    }
 
     if (endpoint === 'models') {
       return await executeRpc('discover Qoder models', () => discoverModels(signal), signal, logger)

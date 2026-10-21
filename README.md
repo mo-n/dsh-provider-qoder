@@ -19,6 +19,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 - Automatically fetches available models for your account, supports selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
 - Supports multimodality, web search, and tool calls.
 - View account information, quota, and reset dates in Settings.
+- Supports Qoder model queues with cancellable polling and visible waiting progress.
 
 ## Installation
 
@@ -59,9 +60,10 @@ Open **Settings → Qoder** to view account and quota details, configure the web
   <img src="./assets/account-quota.png" alt="Qoder account quota and model settings" width="650" />
 </p>
 
+For advanced YAML options (queue wait limits, request timeouts, and historical reasoning preservation), see [Configuration](./docs/wiki/configuration.md).
+
 ## Upcoming Features
 
-- [ ] Request rate-limiting queue mechanism
 - [ ] Connect with Qoder's Protobuf protocol
 
 ## References

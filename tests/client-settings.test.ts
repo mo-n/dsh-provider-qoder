@@ -13,7 +13,10 @@ const loadClientPlugin = async () => {
     window: {
       __ModuleLoader__: {
         load: ({ factory }: { factory: (require: unknown) => typeof plugin }) => {
-          plugin = factory(createRequire(import.meta.url))
+          const require = createRequire(import.meta.url)
+          // DSH's browser shell supplies this static shared module. Node does not load its CSS entry.
+          plugin = factory((id: string) => id === '@deepseek-ai/dsh-client-ui-primitives'
+            ? { TextShimmer: () => null, IconQueueOutlineRegular: () => null, Input: () => null } : require(id))
         },
       },
     },
@@ -62,13 +65,13 @@ test('client settings mounts through configForms and reports rejected writes', a
       inject: (_name: string, callback: () => void) => callback(),
       register: (spec: { name: string; inject(): { operations: typeof operations } }) => {
         registeredSlots.push(spec.name)
-        operations = spec.inject().operations
+        if (spec.name !== 'conversation.input.dock') operations = spec.inject().operations
       },
     },
   }
   plugin.apply(ctx)
   assert.equal(namespace, 'provider-qoder')
-  assert.deepEqual(registeredSlots, ['settings.section', 'settings.models.footer'])
+  assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
   assert.equal(await operations.storeRegion('china'), true)
   accepted = false
   assert.equal(await operations.storeRegion('global'), false)

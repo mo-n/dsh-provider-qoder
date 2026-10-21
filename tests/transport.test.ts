@@ -484,7 +484,7 @@ for (const cancellation of ['caller', 'timeout'] as const) {
 }
 
 for (const source of ['http', 'sse'] as const) {
-  for (const [businessCode, expected] of [['112', 'QUOTA'], ['10605', 'RATE_LIMIT'], ['99999', 'PROVIDER_ERROR'], ['105', 'AUTH']] as const) {
+  for (const [businessCode, expected] of [['112', 'QUOTA'], ['99999', 'PROVIDER_ERROR'], ['105', 'AUTH']] as const) {
     test(`${source} business rejection ${businessCode} has correct classification and bounded recovery`, async () => {
       let chats = 0
       let exchanges = 0

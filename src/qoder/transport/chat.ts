@@ -1,4 +1,6 @@
-/** Qoder chat request encoding, timeout lifecycle, and SSE streaming. */
+/** Qoder chat request encoding, queue recovery, timeout lifecycle, and SSE streaming. */
+
+import { randomUUID } from 'node:crypto'
 
 import {
   attributionHeaders,
@@ -7,7 +9,10 @@ import {
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
 import type { QoderCatalogModel } from '../catalog.ts'
-import { QoderLlmError, qoderModelError, canRefreshModelCredentials, qoderRequestId } from '../errors.ts'
+import { ModelQueue, queueFailure, type QueueClock } from './queue.ts'
+import type { QoderQueueLease, QoderQueueUpdate } from '../queue.ts'
+import { queuedError } from './wire/queue.ts'
+import { QoderLlmError, QoderModelQueuedError, qoderModelError, canRefreshModelCredentials, qoderRequestId } from '../errors.ts'
 import type { QoderRegion } from '../region.ts'
 import { getQoderChatUrl } from './endpoints.ts'
 import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
@@ -16,7 +21,7 @@ import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBodyBytes } from './wire/encoding.ts'
 import { buildQoderRequestBody } from './wire/serialize.ts'
 import { parseQoderSse } from './wire/sse.ts'
-import type { QoderWireMessage } from './wire/wire-types.ts'
+import type { QoderWireMessage, QoderWireRequest } from './wire/wire-types.ts'
 
 export interface QoderChatDependencies {
   fetch: typeof fetch
@@ -24,6 +29,13 @@ export interface QoderChatDependencies {
   region: QoderRegion
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
+  modelQueueMaxWaitMs?: number
+  /** Immutable boundary captured before I/O, independent of message-history inference. */
+  hostRunId?: string
+  onQueueUpdate?: (update: QoderQueueUpdate) => void
+  onQueueLease?: (lease: QoderQueueLease) => boolean
+  queueClock?: QueueClock
+  resolveCredentials?: (refresh: boolean, signal: AbortSignal) => Promise<CosyCredentials>
   refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
 }
 
@@ -38,8 +50,69 @@ export async function* streamQoderChat(
   messages: QoderWireMessage[],
   dependencies: QoderChatDependencies,
 ): AsyncGenerator<StreamChunk> {
-  const request = await buildQoderRequestBody(options, credentials.userID, messages, model)
+  // The host boundary prevents a compacted, identical next turn from reusing a
+  // queue key that an older asynchronous finish can still release.
+  const identityScope = options.purpose === undefined && dependencies.hostRunId !== undefined
+    ? JSON.stringify([dependencies.region, dependencies.hostRunId]) : dependencies.region
+  const request = await buildQoderRequestBody(options, credentials.userID, messages, model, undefined, undefined, identityScope)
   request.session_type = dependencies.region === 'china' ? 'qoderclicn' : 'qodercli'
+  const startedAt = performance.now()
+  let activeCredentials = credentials
+  const resolveCredentials = async (refresh: boolean, signal: AbortSignal): Promise<CosyCredentials> => {
+    const next = dependencies.resolveCredentials
+      ? await dependencies.resolveCredentials(refresh, signal)
+      : refresh && dependencies.refreshCredentials
+        ? await dependencies.refreshCredentials(activeCredentials, signal) : activeCredentials
+    if (next.userID !== credentials.userID) throw queueFailure('Qoder subscriber changed during queue recovery.', 'QODER_QUEUE_IDENTITY')
+    activeCredentials = next
+    return next
+  }
+  const queue = new ModelQueue({
+    region: dependencies.region, fetch: dependencies.fetch,
+    subscriberId: credentials.userID,
+    requestSetId: request.request_set_id, sessionId: request.session_id,
+    dshSessionId: options.purpose === undefined && options.sessionId !== undefined ? String(options.sessionId) : undefined,
+    runStartedAt: request.business.begin_at,
+    model: request.model_config.key, modelName: model?.name, signal: options.signal,
+    maxWaitMs: dependencies.modelQueueMaxWaitMs, credentials: resolveCredentials,
+    onUpdate: dependencies.onQueueUpdate, onLease: dependencies.onQueueLease,
+    logger: dependencies.logger, clock: dependencies.queueClock,
+  })
+  let sawOutput = false
+  const clear = (): void => queue.clear()
+  options.signal?.addEventListener('abort', clear, { once: true })
+  try {
+    for (;;) {
+      if (options.signal?.aborted) throw aborted('Request was aborted.')
+      try {
+        for await (const chunk of streamAttempt(options, model, activeCredentials, request, dependencies)) {
+          if (chunk.type !== 'usage' && chunk.type !== 'finish') sawOutput = true
+          yield chunk
+        }
+        return
+      } catch (error) {
+        if (!(error instanceof QoderModelQueuedError)) throw error
+        queue.entered(error.queue)
+        if (sawOutput) throw queueFailure('Qoder queued a request after output began; replay was stopped.', 'QODER_QUEUE_AFTER_OUTPUT')
+        await queue.wait(error.queue, request.request_id)
+        await resolveCredentials(false, options.signal ?? new AbortController().signal)
+        request.request_id = randomUUID()
+        request.chat_record_id = request.request_id
+      }
+    }
+  } finally {
+    options.signal?.removeEventListener('abort', clear)
+    await queue.finish(performance.now() - startedAt)
+  }
+}
+
+async function* streamAttempt(
+  options: GenerateOptions,
+  model: QoderCatalogModel | undefined,
+  credentials: CosyCredentials,
+  request: QoderWireRequest,
+  dependencies: QoderChatDependencies,
+): AsyncGenerator<StreamChunk> {
   const encodedBytes = qoderEncodeBodyBytes(JSON.stringify(request))
   const chatUrl = getQoderChatUrl(dependencies.region)
   const requestController = new AbortController()
@@ -99,6 +172,8 @@ export async function* streamQoderChat(
           'x-model-source': model?.source || 'system',
           ...attributionHeaders(),
           ...buildAuthHeaders(encodedBytes, chatUrl, activeCredentials),
+          'X-Request-Id': request.request_id,
+          'X-Session-ID': request.session_id,
         },
         body: encodedBytes,
         signal: requestController.signal,
@@ -122,6 +197,8 @@ export async function* streamQoderChat(
         if (requestController.signal.aborted) throw error
         // Diagnostics are optional; the HTTP status still governs recovery and errors.
       }
+      const queued = queuedError(bodyText)
+      if (queued) throw queued
       const failure = qoderModelError(`Qoder upstream service returned HTTP ${response.status}`, {
         status: response.status,
         headers: response.headers,
@@ -150,7 +227,7 @@ export async function* streamQoderChat(
     let finishReason: string | undefined
     const streamStartedAt = performance.now()
 
-    for await (const chunk of parseQoderSse(response.body, { onActivity: resetIdleTimer, headers: response.headers, httpStatus: response.status })) {
+    for await (const chunk of parseQoderSse(response.body, { queueRecovery: true, onActivity: resetIdleTimer, headers: response.headers, httpStatus: response.status })) {
       chunkCount++
       if (firstChunkDurationMs === undefined) {
         firstChunkDurationMs = Math.round(performance.now() - startedAt)
@@ -199,6 +276,7 @@ export async function* streamQoderChat(
       })
       throw failure
     }
+    if (error instanceof QoderModelQueuedError) throw error
     if (error instanceof QoderLlmError) {
       dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(error), {
         chunkCount,

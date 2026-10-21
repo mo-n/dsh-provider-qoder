@@ -7,6 +7,7 @@ import type { QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from '../region.ts'
 import { DefaultQoderTransport, defaultStreamIdleTimeoutMs } from './default-transport.ts'
 import { defaultResponseHeaderTimeoutMs } from './request.ts'
+import type { QoderQueueOwner, QoderQueueUpdate } from '../queue.ts'
 import type { QoderLogger } from './logging.ts'
 
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
@@ -22,6 +23,10 @@ export interface QoderTransport {
 
 export interface QoderTransportOptions {
   region: QoderRegion
+  modelQueueMaxWaitMs?: number
+  onQueueUpdate?: (update: QoderQueueUpdate) => void
+  /** Capture the current host run before I/O; reject late leases after its boundary closes. */
+  captureQueueLeaseOwner?: (sessionId: string) => QoderQueueOwner | undefined
   resolvePat: () => Promise<string>
   fetch?: typeof fetch
   logger?: QoderLogger

@@ -19,6 +19,16 @@ export class QoderLlmError extends LlmError {
   }
 }
 
+/** Internal protocol signal; the queue controller consumes it before DSH sees it. */
+export class QoderModelQueuedError extends QoderLlmError {
+  readonly queue: import('./queue.ts').QoderQueueStatus
+  constructor(queue: import('./queue.ts').QoderQueueStatus) {
+    super('Qoder model is queued.', 'QODER_MODEL_QUEUED')
+    this.queue = queue
+    this.upstreamCode = '10605'
+  }
+}
+
 const modelBusinessErrors: Record<string, { code: string; message: string }> = {
   '103': { code: 'PROVIDER_ERROR', message: 'Qoder rejected a duplicate model request.' },
   '105': { code: 'AUTH', message: 'Qoder subscriber authentication has expired.' },

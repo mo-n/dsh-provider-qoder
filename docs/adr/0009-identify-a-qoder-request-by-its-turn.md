@@ -12,10 +12,10 @@ The transport aligns turn identity with Qoder's upstream aggregation model:
 
 ## Turn Boundary Derivation
 
-Because the adapter receives no explicit turn number from DSH, turn boundaries are derived in `turn-identity.ts` based on the multiset of accounted user-role messages:
+Hosted calls capture an immutable run identity from the committed DSH turn lifecycle before provider I/O. That identity scopes the subscriber/region/session tracker, so a later real turn cannot reuse an earlier turn's request set even if compaction leaves identical input. Within that scope, and for standalone calls without a host owner, `turn-identity.ts` derives request grouping from the multiset of accounted user-role messages:
 - An unaccounted subscriber message opens a new turn record.
 - Step-level context, background system notifications, synthesized image markers, and trimmed history continue the active turn rather than opening new records.
-- Repeated messages whose earlier instances were removed by history compaction will share the open record until a distinct message arrives.
+- Standalone calls without a host run identity can still share the open record for repeated messages whose earlier instances were removed by history compaction, until a distinct message arrives. Hosted calls are separated by their real turn boundary.
 
 ## Auxiliary Calls & Lifecycle Isolation
 

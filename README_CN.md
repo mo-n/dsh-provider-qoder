@@ -19,6 +19,7 @@
 - 自动拉取账号可用模型，支持选择启用的模型，并在服务支持时显示价格倍率和推理强度选项。
 - 支持多模态、搜索以及工具调用。
 - 在设置中查看账号信息、额度和重置时间。
+- 支持 Qoder 模型排队：可取消轮询、显示等待进度。
 
 ## 安装
 
@@ -59,9 +60,10 @@ dsh plugin --profile web add dsh-provider-qoder
   <img src="./assets/account-quota_CN.png" alt="Qoder 账号额度与模型设置" width="650" />
 </p>
 
+高级 YAML 配置（排队等待上限、请求超时与历史推理内容保留）见 [配置说明](./docs/wiki/configuration_CN.md)。
+
 ## 后续计划
 
-- [ ] 请求限流排队机制
 - [ ] 接入 Qoder 的 Protobuf 协议
 
 ## 参考项目

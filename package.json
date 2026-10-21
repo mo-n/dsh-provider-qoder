@@ -82,7 +82,8 @@
     "@deepseek-ai/dsh-settings": ">=0.1.7-rc.2",
     "@deepseek-ai/dsh-web": ">=0.1.7-rc.2",
     "@deepseek-ai/schemastery": "~3.18.4",
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.7-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
@@ -109,6 +110,7 @@
     "lightningcss": "^1.33.0",
     "react": "18.3.1",
     "tsdown": "0.22.2",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.7-rc.2"
   }
 }

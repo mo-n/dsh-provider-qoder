@@ -105,6 +105,7 @@ export async function buildQoderRequestBody(
   model?: QoderCatalogModel,
   attachments?: QoderImageAttachments,
   tracker?: QoderTurnTracker,
+  identityScope = '',
 ): Promise<QoderWireRequest> {
   if (!userId) {
     throw new QoderLlmError('Qoder request identity is missing.', 'AUTH')
@@ -149,7 +150,7 @@ export async function buildQoderRequestBody(
   const requestId = crypto.randomUUID()
   const sessionIdParam = options.sessionId === undefined ? undefined : String(options.sessionId)
   const activeTracker = tracker ?? qoderTurnTracker
-  const identity = activeTracker.resolveTurnIdentity(sessionIdParam, messages, callKind(options), requestId, modelKey)
+  const identity = activeTracker.resolveTurnIdentity(sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]), messages, callKind(options), requestId, modelKey)
 
   return {
     request_id: requestId,

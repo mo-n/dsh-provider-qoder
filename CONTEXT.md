@@ -110,6 +110,10 @@ _Avoid_: static search provider, fixed search binding
 The temporary waiting state reported by the Qoder service when a selected model cannot immediately accept a model request. It is distinct from exhausted subscriber Credits or subscription entitlement limits.
 _Avoid_: quota exhaustion, authentication expiry
 
+**Qoder model queue lease**:
+The temporary service-side permission associated with a model and Qoder agent run after model queue admission, retained until the run releases it or the service expires it.
+_Avoid_: Qoder job token, subscriber Credits, local concurrency slot
+
 **Qoder transport**:
 The provider-side capability owning all communication with Qoder, including authentication, model discovery, subscriber account reads, model requests, image publication, and web search. It does not own agent tools or workspace operations.
 _Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK

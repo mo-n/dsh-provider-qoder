@@ -44,8 +44,14 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly imageUploader: QoderImageUploader
   private readonly searchClient: QoderSearchClient
   private readonly preserveThinking?: boolean
+  private readonly modelQueueMaxWaitMs?: number
+  private readonly onQueueUpdate: QoderTransportOptions['onQueueUpdate']
+  private readonly captureQueueLeaseOwner: QoderTransportOptions['captureQueueLeaseOwner']
 
   constructor(options: QoderTransportOptions) {
+    this.modelQueueMaxWaitMs = options.modelQueueMaxWaitMs
+    this.onQueueUpdate = options.onQueueUpdate
+    this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
     this.resolvePat = options.resolvePat
     this.fetchImpl = options.fetch ?? globalThis.fetch
@@ -150,6 +156,7 @@ export class DefaultQoderTransport implements QoderTransport {
     model?: QoderCatalogModel,
   ): AsyncGenerator<StreamChunk> {
     if (options.signal?.aborted) throw aborted('Request was aborted prior to generation.')
+    const queueOwner = options.sessionId === undefined ? undefined : this.captureQueueLeaseOwner?.(String(options.sessionId))
 
     // Phase 1: static validation finishes before credential resolution or any
     // provider I/O, so an unusable request never consumes a subscription.
@@ -171,6 +178,14 @@ export class DefaultQoderTransport implements QoderTransport {
       region: this.region,
       responseHeaderTimeoutMs: this.responseHeaderTimeoutMs,
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
+      modelQueueMaxWaitMs: this.modelQueueMaxWaitMs,
+      onQueueUpdate: this.onQueueUpdate,
+      hostRunId: queueOwner?.runId,
+      onQueueLease: queueOwner?.retain,
+      resolveCredentials: async (refresh, signal) => {
+        if (refresh) this.auth.clear(pat)
+        return this.auth.getCredentials(pat, signal)
+      },
       refreshCredentials: async (rejected, signal) => {
         // A concurrent request may already have refreshed the same PAT.
         const current = await this.auth.getCredentials(pat, signal)

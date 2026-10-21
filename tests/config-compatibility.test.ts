@@ -8,6 +8,8 @@ for (const supportsVolatile of [false, true]) {
     const output = execFileSync(process.execPath, ['--input-type=module', '-e', `
       import assert from 'node:assert/strict'
       import z from '@deepseek-ai/schemastery'
+      // Initialize the supported host dependency before simulating a missing provider capability.
+      await import('@deepseek-ai/dsh-web')
       if (!${supportsVolatile}) delete z.prototype.volatile
       const plugin = await import('./lib/index.js')
       const input = plugin.Config({ region: 'china' })
