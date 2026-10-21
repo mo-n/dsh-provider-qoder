@@ -60,6 +60,8 @@ dsh plugin --profile web add dsh-provider-qoder
   <img src="./assets/account-quota_CN.png" alt="Qoder 账号额度与模型设置" width="650" />
 </p>
 
+高级 YAML 配置（排队等待上限、请求超时与历史推理内容保留）见 [配置说明](./docs/wiki/configuration_CN.md)。
+
 ## 后续计划
 
 - [ ] 接入 Qoder 的 Protobuf 协议

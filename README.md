@@ -62,7 +62,7 @@ Open **Settings → Qoder** to view account and quota details, configure the web
 
 ### Model queue waiting
 
-In **Settings → Qoder**, set the model queue wait limit in minutes (default **60**). The plugin setting is `modelQueueMaxWaitMs` (default `3600000`); it is a positive integer up to `2147483647`, and changes apply to new model calls. There is no environment-variable override.
+The model queue wait limit defaults to **60 minutes**. Configure it and other advanced options through YAML; see [Configuration](./docs/wiki/configuration.md).
 
 The input dock shows an expandable queue row using DSH's shared components. It displays elapsed time and, when reported, the queue count and estimated wait. Use DSH's normal Stop control to cancel. Queue timeout, endpoint failure, and recovery exhaustion end the call without restarting its budget through ordinary DSH retries. A request that has already exposed text, reasoning, or a tool call is never transparently replayed.
 
