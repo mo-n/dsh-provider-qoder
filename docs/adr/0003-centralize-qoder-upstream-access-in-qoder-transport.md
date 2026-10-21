@@ -23,7 +23,8 @@ A second rejection is returned to DSH.
 Transport never replays an HTTP-successful model stream after an authentication or quota error. Queue recovery before any model output is owned by transport using turn-scoped leases; ordinary model-generation retries remain DSH-owned. This narrowly extends the original idempotent-read retry restriction.
 
 Model HTTP and SSE rejections share business-error classification. Queue code
-`10605` alone maps to `RATE_LIMIT`; exhausted quota and entitlement limits map to
+`10605` is consumed by transport queue recovery and maps to `RATE_LIMIT` only
+when queue recovery is disabled; exhausted quota and entitlement limits map to
 `QUOTA`. Provider delay hints retain the greater valid body/header delay without
 clamping to force recovery. Transport owns bounded queue recovery, while terminal
 queue failures use dedicated codes outside DSH's default transient retry set.

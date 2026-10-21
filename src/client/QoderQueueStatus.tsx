@@ -18,20 +18,22 @@ function QueueRow({ item, unavailable, t }: { item: QoderQueueSnapshot; unavaila
   const name = item.modelName ?? item.model
   const status = unavailable ? t('queueUnavailable') : t('queueWaiting', { model: name })
   const label = unavailable ? status : t('queueRunningFor', { model: name, duration: formatQueueDuration(elapsed, t) })
-  return <details className={css.row} data-unavailable={unavailable || undefined}>
-    <summary className={css.summary} aria-label={status}>
-      <IconQueueOutlineRegular className={css.icon} aria-hidden="true" />
-      <TextShimmer active={!unavailable} className={css.text} aria-hidden="true">{label}</TextShimmer>
-      <span className={css.chevron} aria-hidden="true" />
-    </summary>
+  return <div className={css.row} data-unavailable={unavailable || undefined}>
     <span className={css.visuallyHidden} role="status" aria-live="polite" aria-atomic="true">{status}</span>
-    <div className={css.details}>
-      {item.queueCount !== undefined && <span>{t('queueCount', { count: item.queueCount })}</span>}
-      {item.waitTimeMs !== undefined && <span>{t('queueEstimate', { seconds: Math.ceil(item.waitTimeMs / 1000) })}</span>}
-      <span>{t('queueBudget', { seconds: Math.ceil(item.maxWaitMs / 1000) })}</span>
-      {item.serviceAvailable === false && <span>{t('queueServiceUnavailable')}</span>}
-    </div>
-  </details>
+    <details>
+      <summary className={css.summary} aria-label={status}>
+        <IconQueueOutlineRegular className={css.icon} aria-hidden="true" />
+        <TextShimmer active={!unavailable} className={css.text} aria-hidden="true">{label}</TextShimmer>
+        <span className={css.chevron} aria-hidden="true" />
+      </summary>
+      <div className={css.details}>
+        {item.queueCount !== undefined && <span>{t('queueCount', { count: item.queueCount })}</span>}
+        {item.waitTimeMs !== undefined && <span>{t('queueEstimate', { seconds: Math.ceil(item.waitTimeMs / 1000) })}</span>}
+        <span>{t('queueBudget', { seconds: Math.ceil(item.maxWaitMs / 1000) })}</span>
+        {item.serviceAvailable === false && <span>{t('queueServiceUnavailable')}</span>}
+      </div>
+    </details>
+  </div>
 }
 
 /** A provider contribution in DSH's input dock, using its shared process-row primitives. */
