@@ -46,7 +46,7 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
   const failure = snapshot.failureMessage || (snapshot.failure ? t(snapshot.failure) : undefined)
 
   const renderRate = (model: QoderCatalogModel): string => {
-    if (model.isFree || model.priceFactor === 0) return t('modelRateFree')
+    if (model.priceFactor === 0 || (model.priceFactor === undefined && model.isFree)) return t('modelRateFree')
     if (model.priceFactor === undefined) return t('modelRateUnknown')
     const current = formatRateFactor(model.priceFactor)
     if (model.originalPriceFactor !== undefined && model.originalPriceFactor > model.priceFactor) {

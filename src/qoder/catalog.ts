@@ -178,9 +178,10 @@ export function normalizeQoderModels(
       ? nonNegativeNumber((raw.promotion as { before_promotion_price_factor?: unknown }).before_promotion_price_factor)
       : undefined
     const originalPriceFactor = rawOriginalPrice ?? promotionPrice
-    const isFree = raw.is_free === true || raw.isFree === true
-      || (Array.isArray(raw.tags) && raw.tags.includes('limited_time_free'))
-      || priceFactor === 0
+    const isFree = priceFactor === undefined
+      ? raw.is_free === true || raw.isFree === true
+        || (Array.isArray(raw.tags) && raw.tags.includes('limited_time_free'))
+      : priceFactor === 0
     const reasoning = reasoningEffortsOf(raw.thinking_config)
     models.push({
       id,
@@ -255,7 +256,7 @@ export function formatRateFactor(value: number): string {
 
 /**
  * Format model price factor / rate string.
- * - Free models or price factor 0: '免费' or 'Free'
+ * - Price factor 0, or free models without a price factor: '免费' or 'Free'
  * - Promotional models: '0.5x（原 1x）' or '0.5x (was 1x)'
  * - Standard models: '1x'
  */
@@ -263,7 +264,7 @@ export function formatModelRate(
   model: Pick<QoderCatalogModel, 'priceFactor' | 'originalPriceFactor' | 'isFree'>,
   isZh = true,
 ): string | undefined {
-  if (model.isFree || model.priceFactor === 0) {
+  if (model.priceFactor === 0 || (model.priceFactor === undefined && model.isFree)) {
     return isZh ? '免费' : 'Free'
   }
   if (model.priceFactor === undefined) return undefined
