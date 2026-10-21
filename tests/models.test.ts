@@ -109,6 +109,24 @@ test('price factors preserve zero without inferring prices from free or promotio
   }
 })
 
+test('explicit price factors take precedence over every free marker', () => {
+  const cases = [
+    [{ price_factor: 0.1, is_free: true }, undefined],
+    [{ price_factor: 0, is_free: false }, true],
+    [{ is_free: true }, true],
+    [{ priceFactor: 0.1, isFree: true }, undefined],
+    [{ isFree: true }, true],
+    [{ price_factor: 0.1, tags: ['limited_time_free'] }, undefined],
+    [{ tags: ['limited_time_free'] }, true],
+  ] as const
+  for (const [metadata, expectedFree] of cases) {
+    const [model] = normalizeQoderModels({ assistant: [{
+      key: 'qfmodel', enable: true, ...metadata,
+    }] })
+    assert.equal(model.isFree, expectedFree)
+  }
+})
+
 test('rediscovery caps old input budgets and preserves smaller budgets', () => {
   const discovered = normalizeQoderModels({ assistant: [{
     key: 'model', enable: true, context_config: {
@@ -407,6 +425,8 @@ test('formatModelRate formats free, promotional, and standard rates in zh and en
   assert.equal(formatModelRate({ isFree: true }, false), 'Free')
   assert.equal(formatModelRate({ priceFactor: 0 }, true), '免费')
   assert.equal(formatModelRate({ priceFactor: 0 }, false), 'Free')
+  // Remembered catalogs may still contain conflicting metadata from older versions.
+  assert.equal(formatModelRate({ priceFactor: 0.1, isFree: true }, true), '0.1x')
   assert.equal(formatModelRate({ priceFactor: 1 }, true), '1x')
   assert.equal(formatModelRate({ priceFactor: 1.6 }, true), '1.6x')
   assert.equal(formatModelRate({ priceFactor: 0.5, originalPriceFactor: 1 }, true), '0.5x（原 1x）')
