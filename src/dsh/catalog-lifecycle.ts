@@ -68,6 +68,17 @@ export class QoderCatalogLifecycle {
     return mergeQoderDiscoveryMetadata(this.options.configuredModels(region), this.catalogs[region].models)
   }
 
+  /** Subscriber replacement must not retain another subscriber's discovered capabilities. */
+  clearDiscovered(): void {
+    for (const state of Object.values(this.catalogs)) {
+      state.models = []
+      state.generation++
+      state.expiresAt = 0
+      state.inflight = undefined
+      state.dirty = false
+    }
+  }
+
   /** Automatic reads join the newest discovery and never wait for settings writes. */
   async refresh(): Promise<void> {
     while (!this.disposed) {

@@ -29,6 +29,8 @@ import { modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } fr
 import { bindQoderSettings } from './settings.ts'
 import { isQoderRpcEndpoint, type QoderRpcErrorCode } from './rpc-channel.ts'
 import { registerQoderRpc, type QoderRpcHandler } from './rpc.ts'
+import { QoderBrowserAuthorizationManager, browserAuthorizationKey } from './browser-authorization.ts'
+import { qoderCredentialRef } from './credential-contract.ts'
 
 export const name = 'provider-qoder'
 export const inject = ['llm', 'credentials', 'connection', 'attachments']
@@ -108,15 +110,17 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     webSearchMode: config.webSearchMode ?? 'auto',
   }
   let current = (): QoderConfig => baseConfig
+  let authorization: QoderBrowserAuthorizationManager
   const createTransport = (
     region: QoderRegion,
     streamIdleTimeoutMs: number,
     responseHeaderTimeoutMs: number,
     preserveThinking: boolean,
-    resolvePat: () => Promise<string> = () => resolveManagedQoderPat(ctx.credentials),
+    resolvePat?: () => Promise<string>,
   ): QoderTransport => createQoderTransport({
     region,
-    resolvePat,
+    resolvePat: resolvePat ?? (() => resolveManagedQoderPat(ctx.credentials)),
+    resolveCredential: resolvePat ? undefined : signal => authorization.lease(region, signal),
     logger,
     streamIdleTimeoutMs,
     responseHeaderTimeoutMs,
@@ -155,6 +159,24 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     modelQueueMaxWaitMs: initial.modelQueueMaxWaitMs,
     preserveThinking: initial.preserveThinking,
   }
+  const authorizationTransports = new Map<QoderRegion, NonNullable<QoderTransport['authorization']>>()
+  authorization = new QoderBrowserAuthorizationManager({
+    credentials: ctx.credentials,
+    region: initialRegion,
+    transport: region => {
+      let transport = authorizationTransports.get(region)
+      if (!transport) {
+        transport = createQoderTransport({ region, resolvePat: () => Promise.resolve('') }).authorization!
+        authorizationTransports.set(region, transport)
+      }
+      return transport
+    },
+    changed: () => {
+      refreshAuthentication()
+      void catalog.refresh()
+    },
+  })
+  ctx.effect(() => () => authorization.dispose(), 'provider-qoder: browser authorization lifecycle')
   const catalog = new QoderCatalogLifecycle({
     resolveTransport: () => activeTransport,
     region: () => activeTransportConfig.region,
@@ -174,6 +196,19 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   })
 
   const registration = ctx.llm.registerAdapter([providerQoder], adapter)
+  const refreshAuthentication = (): void => {
+    const value = resolveConfig()
+    activeTransport = createTransport(value.region, value.streamIdleTimeoutMs, value.responseHeaderTimeoutMs, value.preserveThinking)
+    catalog.clearDiscovered()
+    catalog.observeTransport()
+    registration.replace([providerQoder])
+  }
+  ctx.on('credentials/record-updated', key => {
+    if (key === browserAuthorizationKey(activeTransportConfig.region)) refreshAuthentication()
+  })
+  ctx.on('credentials/reference-updated', ref => {
+    if (ref === qoderCredentialRef) refreshAuthentication()
+  })
   const refreshAdapter = (): void => {
     const next = resolveConfig()
     if (next.region !== activeTransportConfig.region
@@ -181,6 +216,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       || next.responseHeaderTimeoutMs !== activeTransportConfig.responseHeaderTimeoutMs
       || next.modelQueueMaxWaitMs !== activeTransportConfig.modelQueueMaxWaitMs
       || next.preserveThinking !== activeTransportConfig.preserveThinking) {
+      authorization.activateRegion(next.region)
       activeTransport = createTransport(
         next.region,
         next.streamIdleTimeoutMs,
@@ -269,6 +305,24 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   const handler: QoderRpcHandler = async (endpoint, payload, signal) => {
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
+
+    if (endpoint === 'authorization' || endpoint === 'beginLogin' || endpoint === 'cancelLogin' || endpoint === 'selectAuthorization') {
+      const data = payload as { region?: unknown; method?: unknown } | null
+      const region = data?.region
+      if ((region !== 'global' && region !== 'china') || region !== resolveConfig().region) {
+        return publicError('INTERNAL', 'The active Qoder service region is required')
+      }
+      return executeRpc('manage Qoder authorization', async () => {
+        if (endpoint === 'beginLogin') return authorization.begin(region)
+        if (endpoint === 'cancelLogin') { await authorization.cancel(region); return authorization.describe(region) }
+        if (endpoint === 'selectAuthorization') {
+          const method = data?.method
+          if (method !== 'pat' && method !== 'browser' && method !== 'none') throw new QoderLlmError('Invalid authorization method.', 'INVALID_REQUEST')
+          return authorization.select(region, method)
+        }
+        return authorization.describe(region)
+      }, signal, logger)
+    }
 
     if (endpoint === 'queue') {
       const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId

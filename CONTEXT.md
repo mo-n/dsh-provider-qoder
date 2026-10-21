@@ -26,6 +26,22 @@ _Avoid_: environment PAT, plugin API key
 A short-lived credential obtained by exchanging a Qoder PAT and used to authorize model transport requests.
 _Avoid_: Qoder PAT, refresh token
 
+**Qoder browser authorization**:
+An instance-shared, region-specific authorization obtained by completing account verification on the Qoder website.
+_Avoid_: password login, Managed Qoder PAT
+
+**Qoder device token**:
+A short-lived credential obtained through Qoder browser authorization and used to authorize subscriber operations and model transport requests.
+_Avoid_: Qoder job token, Qoder PAT
+
+**Qoder refresh token**:
+A credential used to renew a Qoder device token; renewal may replace both credentials.
+_Avoid_: Qoder job token, Qoder device token
+
+**Qoder browser login attempt**:
+A bounded attempt to obtain Qoder browser authorization for one service region, shared by clients connected to the DSH instance.
+_Avoid_: model session, account credential
+
 **Qoder subscriber profile**:
 The verified identity details (user ID, display name, and email) associated with an authenticated Qoder subscription.
 _Avoid_: account credential, user token

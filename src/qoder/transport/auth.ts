@@ -182,6 +182,14 @@ export class QoderAuthService {
     }
     const expiresAt = jobTokenExpiry(data)
 
+    const creds = await this.credentialsForToken(jobToken, machineID, signal, onAuthenticated)
+    const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
+    this.cache.set(cacheKey, { creds, expiresAt })
+    return creds
+  }
+
+  /** Both PAT exchange and browser authorization use the same verified subscriber identity. */
+  async credentialsForToken(jobToken: string, machineID: string, signal: AbortSignal, onAuthenticated = () => {}): Promise<CosyCredentials> {
     const userInfo = await retryMetadataRead(signal, () => this.fetchUserInfo(jobToken, signal))
     if (signal.aborted) throw abortedError()
     // The authentication deadline protects the required exchange and identity
@@ -202,8 +210,6 @@ export class QoderAuthService {
       if (tags !== undefined) creds.organizationTags = tags
     }
     if (signal.aborted) throw abortedError()
-    const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
-    this.cache.set(cacheKey, { creds, expiresAt })
     return creds
   }
 

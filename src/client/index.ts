@@ -12,6 +12,8 @@ import { QoderQueueStatus } from './QoderQueueStatus.tsx'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
 import { QoderContextSelect } from './QoderContextSelect.tsx'
+import { regionOf } from './credential-operations.ts'
+import type { QoderAuthorizationView } from '../qoder/authorization.ts'
 import type {
   QoderCredentialOperations,
   QoderCredentialStatus,
@@ -93,8 +95,20 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
   ctx.effect(() => () => tierEvents.dispose(), 'provider-qoder: session context tier events')
 
   const readModelSnapshot = () => modelScope.getSnapshot()
+  const authorizationOperations = {
+    read: (region: import('../qoder/region.ts').QoderRegion) => rpc.call<QoderAuthorizationView>('authorization', { region }),
+    begin: (region: import('../qoder/region.ts').QoderRegion) => rpc.call<QoderAuthorizationView>('beginLogin', { region }),
+    cancel: (region: import('../qoder/region.ts').QoderRegion) => rpc.call<QoderAuthorizationView>('cancelLogin', { region }),
+    select: (region: import('../qoder/region.ts').QoderRegion, method: 'pat' | 'browser' | 'none') => rpc.call<QoderAuthorizationView>('selectAuthorization', { region, method }),
+  }
   const operations: QoderCredentialOperations = {
+    authorization: authorizationOperations,
     describe: async () => {
+      const result = await authorizationOperations.read(regionOf(readModelSnapshot().value))
+      return result.ok ? { configured: result.value.configured && !result.value.expired,
+        source: result.value.method, writable: result.value.writable } : undefined
+    },
+    describePat: async () => {
       try {
         const response = await credentials.describe([qoderCredentialRef])
         return response.ok ? response.value[qoderCredentialRef] : undefined
@@ -105,6 +119,11 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     store: async (value) => {
       try {
         const response = await credentials.set(qoderCredentialRef, value.trim())
+        if (response.ok) {
+          const region = regionOf(readModelSnapshot().value)
+          const current = await authorizationOperations.read(region)
+          if (current.ok && current.value.method !== 'pat') return (await authorizationOperations.select(region, 'pat')).ok
+        }
         return response.ok
       } catch {
         return false
@@ -163,9 +182,15 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     },
     subscribeSessionTiers: (scope, listener) => tierEvents.subscribe(scope, listener),
 
-    subscribe: (listener) => ctx.remote.$on('credentials/reference-updated', (ref: string) => {
-      if (ref === qoderCredentialRef) listener()
-    }),
+    subscribe: listener => {
+      const reference = ctx.remote.$on('credentials/reference-updated', (ref: string) => {
+        if (ref === qoderCredentialRef) listener()
+      })
+      const record = ctx.remote.$on('credentials/record-updated', (key: string) => {
+        if (key === `provider-qoder/${regionOf(readModelSnapshot().value)}`) listener()
+      })
+      return () => { reference(); record() }
+    },
   }
   const rawT = ctx.locale.bind(localeNamespace) as (key: QoderCredentialCopy) => string
   const t = (key: QoderCredentialCopy, values?: Record<string, string | number>): string => {

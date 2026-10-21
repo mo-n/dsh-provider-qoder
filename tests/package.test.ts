@@ -503,6 +503,10 @@ test('apply mounts the settings RPC on the connection Fetch registry', async () 
     '/api/qoder-subscription/sessionTier',
     '/api/qoder-subscription/readSessionTier',
     '/api/qoder-subscription/sessionTierEvents',
+    '/api/qoder-subscription/authorization',
+    '/api/qoder-subscription/beginLogin',
+    '/api/qoder-subscription/cancelLogin',
+    '/api/qoder-subscription/selectAuthorization',
   ])
 })
 

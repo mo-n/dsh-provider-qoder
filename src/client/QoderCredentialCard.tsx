@@ -3,6 +3,7 @@ import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import { regionOf, type QoderCredentialInjected, type QoderCredentialStatus } from './credential-operations.ts'
 import css from './QoderCredentialCard.module.css'
+import { QoderBrowserLogin } from './QoderBrowserLogin.tsx'
 
 export type QoderCredentialCardProps = QoderCredentialInjected
 
@@ -32,7 +33,7 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
   }, [modelSnapshot, regionDirty])
 
   const load = useCallback(async () => {
-    const info = await operations.describe()
+    const info = await (operations.describePat ?? operations.describe)()
     setState(info === undefined ? { status: 'failed' } : { status: 'ready', info })
   }, [operations])
 
@@ -108,9 +109,10 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
 
   return (
     <section className={`${css.credential} ${css.credentialEditor}`} aria-label={t('title')}>
+      {operations.authorization ? <QoderBrowserLogin key={currentRegion} region={currentRegion} operations={operations.authorization} t={t} /> : null}
       <div className={css.credentialRowHead}>
         <span className={css.credentialIdentity}>
-          <span className={css.credentialName}>{t('nav')}</span>
+          <span className={css.credentialName}>Qoder PAT</span>
           <span className={css.regionBadge}>
             {currentRegion === 'china' ? t('regionChina') : t('regionGlobal')}
           </span>

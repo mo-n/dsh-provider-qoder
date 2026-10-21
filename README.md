@@ -14,7 +14,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 ## Features
 
-- Configure subscription access via Qoder Personal Access Token (PAT).
+- Access your subscription through Qoder website sign-in or a Personal Access Token (PAT).
 - Supports both Global (`global`) and China (`china`) services.
 - Automatically fetches available models for your account, supports selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
 - Supports multimodality, web search, and tool calls.
@@ -25,7 +25,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 ### Prerequisites
 
-- An active Qoder subscription and a PAT matching the selected service region.
+- An active Qoder subscription matching the selected service region.
 - The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
 - Requirements: DSH `>=0.1.7-rc.2`.
 
@@ -39,7 +39,7 @@ dsh plugin --profile web add dsh-provider-qoder
 
 ## Configuration & Usage
 
-### 1. Save Service Region and PAT
+### 1. Select a Service Region and Sign In
 
 Open DSH Web, navigate to **Settings → Models**, locate the **Qoder Credentials** card at the bottom of the page, and click **Edit**.
 
@@ -48,7 +48,11 @@ Open DSH Web, navigate to **Settings → Models**, locate the **Qoder Credential
 | Global (default) | `qoder.com` |
 | China (CN) | `qoder.com.cn` |
 
-Select the region matching your account, enter your Qoder PAT into the input box labeled **API Key**, and click **Save**.
+Select and save the region matching your account, then click **Sign in with Qoder**. Complete verification and authorization on the Qoder website in the new tab; DSH detects completion automatically. If a tab does not open, use **Open sign-in page** or copy the link. Links expire after approximately five minutes and can be cancelled. Reloading the page preserves the backend attempt; restarting DSH cancels unfinished attempts.
+
+Browser authorization is stored separately for each region and shared by all clients connected to the DSH instance. Credentials renew automatically; explicitly expired authorization requires sign-in again. Failed sign-in preserves the previous authorization. **Remove browser authorization** clears DSH's saved authorization, without signing out of the website or automatically switching to a stored PAT.
+
+Alternatively, save a PAT in the **Qoder PAT** editor or click **Use PAT** to select an existing one. Existing PAT configurations remain compatible. Browser failures never silently fall back to PAT. Browser sign-in requires a host credential store with writable authorization records; older hosts can continue using PAT.
 
 Once saved, the plugin automatically fetches the list of supported models for your account, making them immediately available in the DSH model picker.
 
