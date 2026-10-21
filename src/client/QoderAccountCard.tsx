@@ -1,4 +1,3 @@
-import { QoderQueueSettings } from './QoderQueueSettings.tsx'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
@@ -366,7 +365,6 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
       </div>
       {renderAccount()}
       {renderWebSearchSection()}
-      <QoderQueueSettings snapshot={modelSnapshot} save={operations.storeQueueWaitMs} t={t} />
       {renderModelCatalogSection()}
     </section>
   )

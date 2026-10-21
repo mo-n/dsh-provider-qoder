@@ -140,10 +140,6 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
         return false
       }
     },
-    storeQueueWaitMs: async ms => {
-      try { return await modelScope.set('modelQueueMaxWaitMs', ms) !== false }
-      catch { return false }
-    },
     storeWebSearchMode: async (mode) => {
       try {
         return await modelScope.set('webSearchMode', mode) !== false

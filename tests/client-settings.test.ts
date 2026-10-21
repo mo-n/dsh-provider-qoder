@@ -38,7 +38,6 @@ test('client settings mounts through configForms and reports rejected writes', a
   let operations!: {
     storeRegion(region: string): Promise<boolean>
     storeModels(region: string, models: unknown[]): Promise<boolean>
-    storeQueueWaitMs(ms: number): Promise<boolean>
     storeWebSearchMode(mode: string): Promise<boolean>
   }
   let accepted: boolean | undefined
@@ -79,8 +78,6 @@ test('client settings mounts through configForms and reports rejected writes', a
   assert.equal(await operations.storeModels('china', []), false)
   assert.equal(await operations.storeWebSearchMode('disabled'), false)
   assert.equal(writes.length, 4)
-  assert.equal(await operations.storeQueueWaitMs(120000), false)
-  assert.deepEqual(JSON.parse(JSON.stringify(writes[4])), ['modelQueueMaxWaitMs', 120000])
   assert.deepEqual(JSON.parse(JSON.stringify(writes[2])), [{
     op: 'set', path: ['modelsByRegion', 'china'], value: [],
   }])
