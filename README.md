@@ -19,6 +19,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 - Automatically fetches available models for your account, supports selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
 - Supports multimodality, web search, and tool calls.
 - View account information, quota, and reset dates in Settings.
+- Wait through Qoder model queues with cancellable polling, visible progress, and lease cleanup at the end of the agent run.
 
 ## Installation
 
@@ -26,7 +27,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 - An active Qoder subscription and a PAT matching the selected service region.
 - The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
-- Requirements: DSH `>=0.1.7-rc.2`.
+- Requirements: DSH `>=0.2.1-rc.2`.
 
 ### Install from npm
 
@@ -59,9 +60,16 @@ Open **Settings → Qoder** to view account and quota details, configure the web
   <img src="./assets/account-quota.png" alt="Qoder account quota and model settings" width="650" />
 </p>
 
+### Model queue waiting
+
+In **Settings → Qoder**, set the model queue wait limit in minutes (default **60**). The plugin setting is `modelQueueMaxWaitMs` (default `3600000`); it is a positive integer up to `2147483647`, and changes apply to new model calls. There is no environment-variable override.
+
+The input dock shows an expandable queue row using DSH's shared components. It displays elapsed time and, when reported, the queue count and estimated wait. Use DSH's normal Stop control to cancel. Queue timeout, endpoint failure, and recovery exhaustion end the call without restarting its budget through ordinary DSH retries. A request that has already exposed text, reasoning, or a tool call is never transparently replayed.
+
+Queued models retain their lease across the run's model steps. The plugin sends `/ask/finish` when DSH commits the end of the turn; independent auxiliary or standalone calls clean up at their own boundary. Release failures are logged and do not replace the model result. This version targets DSH `0.2.1-rc.2`; UI compatibility with `0.1.7-rc.2` remains unverified.
+
 ## Upcoming Features
 
-- [ ] Request rate-limiting queue mechanism
 - [ ] Connect with Qoder's Protobuf protocol
 
 ## References

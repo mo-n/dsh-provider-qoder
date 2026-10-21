@@ -499,6 +499,7 @@ test('apply mounts the settings RPC on the connection Fetch registry', async () 
   assert.deepEqual(registeredPaths, [
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
+    '/api/qoder-subscription/queue',
     '/api/qoder-subscription/sessionTier',
     '/api/qoder-subscription/readSessionTier',
     '/api/qoder-subscription/sessionTierEvents',

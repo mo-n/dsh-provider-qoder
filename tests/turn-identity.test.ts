@@ -424,3 +424,17 @@ test('business stage advances within a turn and resets for the next subscriber p
   assert.equal(first.business.id, second.business.id)
   assert.notEqual(second.business.id, third.business.id)
 })
+
+
+test('provider identities isolate queue request sets between subscribers and regions', async () => {
+  const input = options([user('Hello')], 'account-scoped-queue') as GenerateOptions
+  const tracker = new QoderTurnTracker()
+  const first = await buildQoderRequestBody(input, 'subscriber-a', undefined, undefined, undefined, tracker, 'global')
+  const other = await buildQoderRequestBody(input, 'subscriber-b', undefined, undefined, undefined, tracker, 'global')
+  const regional = await buildQoderRequestBody(input, 'subscriber-a', undefined, undefined, undefined, tracker, 'china')
+  const same = await buildQoderRequestBody(input, 'subscriber-a', undefined, undefined, undefined, tracker, 'global')
+  assert.notEqual(other.request_set_id, first.request_set_id)
+  assert.notEqual(other.business.id, first.business.id)
+  assert.notEqual(regional.request_set_id, first.request_set_id)
+  assert.equal(same.request_set_id, first.request_set_id)
+})

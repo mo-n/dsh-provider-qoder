@@ -93,6 +93,7 @@ export default defineConfig([
         '@deepseek-ai/dsh-client-locale',
         '@deepseek-ai/dsh-client-ui-settings',
         '@deepseek-ai/dsh-client-ui-slots',
+        '@deepseek-ai/dsh-client-ui-primitives',
       ],
     },
     define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production') },

@@ -1,6 +1,16 @@
 import type { QoderLocalizedText } from '../qoder/account.ts'
 
 export const zh = {
+  queueTitle: 'Qoder 模型排队',
+  queueWaiting: '{model} 正在排队',
+  queueCount: '排队数量：{count}',
+  queueEstimate: '预计等待 {seconds} 秒',
+  queueElapsed: '已等待 {seconds} 秒',
+  queueUnavailable: 'Qoder 排队状态暂不可用',
+  queueServiceUnavailable: '服务暂不可用，继续等待',
+  queueBudget: '等待上限 {seconds} 秒',
+  queueSetting: '模型排队等待上限（分钟）',
+  queueSettingHint: '默认 60 分钟，修改对新调用生效。',
   nav: 'Qoder',
   title: 'Qoder 凭据',
   configured: '已配置',
@@ -74,6 +84,16 @@ export const zh = {
 }
 
 export const en: typeof zh = {
+  queueTitle: 'Qoder model queue',
+  queueWaiting: '{model} is queued',
+  queueCount: 'Queue count: {count}',
+  queueEstimate: 'Estimated wait: {seconds}s',
+  queueElapsed: 'Waited {seconds}s',
+  queueUnavailable: 'Qoder queue status is temporarily unavailable',
+  queueServiceUnavailable: 'Service unavailable; waiting',
+  queueBudget: 'Wait limit: {seconds}s',
+  queueSetting: 'Model queue wait limit (minutes)',
+  queueSettingHint: 'Default: 60 minutes. Changes apply to new calls.',
   nav: 'Qoder',
   title: 'Qoder credential',
   configured: 'Configured',

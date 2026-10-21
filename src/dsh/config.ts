@@ -1,5 +1,6 @@
 /** DSH configuration schema and region-scoped model catalog selection. */
 
+import { defaultModelQueueMaxWaitMs } from '../qoder/queue.ts'
 import z from '@deepseek-ai/schemastery'
 import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
@@ -13,6 +14,7 @@ export interface QoderModelsByRegion {
 export type QoderWebSearchMode = 'auto' | 'always' | 'disabled'
 
 export interface Config {
+  modelQueueMaxWaitMs?: number
   region?: QoderRegion
   modelsByRegion?: QoderModelsByRegion
   streamIdleTimeoutMs?: number
@@ -51,6 +53,8 @@ const catalogModel = z.object({
 const modelsByRegionSchema = z.dict(z.array(catalogModel)) as z<QoderModelsByRegion>
 
 export const Config: z<Config> = z.object({
+  modelQueueMaxWaitMs: z.number().step(1).min(1).max(2_147_483_647).default(defaultModelQueueMaxWaitMs)
+    .description('Maximum cumulative model queue wait in milliseconds; changes apply to new calls'),
   region: z.union(['global', 'china'] as const).default('global'),
   modelsByRegion: modelsByRegionSchema.default({}),
   streamIdleTimeoutMs: z.number().step(1).min(1).default(defaultStreamIdleTimeoutMs),

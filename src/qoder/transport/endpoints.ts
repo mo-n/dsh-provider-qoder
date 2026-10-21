@@ -36,6 +36,20 @@ export function getQoderChatUrl(region: QoderRegion = 'global'): string {
   return `${baseUrl}algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`
 }
 
+export function getQoderQueueStatusUrl(region: QoderRegion, params: {
+  requestSetId: string
+  modelKey: string
+  queueType?: string
+}): string {
+  const query = new URLSearchParams({ requestSetId: params.requestSetId, modelKey: params.modelKey })
+  if (params.queueType) query.set('queueType', params.queueType)
+  return `${resolveQoderEndpoints(region).baseUrl}algo/api/v2/service/ask/queue/status?${query}`
+}
+
+export function getQoderQueueFinishUrl(region: QoderRegion): string {
+  return `${resolveQoderEndpoints(region).baseUrl}algo/api/v2/service/ask/finish?Encode=1`
+}
+
 export function getQoderModelListUrl(region: QoderRegion = 'global'): string {
   const { baseUrl } = resolveQoderEndpoints(region)
   return `${baseUrl}algo/api/v2/model/list?Encode=1`

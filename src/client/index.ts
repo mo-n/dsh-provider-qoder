@@ -8,6 +8,7 @@ import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { qoderCredentialRef } from '../dsh/credential-contract.ts'
 import type { QoderAccountInfo } from '../qoder/account.ts'
 import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import { QoderQueueStatus } from './QoderQueueStatus.tsx'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
 import { QoderContextSelect } from './QoderContextSelect.tsx'
@@ -31,6 +32,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
   interface SlotMap {
     'settings.models.footer': { kind: 'list'; scope: 'root'; owner: QoderModelsFooterOwnerProps }
+    'conversation.input.dock': { kind: 'list'; scope: 'session' }
     'conversation.input.right': { kind: 'list'; scope: 'session' }
   }
 }
@@ -138,6 +140,10 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
         return false
       }
     },
+    storeQueueWaitMs: async ms => {
+      try { return await modelScope.set('modelQueueMaxWaitMs', ms) !== false }
+      catch { return false }
+    },
     storeWebSearchMode: async (mode) => {
       try {
         return await modelScope.set('webSearchMode', mode) !== false
@@ -176,6 +182,11 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
    */
   const activeLocale = (): string => ctx.locale.getLocale().active
 
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock', id: 'qoder-model-queue', order: 30,
+    locale: localeNamespace,
+    inject: (sessionId: string) => ({ sessionId, rpc, t }),
+  }, QoderQueueStatus))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'qoder',

@@ -14,6 +14,7 @@ export interface QoderCredentialOperations {
   subscribeModels(listener: () => void): () => void
   storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<boolean>
   storeRegion(region: QoderRegion): Promise<boolean>
+  storeQueueWaitMs?(ms: number): Promise<boolean>
   storeWebSearchMode(mode: QoderWebSearchMode): Promise<boolean>
   discoverModels(): Promise<QoderModelDiscoveryResult>
   setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<QoderSessionTierSelection | undefined>
@@ -23,6 +24,7 @@ export interface QoderCredentialOperations {
 }
 
 export interface QoderModelSettingsSection {
+  modelQueueMaxWaitMs?: number
   region?: QoderRegion
   modelsByRegion?: Partial<Record<QoderRegion, QoderCatalogModel[]>>
   webSearchMode?: QoderWebSearchMode
@@ -45,7 +47,7 @@ export interface QoderModelSettingsSnapshot {
   user: unknown
   revision: number | undefined
   writable: boolean
-  mode: 'host' | 'memory'
+  mode?: 'host' | 'memory'
 }
 
 export type QoderModelDiscoveryResult = QoderRpcResult<QoderCatalogModel[]>

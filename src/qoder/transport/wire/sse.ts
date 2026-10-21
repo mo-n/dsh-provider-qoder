@@ -6,6 +6,7 @@ import {
   type StreamChunk,
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
+import { queuedError } from './queue.ts'
 import { QoderLlmError, qoderModelError } from '../../errors.ts'
 import type { QoderInnerChunk, QoderSseEnvelope } from './wire-types.ts'
 
@@ -13,6 +14,7 @@ const doneMarker = '[DONE]'
 const defaultMaxSseBufferChars = 2 * 1024 * 1024
 
 export interface QoderSseOptions {
+  queueRecovery?: boolean
   onActivity?: () => void
   maxBufferChars?: number
   headers?: Pick<Headers, 'get'>
@@ -58,6 +60,8 @@ function parseEnvelope(rawData: string, options: QoderSseOptions): QoderSseEnvel
     throw malformed('Qoder SSE envelope has an invalid status code.')
   }
   if (envelope.statusCodeValue !== undefined && envelope.statusCodeValue !== 200) {
+    const queued = options.queueRecovery ? queuedError(envelope.body ?? envelope) : undefined
+    if (queued) throw queued
     throw qoderModelError(
       `Qoder service returned upstream error status ${envelope.statusCodeValue}`,
       {

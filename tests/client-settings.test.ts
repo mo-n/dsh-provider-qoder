@@ -13,7 +13,10 @@ const loadClientPlugin = async () => {
     window: {
       __ModuleLoader__: {
         load: ({ factory }: { factory: (require: unknown) => typeof plugin }) => {
-          plugin = factory(createRequire(import.meta.url))
+          const require = createRequire(import.meta.url)
+          // DSH's browser shell supplies this static shared module. Node does not load its CSS entry.
+          plugin = factory((id: string) => id === '@deepseek-ai/dsh-client-ui-primitives'
+            ? { DisclosureRow: () => null, StateDot: () => null, Input: () => null } : require(id))
         },
       },
     },
@@ -35,6 +38,7 @@ test('client settings mounts through configForms and reports rejected writes', a
   let operations!: {
     storeRegion(region: string): Promise<boolean>
     storeModels(region: string, models: unknown[]): Promise<boolean>
+    storeQueueWaitMs(ms: number): Promise<boolean>
     storeWebSearchMode(mode: string): Promise<boolean>
   }
   let accepted: boolean | undefined
@@ -62,19 +66,21 @@ test('client settings mounts through configForms and reports rejected writes', a
       inject: (_name: string, callback: () => void) => callback(),
       register: (spec: { name: string; inject(): { operations: typeof operations } }) => {
         registeredSlots.push(spec.name)
-        operations = spec.inject().operations
+        if (spec.name !== 'conversation.input.dock') operations = spec.inject().operations
       },
     },
   }
   plugin.apply(ctx)
   assert.equal(namespace, 'provider-qoder')
-  assert.deepEqual(registeredSlots, ['settings.section', 'settings.models.footer'])
+  assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
   assert.equal(await operations.storeRegion('china'), true)
   accepted = false
   assert.equal(await operations.storeRegion('global'), false)
   assert.equal(await operations.storeModels('china', []), false)
   assert.equal(await operations.storeWebSearchMode('disabled'), false)
   assert.equal(writes.length, 4)
+  assert.equal(await operations.storeQueueWaitMs(120000), false)
+  assert.deepEqual(JSON.parse(JSON.stringify(writes[4])), ['modelQueueMaxWaitMs', 120000])
   assert.deepEqual(JSON.parse(JSON.stringify(writes[2])), [{
     op: 'set', path: ['modelsByRegion', 'china'], value: [],
   }])

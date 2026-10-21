@@ -1,0 +1,4 @@
+.queues { display: grid; gap: 4px; color: var(--dsw-text-tertiary); }
+.row { min-width: 0; }
+.details { display: grid; gap: 4px; padding: 4px 0 8px 24px; font-size: 12px; color: var(--dsw-text-secondary); }
+.elapsed { margin-inline-start: 8px; white-space: nowrap; }
