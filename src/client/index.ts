@@ -168,17 +168,26 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
     },
     discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
     setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region) => {
+      const scope = { sessionId, modelId, tierKey, region }
       try {
-        const res = await rpc.call<QoderSessionTierSelection>('sessionTier', { sessionId, modelId, tierKey, region })
+        const res = await rpc.call<QoderSessionTierSelection>('sessionTier', scope)
+        if (!res.ok) console.error('[Qoder context tier] Failed to save selection', { ...scope, error: res.error })
         return res.ok ? res.value : undefined
-      } catch {
+      } catch (error) {
+        console.error('[Qoder context tier] Failed to save selection', { ...scope, error })
         return undefined
       }
     },
 
     readSessionTier: async scope => {
-      const result = await rpc.call<QoderSessionTierSelection>('readSessionTier', scope)
-      return result.ok ? result.value : undefined
+      try {
+        const result = await rpc.call<QoderSessionTierSelection>('readSessionTier', scope)
+        if (!result.ok) console.error('[Qoder context tier] Failed to read selection', { ...scope, error: result.error })
+        return result.ok ? result.value : undefined
+      } catch (error) {
+        console.error('[Qoder context tier] Failed to read selection', { ...scope, error })
+        return undefined
+      }
     },
     subscribeSessionTiers: (scope, listener) => tierEvents.subscribe(scope, listener),
 
