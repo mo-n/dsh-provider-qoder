@@ -1,7 +1,7 @@
 {
   "name": "dsh-provider-qoder",
   "description": "Global Qoder subscription adapter for the DeepSeek Harness LLM seam",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "publishConfig": {
     "access": "public"
   },
@@ -74,6 +74,7 @@
     "@deepseek-ai/dsh-attachment": ">=0.1.7-rc.2",
     "@deepseek-ai/dsh-client-connection": ">=0.1.7-rc.2",
     "@deepseek-ai/dsh-client-locale": ">=0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.2",
     "@deepseek-ai/dsh-credentials": ">=0.1.7-rc.2",
@@ -82,8 +83,7 @@
     "@deepseek-ai/dsh-settings": ">=0.1.7-rc.2",
     "@deepseek-ai/dsh-web": ">=0.1.7-rc.2",
     "@deepseek-ai/schemastery": "~3.18.4",
-    "react": "^18.2.0",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.7-rc.2"
+    "react": "^18.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
@@ -95,6 +95,7 @@
     "@deepseek-ai/dsh-brand": "0.1.7-rc.2",
     "@deepseek-ai/dsh-client-connection": "0.1.7-rc.2",
     "@deepseek-ai/dsh-client-locale": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-settings": "0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "0.1.7-rc.2",
     "@deepseek-ai/dsh-config-editor": "0.1.7-rc.2",
@@ -110,7 +111,6 @@
     "lightningcss": "^1.33.0",
     "react": "18.3.1",
     "tsdown": "0.22.2",
-    "typescript": "5.9.2",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.7-rc.2"
+    "typescript": "5.9.2"
   }
 }
