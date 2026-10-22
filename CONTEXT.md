@@ -26,6 +26,18 @@ _Avoid_: environment PAT, plugin API key
 A short-lived credential obtained by exchanging a Qoder PAT and used to authorize model transport requests.
 _Avoid_: Qoder PAT, refresh token
 
+**Qoder browser authorization**:
+Authorization obtained by completing account verification on the Qoder website.
+_Avoid_: password login, Managed Qoder PAT
+
+**Qoder device token**:
+A short-lived credential obtained through Qoder browser authorization for subscriber and model requests.
+_Avoid_: Qoder job token, Qoder PAT
+
+**Qoder refresh token**:
+A credential used to renew a Qoder device token.
+_Avoid_: Qoder job token, Qoder device token
+
 **Qoder subscriber profile**:
 The verified identity details (user ID, display name, and email) associated with an authenticated Qoder subscription.
 _Avoid_: account credential, user token

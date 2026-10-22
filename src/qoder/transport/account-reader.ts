@@ -1,6 +1,7 @@
 /** Qoder subscriber profile and quota usage querying. */
 
 import type { QoderAuthService } from './auth.ts'
+import type { CosyCredentials } from './wire/cosy.ts'
 import {
   getQoderUsageUrl,
   getQoderUserPlanUrl,
@@ -307,7 +308,15 @@ export class QoderUsageReader {
       )
     }
 
-    const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
+    return this.readWithCredentials(opaqueCredentialKey(pat), signal => this.authService.getCredentials(pat, signal), options)
+  }
+
+  async readWithCredentials(
+    key: string,
+    resolve: (signal?: AbortSignal) => Promise<CosyCredentials>,
+    options?: { force?: boolean; signal?: AbortSignal },
+  ): Promise<QoderAccountInfo> {
+    const cacheKey = `${this.region}:${key}`
 
     if (!options?.force) {
       const cached = this.cache.get(cacheKey)
@@ -319,17 +328,17 @@ export class QoderUsageReader {
     return this.flights.run(
       cacheKey,
       options?.signal,
-      sharedSignal => this.loadAccount(pat, sharedSignal, cacheKey),
+      sharedSignal => this.loadAccount(resolve, sharedSignal, cacheKey),
       () => new QoderLlmError('Qoder account request was aborted.', 'ABORTED'),
     )
   }
 
   private async loadAccount(
-    pat: string,
+    resolve: (signal?: AbortSignal) => Promise<CosyCredentials>,
     signal: AbortSignal,
     cacheKey: string,
   ): Promise<QoderAccountInfo> {
-    const creds = await this.authService.getCredentials(pat, signal)
+    const creds = await resolve(signal)
     const profile: QoderSubscriberProfile = {
       id: creds.userID,
       name: creds.name || 'Qoder User',

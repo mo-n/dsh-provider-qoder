@@ -4,8 +4,18 @@ import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderSessionTierScope, QoderSessionTierSelection, QoderRpcResult } from '../dsh/rpc-channel.ts'
 import type { QoderCredentialCopy } from './locales.ts'
+import type { QoderAuthorizationView } from '../qoder/authorization.ts'
+
+export interface QoderAuthorizationOperations {
+  read(region: QoderRegion): Promise<QoderRpcResult<QoderAuthorizationView>>
+  begin(region: QoderRegion): Promise<QoderRpcResult<QoderAuthorizationView>>
+  cancel(region: QoderRegion): Promise<QoderRpcResult<QoderAuthorizationView>>
+  select(region: QoderRegion, method: 'pat' | 'browser' | 'none'): Promise<QoderRpcResult<QoderAuthorizationView>>
+}
 
 export interface QoderCredentialOperations {
+  authorization?: QoderAuthorizationOperations
+  describePat?(): Promise<QoderCredentialStatus | undefined>
   describe(): Promise<QoderCredentialStatus | undefined>
   store(value: string): Promise<boolean>
   remove(): Promise<boolean>

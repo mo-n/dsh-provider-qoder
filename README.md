@@ -14,7 +14,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 ## Features
 
-- Configure subscription access via Qoder Personal Access Token (PAT).
+- Access your subscription through Qoder website sign-in or a Personal Access Token (PAT).
 - Supports both Global (`global`) and China (`china`) services.
 - Automatically fetches available models for your account, supports selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
 - Supports multimodality, web search, and tool calls.
@@ -25,7 +25,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 ### Prerequisites
 
-- An active Qoder subscription and a PAT matching the selected service region.
+- An active Qoder subscription matching the selected service region.
 - The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
 - Requirements: DSH `>=0.1.7-rc.2`.
 
@@ -39,18 +39,20 @@ dsh plugin --profile web add dsh-provider-qoder
 
 ## Configuration & Usage
 
-### 1. Save Service Region and PAT
+### 1. Select a Service Region and Sign In
 
-Open DSH Web, navigate to **Settings → Models**, locate the **Qoder Credentials** card at the bottom of the page, and click **Edit**.
+In DSH Web, open **Settings → Models → Qoder account** and select your service region:
 
 | Service Region | Account Domain |
 | --- | --- |
 | Global (default) | `qoder.com` |
 | China (CN) | `qoder.com.cn` |
 
-Select the region matching your account, enter your Qoder PAT into the input box labeled **API Key**, and click **Save**.
+Click **Sign in with Qoder** and complete authorization on the website. Return to DSH to select a model available to your account.
 
-Once saved, the plugin automatically fetches the list of supported models for your account, making them immediately available in the DSH model picker.
+Alternatively, choose **Use PAT**, enter a token and click **Save and use PAT**, or use a saved PAT. **Manage account** or **Manage credentials** lets you change accounts, switch authentication methods or remove authorization.
+
+Browser authorization is stored per region, shared across the DSH instance and renewed automatically. Expired authorization requires sign-in again, without automatic PAT fallback. Removing authorization does not sign you out of the Qoder website.
 
 ### 2. View Account & Manage Models
 

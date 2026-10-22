@@ -44,27 +44,25 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
 
   const dispose = registerQoderRpc(context, handler)
 
-  assert.deepEqual(routes.map(route => route.path), [
+  const expectedPaths = [
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
     '/api/qoder-subscription/queue',
     '/api/qoder-subscription/sessionTier',
     '/api/qoder-subscription/readSessionTier',
     '/api/qoder-subscription/sessionTierEvents',
-  ])
-  assert.deepEqual(routes.map(route => [...route.methods]), Array.from({ length: 6 }, () => ['POST']))
-  assert.deepEqual(routes.map(route => route.requestBody), Array(6).fill('buffered'))
+    '/api/qoder-subscription/authorization',
+    '/api/qoder-subscription/beginLogin',
+    '/api/qoder-subscription/cancelLogin',
+    '/api/qoder-subscription/selectAuthorization',
+  ]
+  assert.deepEqual(routes.map(route => route.path), expectedPaths)
+  assert.deepEqual(routes.map(route => [...route.methods]), expectedPaths.map(() => ['POST']))
+  assert.deepEqual(routes.map(route => route.requestBody), expectedPaths.map(() => 'buffered'))
   assert.ok(routes.every(route => typeof route.fetch === 'function'))
 
   dispose()
-  assert.deepEqual(removed, [
-    '/api/qoder-subscription/account',
-    '/api/qoder-subscription/models',
-    '/api/qoder-subscription/queue',
-    '/api/qoder-subscription/sessionTier',
-    '/api/qoder-subscription/readSessionTier',
-    '/api/qoder-subscription/sessionTierEvents',
-  ])
+  assert.deepEqual(removed, expectedPaths)
 })
 
 test('a registered route decodes the request payload and encodes the handler result', async () => {

@@ -177,7 +177,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
     if (!configured) {
       return (
         <div className={css.accountSection}>
-          <p className={css.accountEmptyText}>{t('accountCredentialHint')}</p>
+          <div className={css.accountEmptyText}>{t('accountCredentialHint')}</div>
         </div>
       )
     }

@@ -19,6 +19,7 @@ import { Config, type LiveConfig } from '../src/dsh/config.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
+import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
 
 interface MemorySection {
   value: plugin.Config
@@ -307,6 +308,25 @@ async function drain(): Promise<void> {
   for (let turn = 0; turn < 20; turn++) await new Promise<void>(resolve => setImmediate(resolve))
 }
 
+test('browser credential updates rediscover models without waiting for a model-list read', async (t) => {
+  let supportsImages = false
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Chosen', supportsImages },
+  ])
+  const { ctx } = await modelRuntime({ modelsByRegion: { global: [{ id: 'chosen', name: 'Chosen' }] } })
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  await drain()
+  const calls = discovery.mock.callCount()
+  supportsImages = true
+  ctx.emit('credentials/record-updated', browserAuthorizationKey('china'))
+  await drain()
+  assert.equal(discovery.mock.callCount(), calls)
+  ctx.emit('credentials/record-updated', browserAuthorizationKey('global'))
+  await drain()
+  assert.equal(discovery.mock.callCount(), calls + 1)
+  assert.deepEqual((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'chosen' })).inputModalities, ['text', 'image'])
+})
+
 test('automatic discovery persists rates without changing selection and refreshes after five minutes', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 })
   let advertised: QoderCatalogModel[] = [
@@ -496,14 +516,9 @@ test('apply mounts the settings RPC on the connection Fetch registry', async () 
 
   // Exact Fetch routes ride on the Connection plugin's own /api route, so the
   // host half needs no webServer injection of its own.
-  assert.deepEqual(registeredPaths, [
-    '/api/qoder-subscription/account',
-    '/api/qoder-subscription/models',
-    '/api/qoder-subscription/queue',
-    '/api/qoder-subscription/sessionTier',
-    '/api/qoder-subscription/readSessionTier',
-    '/api/qoder-subscription/sessionTierEvents',
-  ])
+  // rpc.test.ts owns the exhaustive route contract; this checks real plugin wiring.
+  assert.ok(registeredPaths.includes('/api/qoder-subscription/authorization'))
+  assert.ok(registeredPaths.includes('/api/qoder-subscription/beginLogin'))
 })
 
 test('apply survives a connection service without a Fetch registry', async () => {

@@ -22,6 +22,9 @@ import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 import type { QoderAccountInfo } from '../account.ts'
 import type { QoderTransport, QoderTransportOptions } from './index.ts'
 import { streamQoderChat } from './chat.ts'
+import { QoderBrowserAuthorization } from './browser-authorization.ts'
+import type { QoderCredentialLease } from '../authorization.ts'
+import type { CosyCredentials } from './wire/cosy.ts'
 
 export const defaultStreamIdleTimeoutMs = 5 * 60 * 1000
 
@@ -30,6 +33,8 @@ function aborted(message: string): QoderLlmError {
 }
 
 export class DefaultQoderTransport implements QoderTransport {
+  readonly authorization: QoderBrowserAuthorization
+  private readonly resolveCredential: QoderTransportOptions['resolveCredential']
   private readonly region: QoderRegion
   private readonly resolvePat: () => Promise<string>
   private readonly fetchImpl: typeof fetch
@@ -42,7 +47,7 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly modelFlights = new SingleFlight<readonly QoderCatalogModel[]>()
   private readonly attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
   private readonly imageUploader: QoderImageUploader
-  private readonly searchClient: QoderSearchClient
+  private readonly credentialLeases = new WeakMap<CosyCredentials, QoderCredentialLease>()
   private readonly preserveThinking?: boolean
   private readonly modelQueueMaxWaitMs?: number
   private readonly onQueueUpdate: QoderTransportOptions['onQueueUpdate']
@@ -54,6 +59,8 @@ export class DefaultQoderTransport implements QoderTransport {
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
     this.resolvePat = options.resolvePat
+    this.resolveCredential = options.resolveCredential
+    this.authorization = new QoderBrowserAuthorization(options)
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.logger = options.logger
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs
@@ -80,24 +87,10 @@ export class DefaultQoderTransport implements QoderTransport {
       region: this.region,
       ...options.imageUploadTimeoutMs === undefined ? {} : { timeoutMs: options.imageUploadTimeoutMs },
       ...options.imageUrlCacheTtlMs === undefined ? {} : { cacheTtlMs: options.imageUrlCacheTtlMs },
-      refreshCredentials: async (signal) => {
-        const pat = await this.requirePat(signal)
-        this.auth.clear(pat)
-        return this.auth.getCredentials(pat, signal)
-      },
-    })
-    this.searchClient = new QoderSearchClient({
-      fetch: this.fetchImpl,
-      logger: this.logger,
-      region: this.region,
-      resolveCredentials: async (signal) => {
-        const pat = await this.requirePat(signal)
-        return this.auth.getCredentials(pat, signal)
-      },
-      refreshCredentials: async (signal) => {
-        const pat = await this.requirePat(signal)
-        this.auth.clear(pat)
-        return this.auth.getCredentials(pat, signal)
+      refreshCredentials: async (signal, rejected) => {
+        const lease = rejected && this.credentialLeases.get(rejected)
+        if (!lease) throw aborted('Qoder image credentials are no longer available.')
+        return lease.resolve(signal, rejected.authToken)
       },
     })
   }
@@ -107,35 +100,58 @@ export class DefaultQoderTransport implements QoderTransport {
   }
 
   async discoverModels(signal?: AbortSignal): Promise<readonly QoderCatalogModel[]> {
-    const pat = await this.requirePat(signal)
-    const key = opaqueCredentialKey(pat)
+    const lease = await this.lease(signal)
+    const key = lease.key
     return this.modelFlights.run(
       key,
       signal,
       async (sharedSignal) => {
-        const credentials = await this.auth.getCredentials(pat, sharedSignal)
-        return retryMetadataRead(sharedSignal, () => fetchQoderModels(credentials, {
+        const credentials = await lease.resolve(sharedSignal)
+        const read = (resolved: CosyCredentials) => retryMetadataRead(sharedSignal, () => fetchQoderModels(resolved, {
           fetch: this.fetchImpl,
           signal: sharedSignal,
           logger: this.logger,
           region: this.region,
           timeoutMs: this.metadataTimeoutMs,
         }))
+        try { return await read(credentials) } catch (error) {
+          if (!(error instanceof QoderLlmError) || error.code !== 'AUTH') throw error
+          return read(await lease.resolve(sharedSignal, credentials.authToken))
+        }
       },
       () => aborted('Qoder model discovery was aborted.'),
     )
   }
 
   async readAccount(options?: { force?: boolean; signal?: AbortSignal }): Promise<QoderAccountInfo> {
-    const pat = await this.requirePat(options?.signal)
-    return this.usage.readAccount(pat, {
-      force: options?.force,
+    const lease = await this.lease(options?.signal)
+    let used: CosyCredentials | undefined
+    const read = (force = options?.force) => this.usage.readWithCredentials(lease.key, async signal => {
+      used = await lease.resolve(signal)
+      return used
+    }, {
+      force,
       signal: options?.signal,
     })
+    try { return await read() } catch (error) {
+      if (!(error instanceof QoderLlmError) || error.code !== 'AUTH' || !used) throw error
+      await lease.resolve(options?.signal, used.authToken)
+      return read(true)
+    }
   }
 
   async searchWeb(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
-    return this.searchClient.search(request, signal)
+    const lease = await this.lease(signal)
+    let token: string | undefined
+    const client = new QoderSearchClient({ fetch: this.fetchImpl, logger: this.logger, region: this.region,
+      resolveCredentials: async nextSignal => {
+        const credentials = await lease.resolve(nextSignal)
+        token = credentials.authToken
+        return credentials
+      },
+      refreshCredentials: nextSignal => lease.resolve(nextSignal, token),
+    })
+    return client.search(request, signal)
   }
 
   private async requirePat(signal?: AbortSignal): Promise<string> {
@@ -151,6 +167,21 @@ export class DefaultQoderTransport implements QoderTransport {
     return pat
   }
 
+  private async lease(signal?: AbortSignal): Promise<QoderCredentialLease> {
+    if (signal?.aborted) throw aborted('Qoder request was aborted.')
+    const managed = await this.resolveCredential?.(signal)
+    if (managed) return managed
+    const pat = await this.requirePat(signal)
+    return { key: opaqueCredentialKey(pat), resolve: async (nextSignal, rejectedToken) => {
+      const current = await this.auth.getCredentials(pat, nextSignal)
+      if (rejectedToken !== undefined && current.authToken === rejectedToken) {
+        this.auth.clear(pat)
+        return this.auth.getCredentials(pat, nextSignal)
+      }
+      return current
+    } }
+  }
+
   private async * generate(
     options: GenerateOptions,
     model?: QoderCatalogModel,
@@ -162,8 +193,9 @@ export class DefaultQoderTransport implements QoderTransport {
     // provider I/O, so an unusable request never consumes a subscription.
     validateQoderRequestShape(options, model)
     // Phase 2: credentials, which the center image exchange must be able to sign with.
-    const pat = await this.requirePat(options.signal)
-    const credentials = await this.auth.getCredentials(pat, options.signal)
+    const lease = await this.lease(options.signal)
+    const credentials = await lease.resolve(options.signal)
+    this.credentialLeases.set(credentials, lease)
     // Phase 3: read attachments, publish images, and assemble wire messages.
     const messages = await translateQoderMessages(options, this.attachments, {
       uploader: this.imageUploader,
@@ -171,7 +203,7 @@ export class DefaultQoderTransport implements QoderTransport {
       preserveThinking: this.preserveThinking,
     })
     // Image publication may have refreshed a rejected job token.
-    const chatCredentials = await this.auth.getCredentials(pat, options.signal)
+    const chatCredentials = await lease.resolve(options.signal)
     yield* streamQoderChat(options, model, chatCredentials, messages, {
       fetch: this.fetchImpl,
       logger: this.logger,
@@ -183,15 +215,11 @@ export class DefaultQoderTransport implements QoderTransport {
       hostRunId: queueOwner?.runId,
       onQueueLease: queueOwner?.retain,
       resolveCredentials: async (refresh, signal) => {
-        if (refresh) this.auth.clear(pat)
-        return this.auth.getCredentials(pat, signal)
+        const current = await lease.resolve(signal)
+        return refresh ? lease.resolve(signal, current.authToken) : current
       },
       refreshCredentials: async (rejected, signal) => {
-        // A concurrent request may already have refreshed the same PAT.
-        const current = await this.auth.getCredentials(pat, signal)
-        if (current.authToken !== rejected.authToken) return current
-        this.auth.clear(pat)
-        return this.auth.getCredentials(pat, signal)
+        return lease.resolve(signal, rejected.authToken)
       },
     })
   }
