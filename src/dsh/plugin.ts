@@ -341,6 +341,22 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       if (typeof data?.sessionId === 'string' && typeof data?.modelId === 'string' && (endpoint === 'readSessionTier' || typeof data?.tierKey === 'string') && (data.region === 'global' || data.region === 'china')) {
         const { sessionId, modelId, tierKey, region } = data
         return await executeRpc(endpoint === 'sessionTier' ? 'select session context tier' : 'read session context tier', async () => {
+          if (!sessionId.trim() || region !== resolveConfig().region) {
+            throw new QoderLlmError('Invalid session context tier scope.', 'INVALID_REQUEST')
+          }
+          const sessions = ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined
+          if (sessions && !sessions.get(sessionId)) {
+            // The model directory can be ready before history restoration finishes.
+            // Join the host's ordinary restore path; it owns Agent/Session publication.
+            const controller = ctx.get('sessionController') as {
+              resolveAgent(id: string): Promise<{ error?: unknown }>
+            } | undefined
+            if (controller) {
+              const result = await controller.resolveAgent(sessionId)
+              if ('error' in result) throw result.error
+            }
+          }
+          signal.throwIfAborted()
           if (endpoint === 'sessionTier') adapter.setSessionTier(sessionId, modelId, tierKey!, region)
           return adapter.readSessionTier({ sessionId, modelId, region })
         }, signal, logger)

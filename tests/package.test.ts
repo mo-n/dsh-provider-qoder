@@ -807,3 +807,93 @@ test('session tier RPC returns the effective host choice and rejects obsolete re
   assert.equal((await call('readSessionTier', china)).value.tierKey, 'large')
   await fiber.dispose()
 })
+
+test('session tier RPC awaits host restoration before reading or saving historical tiers', async () => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  const routes = new Map<string, { fetch(request: Request): Promise<Response> }>()
+  ctx.provide('connection', { fetch: { register: (route: { path: string; fetch(request: Request): Promise<Response> }) => {
+    routes.set(route.path, route)
+    return () => { routes.delete(route.path) }
+  } } } as any)
+  ctx.provide('attachments', {} as any)
+  let live = false
+  ctx.provide('sessions', { get: (id: string) => live && id === 'history' ? {
+    requestContext: () => ({ provider: QODER_PROVIDER_ID, model: 'tiered', contextWindow: 200_000 }),
+  } : undefined } as any)
+  let finishRestore = () => {}
+  let restoreStarted = () => {}
+  let started = new Promise<void>(resolve => { restoreStarted = resolve })
+  let restores = 0
+  ctx.provide('sessionController', {
+    resolveAgent: async (id: string) => {
+      restores++
+      if (id !== 'history') return { error: new Error('Session not found') }
+      await new Promise<void>(resolve => { finishRestore = resolve; restoreStarted() })
+      live = true
+      return { agent: {} }
+    },
+  } as any)
+  const model = { id: 'tiered', name: 'Tiered', contextTier: 'large', contextWindow: 1_000_000,
+    contextOptions: { small: { tokenCount: 200_000 }, large: { tokenCount: 1_000_000 } } }
+  const fiber = ctx.plugin({ name: plugin.name, inject: [...plugin.inject, 'settings'], apply: owner => applyWithSettings(owner, { modelsByRegion: { global: [model], china: [model] } }) })
+  await fiber.await()
+  const scope = { region: 'global', sessionId: 'history', modelId: 'tiered' }
+  const call = async (endpoint: string, data: unknown, signal?: AbortSignal) => {
+    const path = `/api/qoder-subscription/${endpoint}`
+    const response = await routes.get(path)!.fetch(new Request(`http://localhost${path}`, { method: 'POST', body: JSON.stringify(data), signal }))
+    return await response.json()
+  }
+  try {
+    let completed = false
+    const reading = call('readSessionTier', scope).then(value => { completed = true; return value })
+    await started
+    assert.equal(completed, false)
+    finishRestore()
+    assert.deepEqual(await reading, { ok: true, value: { ...scope, tierKey: 'small', tokenCount: 200_000 } })
+    assert.equal(restores, 1)
+    // Remount/refresh uses the restored history without restoring it again.
+    assert.equal((await call('readSessionTier', scope)).value.tierKey, 'small')
+    assert.equal(restores, 1)
+
+    live = false
+    started = new Promise<void>(resolve => { restoreStarted = resolve })
+    const saving = call('sessionTier', { ...scope, tierKey: 'large' })
+    await started
+    finishRestore()
+    assert.equal((await saving).value.tierKey, 'large')
+    assert.equal((await call('readSessionTier', scope)).value.tierKey, 'large')
+    assert.equal(restores, 2)
+
+    assert.equal((await call('readSessionTier', { ...scope, sessionId: 'missing' })).ok, false)
+    const beforeInvalid = restores
+    assert.equal((await call('readSessionTier', { ...scope, sessionId: '' })).ok, false)
+    assert.equal((await call('readSessionTier', { ...scope, region: 'china' })).ok, false)
+    assert.equal(restores, beforeInvalid)
+
+    live = false
+    started = new Promise<void>(resolve => { restoreStarted = resolve })
+    const abort = new AbortController()
+    const cancelled = call('sessionTier', { ...scope, tierKey: 'small' }, abort.signal)
+    await started
+    abort.abort()
+    finishRestore()
+    assert.equal((await cancelled).error.code, 'ABORTED')
+    assert.equal((await call('readSessionTier', scope)).value.tierKey, 'large')
+
+    live = false
+    started = new Promise<void>(resolve => { restoreStarted = resolve })
+    const obsolete = call('sessionTier', { ...scope, tierKey: 'small' })
+    await started
+    await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'china' })
+    finishRestore()
+    assert.equal((await obsolete).ok, false)
+    await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'global' })
+    assert.equal((await call('readSessionTier', scope)).value.tierKey, 'large')
+  } finally {
+    finishRestore()
+    await fiber.dispose()
+  }
+})
