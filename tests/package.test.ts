@@ -496,18 +496,9 @@ test('apply mounts the settings RPC on the connection Fetch registry', async () 
 
   // Exact Fetch routes ride on the Connection plugin's own /api route, so the
   // host half needs no webServer injection of its own.
-  assert.deepEqual(registeredPaths, [
-    '/api/qoder-subscription/account',
-    '/api/qoder-subscription/models',
-    '/api/qoder-subscription/queue',
-    '/api/qoder-subscription/sessionTier',
-    '/api/qoder-subscription/readSessionTier',
-    '/api/qoder-subscription/sessionTierEvents',
-    '/api/qoder-subscription/authorization',
-    '/api/qoder-subscription/beginLogin',
-    '/api/qoder-subscription/cancelLogin',
-    '/api/qoder-subscription/selectAuthorization',
-  ])
+  // rpc.test.ts owns the exhaustive route contract; this checks real plugin wiring.
+  assert.ok(registeredPaths.includes('/api/qoder-subscription/authorization'))
+  assert.ok(registeredPaths.includes('/api/qoder-subscription/beginLogin'))
 })
 
 test('apply survives a connection service without a Fetch registry', async () => {

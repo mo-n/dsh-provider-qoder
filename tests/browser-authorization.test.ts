@@ -57,8 +57,7 @@ function storage() {
 function fixture(store = storage(), refresh?: QoderAuthorizationTransport['refresh']) {
   const completions = new Map<QoderRegion, ReturnType<typeof deferred<QoderBrowserGrant>>>()
   let begins = 0
-  let changes = 0
-  const manager = new QoderBrowserAuthorizationManager({ credentials: store.provider, changed: () => { changes++ },
+  const manager = new QoderBrowserAuthorizationManager({ credentials: store.provider, changed: () => {},
     transport: region => ({
       begin: async () => {
         begins++
@@ -70,7 +69,7 @@ function fixture(store = storage(), refresh?: QoderAuthorizationTransport['refre
       refresh: refresh ?? (async value => value),
     }),
   })
-  return { store, manager, completions, begins: () => begins, changes: () => changes,
+  return { store, manager, completions, begins: () => begins,
     async finish(region: QoderRegion, value = grant(region)) { completions.get(region)!.resolve(value); await tick() },
   }
 }
@@ -144,12 +143,16 @@ test('device renewal is lazy, rotates both tokens, preserves subscriber identity
   assert.equal(calls, 1)
 })
 
-test('login attempts are shared, views exclude secrets, and saved authorization survives a manager restart', async () => {
+test('shared login persists JSON-only credentials, excludes secrets from views and survives restart', async () => {
   const f = fixture()
   assert.equal((await f.manager.describe('global')).method, 'pat')
   await Promise.all([f.manager.begin('global'), f.manager.begin('global')])
   assert.equal(f.begins(), 1)
-  await f.finish('global')
+  const value = grant()
+  value.refreshExpiresAt = undefined
+  value.credentials.organizationId = undefined
+  value.credentials.organizationTags = undefined
+  await f.finish('global', value)
   const view = await f.manager.describe('global')
   assert.equal(view.attempt?.phase, 'complete')
   assert.equal(view.configured, true)
@@ -296,22 +299,6 @@ test('read-only stores cannot start authorization, and a corrupt record never fa
   assert.equal(f.begins(), 0)
   f.store.records.set(browserAuthorizationKey('global'), { kind: 'grant', payload: { version: 99, method: 'browser' } })
   await assert.rejects(f.manager.lease('global'), /invalid/)
-  assert.equal((await f.manager.describe('global')).configured, false)
-  await f.manager.dispose()
-})
-
-test('optional browser credential fields are omitted before writing JSON-only grant records', async () => {
-  const f = fixture()
-  const value = grant()
-  value.refreshExpiresAt = undefined
-  value.credentials.organizationId = undefined
-  value.credentials.organizationTags = undefined
-  await f.manager.begin('global')
-  await f.finish('global', value)
-  assert.equal((await f.manager.describe('global')).attempt?.phase, 'complete')
-  const saved = await f.store.provider.readRecord(browserAuthorizationKey('global'))
-  assert.deepEqual(saved, JSON.parse(JSON.stringify(saved)))
-  await f.manager.select('global', 'none')
   assert.equal((await f.manager.describe('global')).configured, false)
   await f.manager.dispose()
 })

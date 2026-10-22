@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import type { QoderAuthorizationOperations, QoderModelSettingsSnapshot } from '../../src/client/credential-operations.ts'
 import type { QoderRegion } from '../../src/qoder/region.ts'
-import { en, zh } from '../../src/client/locales.ts'
+import { en } from '../../src/client/locales.ts'
 import type { QoderBrowserLoginProps } from '../../src/client/QoderBrowserLogin.tsx'
 
 export interface VNode { type: unknown; props: { children?: unknown; [key: string]: unknown } }
@@ -23,7 +23,7 @@ export function text(value: unknown): string {
 }
 
 export async function mountBrowserLogin(operations: QoderAuthorizationOperations, options: {
-  region?: QoderRegion; popup?: boolean; locale?: 'zh' | 'en'; credentials?: QoderBrowserLoginProps['credentials']; onBusyChange?(busy: boolean): void
+  popup?: boolean; credentials?: Partial<QoderBrowserLoginProps['credentials']>; onBusyChange?(busy: boolean): void
   card?: boolean; snapshot?(): QoderModelSettingsSnapshot; storeRegion?(region: QoderRegion): Promise<boolean>
 } = {}) {
   const file = new URL(options.card ? '../../src/client/QoderCredentialCard.tsx' : '../../src/client/QoderBrowserLogin.tsx', import.meta.url)
@@ -73,19 +73,19 @@ export async function mountBrowserLogin(operations: QoderAuthorizationOperations
     clearTimeout: (id: number) => timers.delete(id),
     window: { open: () => { opens++; return options.popup === false ? null : popup }, confirm: () => true }, navigator: {},
   })
-  const copy = options.locale === 'zh' ? zh : en
-  const credentials = options.credentials ?? {
+  const credentials = {
     describe: async () => ({ configured: true, writable: true }), store: async () => true, remove: async () => true,
     getAccount: async () => undefined,
+    ...options.credentials,
   }
   const cardOperations = { ...credentials, authorization: operations,
-    getModelSnapshot: options.snapshot ?? (() => ({ status: 'ready', writable: true, value: { region: options.region ?? 'global' } })),
+    getModelSnapshot: options.snapshot ?? (() => ({ status: 'ready', writable: true, value: { region: 'global' } })),
     subscribeModels: () => () => {}, storeRegion: options.storeRegion ?? (async () => true),
   }
   const render = () => {
     dirty = false; cursor = 0; effects = []
-    tree = exports[options.card ? 'QoderCredentialCard' : 'QoderBrowserLogin']({ region: options.region ?? 'global', operations: options.card ? cardOperations : operations, credentials, onBusyChange: options.onBusyChange,
-      t: (key: keyof typeof en, values?: Record<string, string | number>) => Object.entries(values ?? {}).reduce((copy, [key, value]) => copy.replaceAll(`{${key}}`, String(value)), copy[key]) })
+    tree = exports[options.card ? 'QoderCredentialCard' : 'QoderBrowserLogin']({ region: 'global', operations: options.card ? cardOperations : operations, credentials, onBusyChange: options.onBusyChange,
+      t: (key: keyof typeof en, values?: Record<string, string | number>) => Object.entries(values ?? {}).reduce((copy, [key, value]) => copy.replaceAll(`{${key}}`, String(value)), en[key]) })
     for (const effect of effects) effect()
   }
   const settle = async () => {

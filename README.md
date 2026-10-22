@@ -41,20 +41,18 @@ dsh plugin --profile web add dsh-provider-qoder
 
 ### 1. Select a Service Region and Sign In
 
-Open DSH Web, navigate to **Settings → Models**, and locate the **Qoder account** card at the bottom of the page.
+In DSH Web, open **Settings → Models → Qoder account** and select your service region:
 
 | Service Region | Account Domain |
 | --- | --- |
 | Global (default) | `qoder.com` |
 | China (CN) | `qoder.com.cn` |
 
-Select the region matching your account at the top of the card; it saves immediately. Click **Sign in with Qoder** and complete verification and authorization in the new tab. DSH automatically displays the active account. While waiting, use **Reopen Qoder website**, copy the link, or cancel sign-in. The remaining link lifetime is shown; links expire after approximately five minutes. Reloading the page preserves the backend attempt; restarting DSH cancels unfinished attempts. Changing region cancels unfinished sign-in for the previous region.
+Click **Sign in with Qoder** and complete authorization on the website. Return to DSH to select a model available to your account.
 
-Browser authorization is stored separately for each region and shared by all clients connected to the DSH instance. Credentials renew automatically; explicitly expired authorization requires sign-in again. Failed sign-in preserves the previous authorization. **Remove browser authorization** clears DSH's saved authorization, without signing out of the website or automatically switching to a stored PAT.
+Alternatively, choose **Use PAT**, enter a token and click **Save and use PAT**, or use a saved PAT. **Manage account** or **Manage credentials** lets you change accounts, switch authentication methods or remove authorization.
 
-Alternatively, choose **Use PAT**, enter a token and click **Save and use PAT**, or select the saved PAT. After connecting, **Manage account** or **Manage credentials** exposes account replacement, authentication selection and removal. Only the identity for the active authentication method is displayed; inactive browser-account email addresses are hidden. Existing PAT configurations remain compatible. Browser failures never silently fall back to PAT. Browser sign-in requires a host credential store with writable authorization records; older hosts can continue using PAT.
-
-Once saved, the plugin automatically fetches the list of supported models for your account, making them immediately available in the DSH model picker.
+Browser authorization is stored per region, shared across the DSH instance and renewed automatically. Expired authorization requires sign-in again, without automatic PAT fallback. Removing authorization does not sign you out of the Qoder website.
 
 ### 2. View Account & Manage Models
 

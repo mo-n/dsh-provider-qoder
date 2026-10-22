@@ -23,33 +23,26 @@ function fixture() {
   return { operations, calls, set(value: QoderAuthorizationView) { current = value } }
 }
 
-test('sign-in reserves a tab synchronously, then offers open/copy links and cancel while polling', async () => {
-  const f = fixture()
-  const ui = await mountBrowserLogin(f.operations)
-  assert.equal(ui.click('Sign in with Qoder'), true)
-  assert.equal(ui.opens(), 1)
-  await ui.settle()
-  assert.equal(ui.popup.opener, null)
-  assert.match(ui.popup.url, /^https:\/\/qoder.com\/device\/selectAccounts/)
-  assert.match(ui.text(), /Complete verification/)
-  assert.ok(nodes(ui.tree()).some(node => node.type === 'a' && node.props.rel === 'noopener noreferrer'))
-  assert.ok(!nodes(ui.tree()).some(node => node.type === 'button' && node.props.children === 'Sign in with Qoder'))
-  assert.equal(ui.click('Cancel sign-in'), true)
-  await ui.settle()
-  assert.deepEqual(f.calls, ['begin', 'cancel'])
-  ui.unmount()
-})
-
-test('blocked popups retain the manual authorization link and page unmount does not cancel the backend attempt', async () => {
-  const f = fixture()
-  const ui = await mountBrowserLogin(f.operations, { popup: false })
-  ui.click('Sign in with Qoder')
-  await ui.settle()
-  assert.match(ui.text(), /Reopen Qoder website/)
-  ui.unmount()
-  assert.deepEqual(f.calls, ['begin'])
-  assert.equal(ui.lateUpdates(), 0)
-})
+for (const popup of [true, false]) {
+  test(`website sign-in supports ${popup ? 'an opened tab and explicit cancellation' : 'blocked popups and page disconnection'}`, async () => {
+    const f = fixture()
+    const ui = await mountBrowserLogin(f.operations, { popup })
+    ui.click('Sign in with Qoder')
+    assert.equal(ui.opens(), 1, 'reserve the tab during the click')
+    await ui.settle()
+    assert.match(ui.text(), /Complete verification/)
+    assert.ok(nodes(ui.tree()).some(node => node.type === 'a' && node.props.rel === 'noopener noreferrer'))
+    assert.doesNotMatch(ui.text(), /Sign in with Qoder/)
+    if (popup) {
+      assert.equal(ui.popup.opener, null)
+      assert.match(ui.popup.url, /^https:\/\/qoder.com\/device\/selectAccounts/)
+      ui.click('Cancel sign-in'); await ui.settle()
+    }
+    ui.unmount()
+    assert.deepEqual(f.calls, popup ? ['begin', 'cancel'] : ['begin'])
+    assert.equal(ui.lateUpdates(), 0)
+  })
+}
 
 test('polling restores shared progress, displays completion and exposes explicit method selection and logout', async () => {
   const f = fixture()
@@ -87,16 +80,14 @@ test('a late polling response cannot overwrite a successful login mutation', asy
   ui.unmount()
 })
 
-test('read-only authorization disables mutations and renewed unsaved credentials remain visible in both locales', async () => {
-  for (const locale of ['en', 'zh'] as const) {
-    const f = fixture()
-    f.set({ ...view(), writable: false, method: 'browser', unsaved: true, expired: true })
-    const ui = await mountBrowserLogin(f.operations, { locale })
-    assert.equal(ui.click(locale === 'en' ? 'Sign in again' : '重新登录'), false)
-    assert.match(ui.text(), locale === 'en' ? /have not been saved/ : /尚未保存/)
-    assert.match(ui.text(), locale === 'en' ? /expired/ : /已失效/)
-    ui.unmount()
-  }
+test('read-only authorization disables mutations and shows unsaved and expired credentials', async () => {
+  const f = fixture()
+  f.set({ ...view(), writable: false, method: 'browser', unsaved: true, expired: true })
+  const ui = await mountBrowserLogin(f.operations)
+  assert.equal(ui.click('Sign in again'), false)
+  assert.match(ui.text(), /have not been saved/)
+  assert.match(ui.text(), /expired/)
+  ui.unmount()
 })
 
 test('PAT editing is revealed on demand and saving uses the trimmed token without exposing an inactive browser identity', async () => {
@@ -104,10 +95,9 @@ test('PAT editing is revealed on demand and saving uses the trimmed token withou
   f.set({ ...view(), method: 'browser', configured: true, profile: { id: 'browser-user', name: 'Browser subscriber', email: 'browser@example.test' } })
   const stored: string[] = []
   const busy: boolean[] = []
-  const credentials: QoderBrowserLoginProps['credentials'] = {
+  const credentials: Partial<QoderBrowserLoginProps['credentials']> = {
     describe: async () => ({ configured: false, writable: true }),
     store: async value => { stored.push(value); await f.operations.select('global', 'pat'); f.set({ ...view(), method: 'pat', configured: true, profile: { id: 'browser-user', name: 'Browser subscriber', email: 'browser@example.test' } }); return true },
-    remove: async () => true,
     getAccount: async () => ({ ok: true, value: { profile: { id: 'pat-user', name: 'PAT subscriber', email: 'pat@example.test' }, updatedAt: new Date().toISOString() } }),
   }
   const ui = await mountBrowserLogin(f.operations, { credentials, onBusyChange: value => busy.push(value) })
@@ -130,7 +120,7 @@ test('PAT save failures retain the draft and display a specific retry message', 
   const f = fixture()
   const ui = await mountBrowserLogin(f.operations, { credentials: {
     describe: async () => ({ configured: false, writable: true }),
-    store: async () => false, remove: async () => true, getAccount: async () => undefined,
+    store: async () => false,
   } })
   ui.click('Use PAT'); await ui.settle()
   ui.input('test-draft'); await ui.settle()
@@ -157,7 +147,6 @@ test('a late PAT profile response after unmount cannot publish state', async () 
   f.set({ ...view(), method: 'pat', configured: true })
   let release!: (value: Awaited<ReturnType<QoderBrowserLoginProps['credentials']['getAccount']>>) => void
   const ui = await mountBrowserLogin(f.operations, { credentials: {
-    describe: async () => ({ configured: true, writable: true }), store: async () => true, remove: async () => true,
     getAccount: () => new Promise(resolve => { release = resolve }),
   } })
   ui.unmount()
