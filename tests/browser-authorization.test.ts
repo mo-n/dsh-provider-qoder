@@ -331,16 +331,31 @@ test('region changes fence a login delayed by the writability check and cancel a
   await f.manager.dispose()
 })
 
-test('caller cancellation immediately after upstream rotation does not discard the new refresh token', async () => {
+test('caller cancellation during the refresh HTTP exchange does not discard the rotated tokens', async () => {
   const controller = new AbortController()
-  const f = fixture(storage(), async value => {
-    controller.abort()
-    return { ...value, credentials: { ...value.credentials, authToken: 'rotated-after-cancel' }, refreshToken: 'rotated-refresh' }
-  })
+  const started = deferred<AbortSignal>()
+  const response = deferred<Response>()
+  const auth = new QoderBrowserAuthorization({ region: 'global', fetch: (async (_input, init) => {
+    const signal = init!.signal!
+    started.resolve(signal)
+    return Promise.race([response.promise, new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+    })])
+  }) as typeof fetch })
+  const f = fixture(storage(), auth.refresh.bind(auth))
   f.store.seed(grant())
   const lease = (await f.manager.lease('global'))!
-  await assert.rejects(lease.resolve(controller.signal, 'device-global'), (error: QoderLlmError) => error.code === 'ABORTED')
+  const resolving = lease.resolve(controller.signal, 'device-global')
+  const rejected = assert.rejects(resolving, (error: QoderLlmError) => error.code === 'ABORTED')
+  const requestSignal = await started.promise
+  controller.abort()
+  // Upstream has accepted the rotation, but its response has not reached DSH yet.
+  const requestWasAborted = requestSignal.aborted
+  response.resolve(json({ device_token: 'rotated-after-cancel', refresh_token: 'rotated-refresh', expires_in: 3600 }))
+  await rejected
+  assert.equal(requestWasAborted, false)
   const saved = await f.store.provider.readRecord(browserAuthorizationKey('global'))
+  assert.equal((saved as { payload: { grant: QoderBrowserGrant } }).payload.grant.credentials.authToken, 'rotated-after-cancel')
   assert.equal((saved as { payload: { grant: QoderBrowserGrant } }).payload.grant.refreshToken, 'rotated-refresh')
   await f.manager.dispose()
 })

@@ -230,7 +230,8 @@ export class QoderBrowserAuthorizationManager {
         const volatile = this.volatile.get(region)
         baseToken = saved.grant.credentials.authToken
         const source = volatile?.grant.id === id && volatile.baseToken === baseToken ? volatile.grant : saved.grant
-        rotated = await this.transport(region).refresh(source, signal, rejectedToken)
+        // Caller cancellation must not discard a rotation already accepted upstream.
+        rotated = await this.transport(region).refresh(source, this.lifecycle.signal, rejectedToken)
         // Once upstream rotated a credential, save it even if its caller just cancelled.
         return rotated === saved.grant ? undefined : record({ ...saved, grant: rotated })
       })

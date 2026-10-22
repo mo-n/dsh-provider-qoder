@@ -19,6 +19,7 @@ import { Config, type LiveConfig } from '../src/dsh/config.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
+import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
 
 interface MemorySection {
   value: plugin.Config
@@ -306,6 +307,25 @@ async function modelRuntime(config: plugin.Config) {
 async function drain(): Promise<void> {
   for (let turn = 0; turn < 20; turn++) await new Promise<void>(resolve => setImmediate(resolve))
 }
+
+test('browser credential updates rediscover models without waiting for a model-list read', async (t) => {
+  let supportsImages = false
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Chosen', supportsImages },
+  ])
+  const { ctx } = await modelRuntime({ modelsByRegion: { global: [{ id: 'chosen', name: 'Chosen' }] } })
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  await drain()
+  const calls = discovery.mock.callCount()
+  supportsImages = true
+  ctx.emit('credentials/record-updated', browserAuthorizationKey('china'))
+  await drain()
+  assert.equal(discovery.mock.callCount(), calls)
+  ctx.emit('credentials/record-updated', browserAuthorizationKey('global'))
+  await drain()
+  assert.equal(discovery.mock.callCount(), calls + 1)
+  assert.deepEqual((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'chosen' })).inputModalities, ['text', 'image'])
+})
 
 test('automatic discovery persists rates without changing selection and refreshes after five minutes', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 })

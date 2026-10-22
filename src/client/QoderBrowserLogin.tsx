@@ -36,7 +36,6 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
   const wakeRef = useRef<(() => void) | undefined>(undefined)
   const attempt = view?.attempt
   const pending = attempt !== undefined && ['waiting', 'verifying', 'saving'].includes(attempt.phase)
-  waitingRef.current = pending
   const connected = view?.configured === true && !view.expired
   const identity = view?.method === 'browser' ? view.profile : profile
   const patConfigured = pat?.configured === true && !isEnvironmentCredentialSource(pat.source)

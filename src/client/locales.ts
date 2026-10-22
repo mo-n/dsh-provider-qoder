@@ -197,7 +197,7 @@ export const en: typeof zh = {
   regionGlobal: 'Global',
   regionChina: 'China (CN)',
   regionHint: 'Ensure your PAT matches the selected service region.',
-  tokenLabel: 'API Key',
+  tokenLabel: 'Personal Access Token (PAT)',
   tokenPlaceholder: 'Enter a new Personal Access Token',
   configuredHint: 'Configured — enter a new value to replace',
   readOnly: 'The current credential store is read-only.',

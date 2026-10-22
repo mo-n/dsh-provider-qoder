@@ -172,7 +172,6 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       return transport
     },
     changed: () => {
-      refreshAuthentication()
       void catalog.refresh()
     },
   })
@@ -204,7 +203,10 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     registration.replace([providerQoder])
   }
   ctx.on('credentials/record-updated', key => {
-    if (key === browserAuthorizationKey(activeTransportConfig.region)) refreshAuthentication()
+    if (key === browserAuthorizationKey(activeTransportConfig.region)) {
+      refreshAuthentication()
+      void catalog.refresh()
+    }
   })
   ctx.on('credentials/reference-updated', ref => {
     if (ref === qoderCredentialRef) refreshAuthentication()
