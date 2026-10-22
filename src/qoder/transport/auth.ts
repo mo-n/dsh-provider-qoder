@@ -131,9 +131,13 @@ export class QoderAuthManager {
 
   /** Recover a rejected credential once; concurrent rejections share the exchange. */
   async refreshCredentials(pat: string, rejected: QoderCredentials, signal?: AbortSignal): Promise<QoderCredentialSnapshot> {
+    if (signal?.aborted) throw abortedError()
     const key = `${this.region}:${opaqueCredentialKey(pat)}`
     const current = this.cache.get(key)?.creds
     if (current && current !== rejected) return current
+    // A shared proactive refresh must never fall back to a rejected snapshot.
+    // Keep the exchange alive so concurrent rejections still share its result.
+    this.cache.delete(key)
     const flight = this.inFlight.get(key)
     if (flight) return this.getCredentials(pat, signal)
     this.invalidate(key)

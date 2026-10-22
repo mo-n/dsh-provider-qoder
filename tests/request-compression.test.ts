@@ -321,9 +321,13 @@ test('failed diagnostic capture does not prevent identity recovery', async () =>
   assert.equal(calls, 2)
 })
 
-for (const fallbackStatus of [500, 200]) {
+// Compression capability is remembered per endpoint; keep these cases independent.
+for (const { fallbackStatus, region } of [
+  { fallbackStatus: 500, region: 'global' },
+  { fallbackStatus: 200, region: 'china' },
+] as const) {
   test(`HTTP identity headers and first compression error survive fallback status ${fallbackStatus}`, async () => {
-      const logs: unknown[][] = []
+    const logs: unknown[][] = []
     const rejectionBody = '{"error":"invalid character \'(\' looking for beginning of value"}'
     const request: GenerateOptions = { provider: 'dsh-provider-qoder', model: 'cmodel', messages: [] }
     let calls = 0
@@ -331,7 +335,7 @@ for (const fallbackStatus of [500, 200]) {
       for await (const _chunk of streamModelServerChat(request, undefined,
         { userID: 'first-rejection-user', authToken: 'do-not-capture-authorization', name: '', email: '' },
         [{ role: 'user', content: 'history '.repeat(2000) }], {
-          requestCompression: true, region: 'global', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+          requestCompression: true, region, responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
           logger: { warn: (...details) => logs.push(details), debug: (...details) => logs.push(details) },
           refreshCredentials: async () => { throw new Error('unexpected refresh') },
           fetch: (async (_url, init) => {
