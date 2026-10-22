@@ -41,18 +41,18 @@ dsh plugin --profile web add dsh-provider-qoder
 
 ### 1. Select a Service Region and Sign In
 
-Open DSH Web, navigate to **Settings → Models**, locate the **Qoder Credentials** card at the bottom of the page, and click **Edit**.
+Open DSH Web, navigate to **Settings → Models**, and locate the **Qoder account** card at the bottom of the page.
 
 | Service Region | Account Domain |
 | --- | --- |
 | Global (default) | `qoder.com` |
 | China (CN) | `qoder.com.cn` |
 
-Select and save the region matching your account, then click **Sign in with Qoder**. Complete verification and authorization on the Qoder website in the new tab; DSH detects completion automatically. If a tab does not open, use **Open sign-in page** or copy the link. Links expire after approximately five minutes and can be cancelled. Reloading the page preserves the backend attempt; restarting DSH cancels unfinished attempts.
+Select the region matching your account at the top of the card; it saves immediately. Click **Sign in with Qoder** and complete verification and authorization in the new tab. DSH automatically displays the active account. While waiting, use **Reopen Qoder website**, copy the link, or cancel sign-in. The remaining link lifetime is shown; links expire after approximately five minutes. Reloading the page preserves the backend attempt; restarting DSH cancels unfinished attempts. Changing region cancels unfinished sign-in for the previous region.
 
 Browser authorization is stored separately for each region and shared by all clients connected to the DSH instance. Credentials renew automatically; explicitly expired authorization requires sign-in again. Failed sign-in preserves the previous authorization. **Remove browser authorization** clears DSH's saved authorization, without signing out of the website or automatically switching to a stored PAT.
 
-Alternatively, save a PAT in the **Qoder PAT** editor or click **Use PAT** to select an existing one. Existing PAT configurations remain compatible. Browser failures never silently fall back to PAT. Browser sign-in requires a host credential store with writable authorization records; older hosts can continue using PAT.
+Alternatively, choose **Use PAT**, enter a token and click **Save and use PAT**, or select the saved PAT. After connecting, **Manage account** or **Manage credentials** exposes account replacement, authentication selection and removal. Only the identity for the active authentication method is displayed; inactive browser-account email addresses are hidden. Existing PAT configurations remain compatible. Browser failures never silently fall back to PAT. Browser sign-in requires a host credential store with writable authorization records; older hosts can continue using PAT.
 
 Once saved, the plugin automatically fetches the list of supported models for your account, making them immediately available in the DSH model picker.
 

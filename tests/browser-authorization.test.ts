@@ -37,6 +37,7 @@ function storage() {
       const promise = (locks.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
         const next = await mutate(structuredClone(records.get(key)))
         if (next !== undefined) {
+          assert.deepEqual(next, JSON.parse(JSON.stringify(next)), 'credential records must survive a JSON round trip, as required by credentials-local')
           await beforeCommit?.()
           if (failWrites || !writable) throw new Error('mock disk unavailable')
           records.set(key, structuredClone(next))
@@ -184,6 +185,7 @@ test('failed login persistence preserves the prior authorization', async () => {
   await f.finish('global', grant('global', 'replacement'))
   assert.equal((await f.manager.describe('global')).profile?.id, 'previous')
   assert.equal((await f.manager.describe('global')).attempt?.phase, 'failed')
+  assert.equal((await f.manager.describe('global')).attempt?.failure, 'storage')
   await f.manager.dispose()
 })
 
@@ -254,6 +256,9 @@ test('logout fences stale refresh and does not silently fall back to a saved PAT
   f.store.seed(grant())
   const lease = (await f.manager.lease('global'))!
   await f.manager.select('global', 'none')
+  assert.deepEqual(await f.store.provider.readRecord(browserAuthorizationKey('global')), {
+    kind: 'grant', payload: { version: 1, method: 'none' },
+  })
   await assert.rejects(lease.resolve(undefined, 'device-global'), (error: QoderLlmError) => error.code === 'ABORTED')
   await assert.rejects(f.manager.lease('global'), (error: QoderLlmError) => error.code === 'MISSING_CREDENTIAL')
   const restarted = fixture(f.store)
@@ -291,6 +296,22 @@ test('read-only stores cannot start authorization, and a corrupt record never fa
   assert.equal(f.begins(), 0)
   f.store.records.set(browserAuthorizationKey('global'), { kind: 'grant', payload: { version: 99, method: 'browser' } })
   await assert.rejects(f.manager.lease('global'), /invalid/)
+  assert.equal((await f.manager.describe('global')).configured, false)
+  await f.manager.dispose()
+})
+
+test('optional browser credential fields are omitted before writing JSON-only grant records', async () => {
+  const f = fixture()
+  const value = grant()
+  value.refreshExpiresAt = undefined
+  value.credentials.organizationId = undefined
+  value.credentials.organizationTags = undefined
+  await f.manager.begin('global')
+  await f.finish('global', value)
+  assert.equal((await f.manager.describe('global')).attempt?.phase, 'complete')
+  const saved = await f.store.provider.readRecord(browserAuthorizationKey('global'))
+  assert.deepEqual(saved, JSON.parse(JSON.stringify(saved)))
+  await f.manager.select('global', 'none')
   assert.equal((await f.manager.describe('global')).configured, false)
   await f.manager.dispose()
 })

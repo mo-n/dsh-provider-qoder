@@ -22,6 +22,7 @@ interface Attempt {
   url?: string
   done?: Promise<void>
   cleanupFailed?: boolean
+  failure?: 'storage' | 'connection' | 'authorization'
 }
 interface VolatileGrant { baseToken: string; grant: QoderBrowserGrant }
 
@@ -42,7 +43,8 @@ function decode(record: CredentialRecord | undefined, region: QoderRegion): Save
   }
   return value as SavedAuthorization
 }
-const record = (payload: SavedAuthorization): CredentialRecord => ({ kind: 'grant', payload })
+// Optional TypeScript properties may be undefined, but credential records must be JSON values.
+const record = (payload: SavedAuthorization): CredentialRecord => ({ kind: 'grant', payload: JSON.parse(JSON.stringify(payload)) })
 const pending = (attempt?: Attempt) => attempt !== undefined && ['waiting', 'verifying', 'saving'].includes(attempt.phase)
 const cancelled = () => new QoderLlmError('Qoder authorization changed or was cancelled.', 'ABORTED')
 
@@ -103,6 +105,7 @@ export class QoderBrowserAuthorizationManager {
         expired: saved.method === 'browser' && expired,
         unsaved: live?.grant === grant } : {},
       ...attempt ? { attempt: { id: attempt.id, phase: attempt.phase, expiresAt: attempt.expiresAt,
+        ...attempt.failure ? { failure: attempt.failure } : {},
         ...pending(attempt) ? { url: attempt.url } : {} } } : {},
     }
   }
@@ -142,6 +145,8 @@ export class QoderBrowserAuthorizationManager {
       attempt.phase = 'complete'
       this.changed()
     } catch (error) {
+      attempt.failure = attempt.phase === 'saving' ? 'storage'
+        : error instanceof QoderLlmError && ['TRANSPORT', 'SERVER', 'TIMEOUT'].includes(error.code) ? 'connection' : 'authorization'
       // Cancellation can race the store commit after its mutation callback returned.
       if (installed && attempt.controller.signal.aborted) {
         await this.credentials.modifyRecord(browserAuthorizationKey(region), async current => {
@@ -150,7 +155,7 @@ export class QoderBrowserAuthorizationManager {
         }).catch(() => { attempt.cleanupFailed = true })
       }
       attempt.phase = attempt.cleanupFailed ? 'failed' : attempt.controller.signal.aborted ? 'cancelled'
-        : error instanceof QoderLlmError && error.code === 'TIMEOUT' ? 'timeout' : 'failed'
+        : error instanceof QoderLlmError && error.code === 'TIMEOUT' && Date.now() >= attempt.expiresAt ? 'timeout' : 'failed'
     } finally {
       attempt.url = undefined
     }
@@ -176,7 +181,7 @@ export class QoderBrowserAuthorizationManager {
       this.assertRegion(region, generation)
       const saved = method === 'none' ? { version: 1 as const, method } : decode(current, region)
       if (method === 'browser' && !saved.grant) throw new QoderLlmError('Sign in to Qoder first.', 'MISSING_CREDENTIAL')
-      return record({ ...saved, method, ...method === 'none' ? { grant: undefined } : {} })
+      return record(method === 'none' ? { version: 1, method } : { ...saved, method })
     })
     if (method === 'none') this.volatile.delete(region)
     this.attempts.delete(region)

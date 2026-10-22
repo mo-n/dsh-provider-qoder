@@ -37,5 +37,5 @@ export interface QoderAuthorizationView {
   profile?: { id: string; name: string; email: string }
   expired?: boolean
   unsaved?: boolean
-  attempt?: { id: string; phase: QoderLoginPhase; url?: string; expiresAt: number }
+  attempt?: { id: string; phase: QoderLoginPhase; url?: string; expiresAt: number; failure?: 'storage' | 'connection' | 'authorization' }
 }
