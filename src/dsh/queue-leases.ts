@@ -1,6 +1,7 @@
 /** Correlate transport-owned release actions with committed DSH turn boundaries. */
 import { randomUUID } from 'node:crypto'
 import type { QoderQueueLease, QoderQueueOwner } from '../qoder/queue.ts'
+import type { QoderHostRun } from '../qoder/turn.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
@@ -18,7 +19,7 @@ export function bindQoderQueueLeases(ctx: Context, leases: QoderQueueLeases): vo
 }
 
 export class QoderQueueLeases {
-  private readonly runs = new Map<string, { turn: number; runId: string; leases: Map<string, QoderQueueLease> }>()
+  private readonly runs = new Map<string, { turn: number; run: QoderHostRun; leases: Map<string, QoderQueueLease> }>()
   private readonly pending = new Set<Promise<unknown>>()
   private disposed = false
 
@@ -26,7 +27,7 @@ export class QoderQueueLeases {
     if (this.disposed || this.runs.get(sessionId)?.turn === turn) return
     // A replacement must detach old actions before a newer turn can retain leases.
     void this.end(sessionId)
-    this.runs.set(sessionId, { turn, runId: randomUUID(), leases: new Map() })
+    this.runs.set(sessionId, { turn, run: Object.freeze({ id: randomUUID() }), leases: new Map() })
   }
 
   retain = (lease: QoderQueueLease): boolean => {
@@ -41,7 +42,7 @@ export class QoderQueueLeases {
     const owner = this.runs.get(sessionId)
     if (!owner || this.disposed) return undefined
     return {
-      runId: owner.runId,
+      run: owner.run,
       retain: lease => lease.sessionId === sessionId && this.runs.get(sessionId) === owner && this.retain(lease),
     }
   }

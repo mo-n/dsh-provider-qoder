@@ -343,14 +343,20 @@ test('two queued steps share the turn lease, have independent UI call ids, and r
     return asks.length % 2 ? new Response(queueFrame) : success()
   }) as typeof fetch
   for (let step = 0; step < 2; step++) {
-    await collect(streamQoderChat(options(), undefined, credentials, [], deps(send, {
-      onQueueLease: runs.retain,
+    const owner = runs.capture('test-session')!
+    await collect(streamQoderChat(options(), undefined, credentials, [
+      { role: 'user', content: 'Hello' },
+      { role: 'user', content: `Time sampled while preparing turn 1, step ${step + 1}: now` },
+    ], deps(send, {
+      hostRun: owner.run,
+      onQueueLease: owner.retain,
       onQueueUpdate: update => { if (update.type === 'waiting') snapshots.add(update.snapshot.callId) },
     })))
     assert.equal(finishes, 0)
   }
   assert.equal(snapshots.size, 2)
   assert.equal(asks[0].request_set_id, asks[2].request_set_id)
+  assert.equal(asks[0].business.id, asks[2].business.id)
   await runs.end('test-session', 1)
   assert.equal(finishes, 1)
   await runs.dispose()

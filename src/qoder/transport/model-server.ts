@@ -1,5 +1,7 @@
 /** Bearer-authenticated model-server HTTP SSE transport. */
 
+import type { QoderHostRun } from '../turn.ts'
+
 import { attributionHeaders, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { QoderRequestCompression } from './request-compression.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
@@ -19,7 +21,7 @@ export interface QoderModelServerDependencies {
   region: QoderRegion
   requestCompression?: boolean
   /** Immutable host turn boundary captured before provider I/O. */
-  hostRunId?: string
+  hostRun?: QoderHostRun
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   refreshCredentials: (rejected: QoderCredentials, signal?: AbortSignal) => Promise<QoderCredentials>
@@ -56,9 +58,7 @@ export async function* streamModelServerChat(
   messages: QoderWireMessage[],
   dependencies: QoderModelServerDependencies,
 ): AsyncGenerator<StreamChunk> {
-  const identityScope = options.purpose === undefined && dependencies.hostRunId !== undefined
-    ? JSON.stringify([dependencies.region, dependencies.hostRunId]) : dependencies.region
-  const request = await prepareQoderRequest(options, credentials.userID, messages, model, undefined, undefined, identityScope)
+  const request = await prepareQoderRequest(options, credentials.userID, messages, model, undefined, undefined, dependencies.region, dependencies.hostRun)
   const body = JSON.stringify(modelServerBody(request))
   const startedAt = performance.now()
   dependencies.logger?.debug?.('[Qoder Stream] Request context', {

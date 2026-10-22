@@ -1,5 +1,7 @@
 /** Encode a prepared Qoder model request for the legacy COSY model route. */
 
+import type { QoderHostRun } from '../../turn.ts'
+
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments } from './translate.ts'
@@ -19,8 +21,9 @@ export async function buildQoderRequestBody(
   attachments?: QoderImageAttachments,
   tracker?: QoderTurnTracker,
   identityScope = '',
+  hostRun?: QoderHostRun,
 ): Promise<QoderWireRequest> {
-  const prepared = await prepareQoderRequest(options, userId, translatedMessages, model, attachments, tracker, identityScope)
+  const prepared = await prepareQoderRequest(options, userId, translatedMessages, model, attachments, tracker, identityScope, hostRun)
   return {
     request_id: prepared.requestId,
     request_set_id: prepared.requestSetId,

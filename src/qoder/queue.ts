@@ -1,4 +1,6 @@
 /** Browser-safe queue status; all durations exposed to the UI are milliseconds. */
+
+import type { QoderHostRun } from './turn.ts'
 export interface QoderQueueStatus {
   isQueued?: boolean
   modelKey?: string
@@ -39,6 +41,6 @@ export interface QoderQueueLease {
 
 /** Captured host-run identity and the matching lease retention capability. */
 export interface QoderQueueOwner {
-  readonly runId: string
+  readonly run: QoderHostRun
   retain(lease: QoderQueueLease): boolean
 }

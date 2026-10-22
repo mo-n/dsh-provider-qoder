@@ -1,5 +1,7 @@
 /** Shared model request preparation, before selecting a wire protocol. */
 
+import type { QoderHostRun } from '../../turn.ts'
+
 import crypto from 'node:crypto'
 import { contentHasImage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { selectedContextTier, type QoderCatalogModel } from '../../catalog.ts'
@@ -78,6 +80,7 @@ export async function prepareQoderRequest(
   attachments?: QoderImageAttachments,
   tracker: QoderTurnTracker = qoderTurnTracker,
   identityScope = '',
+  hostRun?: QoderHostRun,
 ): Promise<PreparedQoderRequest> {
   if (!userId) throw new QoderLlmError('Qoder request identity is missing.', 'AUTH')
   if (translatedMessages === undefined) validateQoderRequestShape(options, model)
@@ -112,7 +115,7 @@ export async function prepareQoderRequest(
     ? `${stablePart}-${crypto.randomUUID()}` : `${stablePart}-${String(options.sessionId)}`
   const requestId = crypto.randomUUID()
   const sessionIdParam = options.sessionId === undefined ? undefined : String(options.sessionId)
-  const identity = tracker.resolveTurnIdentity(sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]), messages, callKind(options), requestId, modelKey)
+  const identity = tracker.resolveTurnIdentity(sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]), messages, callKind(options), requestId, modelKey, hostRun)
   return {
     requestId,
     requestSetId: identity.requestSetId,

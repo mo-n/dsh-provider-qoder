@@ -172,11 +172,11 @@ test('HTTP parsing completes or fails promptly when the upstream SSE connection 
 })
 
 test('HTTP turn identity is stable within a host run and isolated across runs and regions', async () => {
-  let runId = 'run-a'
+  let run: { readonly id: string } = Object.freeze({ id: 'run-a' })
   const bodies: Array<{ metadata: { context: { request_id: string; request_set_id: string; session_id: string }; business: { id: string } } }> = []
   const create = (region: 'global' | 'china') => createQoderTransport({
     region, modelTransport: 'http', resolvePat: async () => 'pt-model',
-    captureQueueLeaseOwner: () => ({ runId, retain: () => true }),
+    captureQueueLeaseOwner: () => ({ run, retain: () => true }),
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/jobToken/exchange')) return Response.json({ token: 'jt-model', expires_in: 3600 })
@@ -187,13 +187,18 @@ test('HTTP turn identity is stable within a host run and isolated across runs an
   })
   const global = create('global')
   const consume = async (transport: ReturnType<typeof create>, purpose?: GenerateOptions['purpose']) => {
-    for await (const _chunk of transport.stream({ ...request(), sessionId: 'http-run-scope' as GenerateOptions['sessionId'], purpose })) continue
+    const input = request()
+    input.messages.push(createUserMessage({
+      content: [{ type: 'text', text: `Time sampled while preparing turn 1, step ${bodies.length + 1}: now` }],
+      source: { kind: 'user' },
+    }))
+    for await (const _chunk of transport.stream({ ...input, sessionId: 'http-run-scope' as GenerateOptions['sessionId'], purpose })) continue
   }
   await consume(global)
   await consume(global)
   await consume(global, 'session-title')
   await consume(global)
-  runId = 'run-b'
+  run = Object.freeze({ id: 'run-b' })
   await consume(global)
   await consume(create('china'))
   const business = bodies.map(body => body.metadata.business.id)

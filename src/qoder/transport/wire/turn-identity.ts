@@ -7,25 +7,21 @@
  * request reports — so every step of one turn must carry the same run identity
  * while the next subscriber prompt opens a new one.
  *
- * The adapter never sees a turn number, and the host appends messages to a
- * turn's history while it runs — its own context, notifications, delegated
- * agents' messages — so the boundary is derived from the history here. A turn is
- * the multiset of user-role messages it has accounted for: a subscriber message
- * the run has not seen opens the next turn, while host-appended context,
- * transport-synthesized markers, and anything an auxiliary call carries continue
- * the open record.
+ * Hosted calls use a captured host run as their authoritative boundary. The
+ * weakly owned identity survives history projections and standalone-cache eviction.
+ * Standalone calls infer boundaries from the multiset of user-role messages:
+ * unseen subscriber input opens a run; recognized host context continues it.
+ * Auxiliary calls always receive independent identities.
  *
- * Known limit: text identifies a message because the host's message ids are not
- * part of the wire shape. A subscriber who sends the same words twice with the
- * first copy already gone from history — compaction replaced that span — shares
- * the open record instead of opening a new one. Carrying the host's message
- * identity through translation is the fix, and needs the host to expose it on
- * the request the adapter receives.
+ * Standalone limit: text identifies a message because wire messages lack host
+ * message IDs. Identical input replacing an earlier occurrence during compaction
+ * can share the open record. Hosted calls use real boundaries instead.
  *
  * @module dsh-provider-qoder/qoder/transport/wire/turn-identity
  */
 
 import crypto from 'node:crypto'
+import type { QoderHostRun } from '../../turn.ts'
 import type { QoderWireMessage } from './model-types.ts'
 
 /**
@@ -229,14 +225,15 @@ function messageFingerprint(message: QoderWireMessage): string {
 /**
  * Resolves the record identity of the turn one request belongs to.
  *
- * One tracker instance owns its sessions, so tests and transports stay
- * independent. State is created lazily per session and bounded by
- * `maxSessions`.
+ * Standalone session state is bounded by `maxSessions`. Hosted state is weakly
+ * owned by its run handle, which the host and outstanding requests keep alive.
  */
 export class QoderTurnTracker {
   private readonly maxSessions: number
   private readonly idleSessionTtlMs: number
   private readonly now: () => number
+  // Weak ownership keeps active/late requests stable without retaining completed runs.
+  private hosted = new WeakMap<QoderHostRun, Map<string, { modelKey?: string; identity: QoderTurnIdentity }>>()
   private readonly sessions = new Map<string, SessionTurnState>()
 
   constructor(options: QoderTurnTrackerOptions = {}) {
@@ -258,6 +255,7 @@ export class QoderTurnTracker {
     kind: QoderCallKind = 'conversation',
     requestId = crypto.randomUUID(),
     modelKey?: string,
+    hostRun?: QoderHostRun,
   ): QoderTurnIdentity {
     const now = this.now()
 
@@ -282,6 +280,10 @@ export class QoderTurnTracker {
         beginAt: now,
         businessStage: 'start',
       }
+    }
+
+    if (hostRun !== undefined) {
+      return this.resolveHosted(hostRun, sessionId, requestId, modelKey, now)
     }
 
     let state = this.sessions.get(sessionId)
@@ -386,6 +388,36 @@ export class QoderTurnTracker {
     }
   }
 
+  /** Host boundaries are authoritative; message projections cannot open a new run. */
+  private resolveHosted(
+    run: QoderHostRun,
+    scope: string,
+    requestId: string,
+    modelKey: string | undefined,
+    now: number,
+  ): QoderTurnIdentity {
+    let scopes = this.hosted.get(run)
+    if (scopes === undefined) {
+      scopes = new Map()
+      this.hosted.set(run, scopes)
+    }
+    const previous = scopes.get(scope)
+    const modelChanged = previous?.modelKey !== undefined && modelKey !== undefined && previous.modelKey !== modelKey
+    if (previous !== undefined && !modelChanged) {
+      if (modelKey !== undefined) previous.modelKey = modelKey
+      return { ...previous.identity, chatRecordId: requestId, businessStage: 'processing' }
+    }
+    const identity: QoderTurnIdentity = {
+      requestSetId: `qoder-request-${crypto.randomUUID()}`,
+      chatRecordId: requestId,
+      businessId: crypto.randomUUID(),
+      beginAt: now,
+      businessStage: 'start',
+    }
+    scopes.set(scope, { modelKey, identity })
+    return identity
+  }
+
   /**
    * Record id shared by every step of `sessionId`'s current turn.
    *
@@ -417,7 +449,7 @@ export class QoderTurnTracker {
     return { businessId: identity.businessId, beginAt: identity.beginAt }
   }
 
-  /** Forget one session, e.g. when its transport is disposed. */
+  /** Forget one standalone session. Hosted state follows its run handle lifetime. */
   forget(sessionId: string): void {
     this.sessions.delete(sessionId)
   }
@@ -425,6 +457,7 @@ export class QoderTurnTracker {
   /** Forget every session. */
   clear(): void {
     this.sessions.clear()
+    this.hosted = new WeakMap()
   }
 
   private claimSession(sessionId: string, state: SessionTurnState): void {

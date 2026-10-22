@@ -12,12 +12,17 @@ The transport aligns turn identity with Qoder's upstream aggregation model:
 
 ## Turn Boundary Derivation
 
-Hosted calls capture an immutable run identity from the committed DSH turn lifecycle before provider I/O. That identity scopes the subscriber/region/session tracker, so a later real turn cannot reuse an earlier turn's request set even if compaction leaves identical input. Within that scope, and for standalone calls without a host owner, `turn-identity.ts` derives request grouping from the multiset of accounted user-role messages:
+Hosted calls capture an immutable run handle from the committed DSH turn lifecycle before provider I/O. That handle is the authoritative turn boundary: injected context, history projections, and steering within an open host turn cannot open a second Qoder agent run. A model switch still opens a new Qoder agent run. Subscriber, region, and session identities remain isolated within the handle.
+
+This supersedes message-history inference within a hosted run. The previous combination of host scoping and text inference split real turns whenever the host introduced an unrecognized user-role context message, such as a time snapshot.
+
+Standalone calls without a host owner retain the multiset-based inference in `turn-identity.ts`:
 - An unaccounted subscriber message opens a new turn record.
-- Step-level context, background system notifications, synthesized image markers, and trimmed history continue the active turn rather than opening new records.
-- Standalone calls without a host run identity can still share the open record for repeated messages whose earlier instances were removed by history compaction, until a distinct message arrives. Hosted calls are separated by their real turn boundary.
+- Recognized step-level context, notifications, synthesized image markers, and trimmed history continue the active turn.
+- Repeated messages whose earlier occurrences were replaced by compaction can still share an open record until a distinct message arrives. Hosted calls do not have this ambiguity.
 
 ## Auxiliary Calls & Lifecycle Isolation
 
 - **Auxiliary host calls** (session titles, history compaction summaries marked by `GenerateOptions.purpose`) run under their own independent agent run. They never open, displace, or claim subscriber turn records.
-- **Session tracking**: Turn trackers are bounded in memory, prioritizing the eviction of conversations idle for over an hour to prevent memory leaks while preserving active multi-turn aggregations.
+- **Hosted tracking**: Transport state is weakly keyed by the captured run handle, outside the standalone LRU cache. The host releases its handle at turn end; outstanding requests retain the old handle until they finish, without joining a newer turn. Completed runs therefore cannot evict active ones, and no global strong reference retains completed run state.
+- **Standalone tracking**: The history-inference cache remains bounded, preferring idle conversations when capacity is exceeded.
