@@ -245,8 +245,7 @@ test('HTTP compresses history exceeding 256 KiB and keeps identity across authen
   assert.equal(ids[0], ids[1])
 })
 
-test('HTTP failures capture the actual request encoding and bounded response without credentials', async () => {
-  const { readFile, unlink, rmdir } = await import('node:fs/promises')
+test('HTTP failures report encoding metadata without request or response contents', async () => {
   const logs: unknown[][] = []
   const request: GenerateOptions = { provider: 'dsh-provider-qoder', model: 'cmodel', messages: [] }
   const upstream = '{"detail":"upstream processing failed"}'
@@ -260,25 +259,13 @@ test('HTTP failures capture the actual request encoding and bounded response wit
         fetch: (async () => new Response(upstream, { status: 500, headers: { 'content-type': 'application/json' } })) as typeof fetch,
       })) continue
   }, (error: unknown) => error instanceof QoderLlmError && error.code === 'SERVER')
-  const capture = logs.find(entry => entry[0] === '[Qoder Stream] HTTP rejection capture saved')?.[1] as { responsePath: string }
-  assert.ok(capture)
-  const responseText = await readFile(capture.responsePath, 'utf8')
-  const response = JSON.parse(responseText)
-  const requestPath = capture.responsePath.replace(/response-error\.json$/u, 'request.json')
-  try {
-    assert.equal(response.status, 500)
-    assert.equal(response.body, upstream)
-    assert.equal(response.request.encoding, 'zstd')
-    assert.ok(response.request.sentBytes < response.request.originalBytes)
-    assert.ok(!responseText.includes('never-save-this-token'))
-    const savedRequest = await readFile(requestPath, 'utf8')
-    assert.equal(JSON.parse(savedRequest).model, 'cmodel')
-    assert.ok(!savedRequest.includes('never-save-this-token'))
-  } finally {
-    await unlink(capture.responsePath)
-    await unlink(requestPath)
-    await rmdir(requestPath.replace(/[/\\]request\.json$/u, ''))
+  const rejection = logs.find(entry => entry[0] === '[Qoder Stream] HTTP request rejected')?.[1] as {
+    status: number; request: { encoding: string; sentBytes: number; originalBytes: number }
   }
+  assert.equal(rejection.status, 500)
+  assert.equal(rejection.request.encoding, 'zstd')
+  assert.ok(rejection.request.sentBytes < rejection.request.originalBytes)
+  assert.doesNotMatch(JSON.stringify(logs), /never-save-this-token|long history|upstream processing failed|requestPath|responsePath/u)
 })
 
 test('legacy compresses WAF bytes and returns a DSH-retryable pre-output SSE rejection', async () => {
@@ -336,8 +323,7 @@ test('failed diagnostic capture does not prevent identity recovery', async () =>
 
 for (const fallbackStatus of [500, 200]) {
   test(`HTTP identity headers and first compression error survive fallback status ${fallbackStatus}`, async () => {
-    const { readFile, unlink, rmdir } = await import('node:fs/promises')
-    const logs: unknown[][] = []
+      const logs: unknown[][] = []
     const rejectionBody = '{"error":"invalid character \'(\' looking for beginning of value"}'
     const request: GenerateOptions = { provider: 'dsh-provider-qoder', model: 'cmodel', messages: [] }
     let calls = 0
@@ -359,7 +345,7 @@ for (const fallbackStatus of [500, 200]) {
               assert.equal(headers.get('content-encoding'), 'zstd')
               return new Response(rejectionBody, { status: 400, headers: { 'content-type': 'application/json', 'x-request-id': 'original-400' } })
             }
-            assert.ok(logs.some(entry => entry[0] === '[Qoder Stream] Compression rejection capture saved'))
+            assert.ok(logs.some(entry => entry[0] === '[Qoder Stream] Compression rejected'))
             assert.equal(headers.get('content-encoding'), null)
             return fallbackStatus === 500 ? new Response('{"error":"internal server error"}', { status: 500 })
               : new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
@@ -369,33 +355,21 @@ for (const fallbackStatus of [500, 200]) {
     if (fallbackStatus === 500) await assert.rejects(operation, /HTTP 500/u)
     else await operation()
     assert.equal(calls, 2)
-    const captures = logs.filter(entry => String(entry[0]).endsWith('capture saved'))
-      .map(entry => entry[1] as { responsePath: string; requestPath?: string })
-    try {
-      const original = captures.find(entry => entry.responsePath.endsWith('compression-rejection.json'))!
-      assert.ok(original)
-      const raw = await readFile(original.responsePath, 'utf8')
-      const saved = JSON.parse(raw)
-      assert.equal(saved.status, 400)
-      assert.equal(saved.serverRequestId, 'original-400')
-      assert.equal(saved.body, rejectionBody)
-      assert.equal(saved.request.encoding, 'zstd')
-      assert.equal(saved.reason, 'invalid_json_at_origin')
-      assert.equal(saved.bodyTruncated, false)
-      assert.ok(!raw.includes('do-not-capture-authorization'))
-      if (fallbackStatus === 500) {
-        const final = captures.find(entry => entry.responsePath.endsWith('response-error.json'))!
-        const savedFinal = JSON.parse(await readFile(final.responsePath, 'utf8'))
-        assert.equal(savedFinal.status, 500)
-        assert.equal(savedFinal.request.encoding, 'identity')
-      }
-    } finally {
-      for (const capture of captures) {
-        const requestPath = capture.requestPath ?? capture.responsePath.replace(/[^/\\]+$/u, 'request.json')
-        await unlink(capture.responsePath)
-        await unlink(requestPath)
-        await rmdir(requestPath.replace(/[/\\]request\.json$/u, ''))
-      }
+    const original = logs.find(entry => entry[0] === '[Qoder Stream] Compression rejected')?.[1] as {
+      status: number; serverRequestId: string; reason: string; bodyTruncated: boolean; request: { encoding: string }
     }
+    assert.equal(original.status, 400)
+    assert.equal(original.serverRequestId, 'original-400')
+    assert.equal(original.reason, 'invalid_json_at_origin')
+    assert.equal(original.bodyTruncated, false)
+    assert.equal(original.request.encoding, 'zstd')
+    if (fallbackStatus === 500) {
+      const final = logs.find(entry => entry[0] === '[Qoder Stream] HTTP request rejected')?.[1] as {
+        status: number; request: { encoding: string }
+      }
+      assert.equal(final.status, 500)
+      assert.equal(final.request.encoding, 'identity')
+    }
+    assert.doesNotMatch(JSON.stringify(logs), /do-not-capture-authorization|history history|internal server error|requestPath|responsePath/u)
   })
 }

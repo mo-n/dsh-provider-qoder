@@ -1,7 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile, rmdir, unlink } from 'node:fs/promises'
-import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { Config } from '../src/dsh/config.ts'
 import { QoderAuthService } from '../src/qoder/transport/auth.ts'
 import { createQoderTransport } from '../src/qoder/transport/index.ts'
@@ -96,18 +95,7 @@ test('explicit HTTP transport sends Bearer model-server request and reads direct
   })
   assert.equal(await collect(transport), 'Bearer response')
   assert.equal(chatCalls, 1)
-  const capture = debug.find(entry => entry[0] === '[Qoder Stream] SSE capture saved')?.[1] as {
-    requestPath: string; responsePath: string; complete: boolean
-  }
-  assert.equal(capture.complete, true)
-  try {
-    assert.equal(JSON.parse(await readFile(capture.requestPath, 'utf8')).model, 'cmodel')
-    assert.match(await readFile(capture.responsePath, 'utf8'), /Bearer response/u)
-  } finally {
-    await unlink(capture.requestPath)
-    await unlink(capture.responsePath)
-    await rmdir(capture.requestPath.replace(/[/\\]request\.json$/u, ''))
-  }
+  assert.ok(!debug.some(entry => String(entry[0]).includes('capture')))
 })
 
 test('model-server HTTP 401 refreshes the rejected job token once and keeps request identity', async () => {
@@ -132,6 +120,94 @@ test('model-server HTTP 401 refreshes the rejected job token once and keeps requ
   assert.equal(exchanges, 2)
   assert.equal(requestIds.length, 2)
   assert.equal(requestIds[0], requestIds[1])
+})
+
+test('HTTP parsing completes or fails promptly when the upstream SSE connection stays open', async () => {
+  for (const malformedTools of [false, true]) {
+    const abort = new AbortController()
+    const timeout = setTimeout(() => abort.abort(), 1000)
+    let cancellations = 0
+    const transport = createQoderTransport({
+      modelTransport: 'http', region: 'global', resolvePat: async () => 'pt-model',
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url.includes('/jobToken/exchange')) return Response.json({ token: 'jt-model', expires_in: 3600 })
+        if (url.includes('/userinfo')) return Response.json({ id: 'user-model' })
+        const delta = malformedTools
+          ? { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'lookup', arguments: '{' } }] }
+          : { content: 'finished' }
+        let onAbort: () => void
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            onAbort = () => controller.error(new Error('caller deadline'))
+            init?.signal?.addEventListener('abort', onAbort, { once: true })
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: malformedTools ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`))
+            // Intentionally no close(): completion must cancel the actual response body.
+          },
+          cancel() {
+            cancellations++
+            init?.signal?.removeEventListener('abort', onAbort)
+          },
+        })
+        return new Response(body)
+      }) as typeof fetch,
+    })
+    const chunks: StreamChunk[] = []
+    const consume = async () => {
+      for await (const chunk of transport.stream({ ...request(), signal: abort.signal })) chunks.push(chunk)
+    }
+    try {
+      if (malformedTools) await assert.rejects(consume, (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
+      else {
+        await consume()
+        assert.ok(chunks.some(chunk => chunk.type === 'finish' && chunk.reason.kind === 'stop'))
+      }
+      assert.equal(abort.signal.aborted, false)
+      assert.equal(cancellations, 1)
+    } finally {
+      clearTimeout(timeout)
+      abort.abort()
+    }
+  }
+})
+
+test('HTTP turn identity is stable within a host run and isolated across runs and regions', async () => {
+  let runId = 'run-a'
+  const bodies: Array<{ metadata: { context: { request_id: string; request_set_id: string; session_id: string }; business: { id: string } } }> = []
+  const create = (region: 'global' | 'china') => createQoderTransport({
+    region, modelTransport: 'http', resolvePat: async () => 'pt-model',
+    captureQueueLeaseOwner: () => ({ runId, retain: () => true }),
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return Response.json({ token: 'jt-model', expires_in: 3600 })
+      if (url.includes('/userinfo')) return Response.json({ id: 'user-model' })
+      bodies.push(JSON.parse(String(init?.body)))
+      return sse('ok')
+    }) as typeof fetch,
+  })
+  const global = create('global')
+  const consume = async (transport: ReturnType<typeof create>, purpose?: GenerateOptions['purpose']) => {
+    for await (const _chunk of transport.stream({ ...request(), sessionId: 'http-run-scope' as GenerateOptions['sessionId'], purpose })) continue
+  }
+  await consume(global)
+  await consume(global)
+  await consume(global, 'session-title')
+  await consume(global)
+  runId = 'run-b'
+  await consume(global)
+  await consume(create('china'))
+  const business = bodies.map(body => body.metadata.business.id)
+  const requestSets = bodies.map(body => body.metadata.context.request_set_id)
+  assert.equal(business[0], business[1])
+  assert.equal(business[0], business[3])
+  assert.notEqual(business[0], business[2])
+  assert.notEqual(business[0], business[4])
+  assert.notEqual(business[4], business[5])
+  assert.equal(requestSets[0], requestSets[1])
+  assert.notEqual(requestSets[0], requestSets[4])
+  assert.notEqual(requestSets[4], requestSets[5])
+  assert.equal(bodies[0].metadata.context.session_id, bodies[4].metadata.context.session_id)
+  assert.equal(new Set(bodies.map(body => body.metadata.context.request_id)).size, bodies.length)
 })
 
 test('concurrent rejected credentials share one recovery exchange', async () => {
@@ -534,7 +610,7 @@ test('model-server logs only structural diagnostics after a streamed frame fails
   assert.doesNotMatch(JSON.stringify(warnings), /private|pt-model|jt-model/u)
 })
 
-test('failed tool-call parsing saves the complete request body and raw SSE response', async () => {
+test('failed tool-call parsing does not capture model requests or responses', async () => {
   const warnings: unknown[][] = []
   const rawResponse = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_image","arguments":"{\\"path\\":"}}]},"finish_reason":"tool_calls"}]}\n\n' +
     'data: [DONE]\n\n'
@@ -551,21 +627,8 @@ test('failed tool-call parsing saves the complete request body and raw SSE respo
     }) as typeof fetch,
   })
   await assert.rejects(collect(transport), (error: Error & { code?: string }) => error.code === 'MALFORMED_RESPONSE')
-  const capture = warnings.find(entry => entry[0] === '[Qoder Stream] SSE capture saved')?.[1] as {
-    requestPath: string; responsePath: string
-  }
-  assert.ok(capture?.requestPath)
-  assert.ok(capture?.responsePath)
-  try {
-    const requestBody = await readFile(capture.requestPath, 'utf8')
-    assert.equal(JSON.parse(requestBody).model, 'cmodel')
-    assert.equal(await readFile(capture.responsePath, 'utf8'), rawResponse)
-    assert.doesNotMatch(requestBody, /jt-model|pt-model/u)
-  } finally {
-    await unlink(capture.requestPath)
-    await unlink(capture.responsePath)
-    await rmdir(capture.requestPath.replace(/[/\\]request\.json$/u, ''))
-  }
+  assert.ok(!warnings.some(entry => String(entry[0]).includes('capture')))
+  assert.doesNotMatch(JSON.stringify(warnings), /read_image|jt-model|pt-model/u)
 })
 
 test('invalidating credentials prevents an old exchange from repopulating the cache', async () => {

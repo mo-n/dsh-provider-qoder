@@ -1,9 +1,6 @@
 /** Bearer-authenticated model-server HTTP SSE transport. */
 
 import { attributionHeaders, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import { mkdir, open, rmdir, unlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { QoderRequestCompression } from './request-compression.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import { canRefreshModelCredentials, qoderModelServerError, qoderRequestId, QoderLlmError } from '../errors.ts'
@@ -21,78 +18,11 @@ export interface QoderModelServerDependencies {
   logger?: QoderLogger
   region: QoderRegion
   requestCompression?: boolean
+  /** Immutable host turn boundary captured before provider I/O. */
+  hostRunId?: string
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   refreshCredentials: (rejected: QoderCredentials, signal?: AbortSignal) => Promise<QoderCredentials>
-}
-
-interface ModelServerCapture {
-  directory: string
-  requestPath: string
-  responsePath: string
-  done: Promise<void>
-}
-
-async function captureHttpRejection(
-  requestId: string, requestBody: string,
-  fileName: 'compression-rejection.json' | 'response-error.json',
-  details: Record<string, unknown>, logger?: QoderLogger,
-): Promise<void> {
-  const label = fileName === 'compression-rejection.json' ? 'Compression rejection' : 'HTTP rejection'
-  try {
-    const directory = join(tmpdir(), 'dsh-provider-qoder', 'sse-captures', `${requestId}-${crypto.randomUUID()}`)
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    await writeFile(join(directory, 'request.json'), requestBody, { flag: 'wx', mode: 0o600 })
-    const responsePath = join(directory, fileName)
-    await writeFile(responsePath, JSON.stringify({ requestId, ...details }, null, 2), { flag: 'wx', mode: 0o600 })
-    logger?.warn?.(`[Qoder Stream] ${label} capture saved`, { requestId, status: details.status, responsePath, request: details.request })
-  } catch {
-    logger?.warn?.(`[Qoder Stream] ${label} capture could not be saved`, { requestId })
-  }
-}
-
-/** Temporary local capture for diagnosing malformed model-server tool arguments. */
-async function captureModelServerStream(requestId: string, requestBody: string, stream: ReadableStream<Uint8Array>, onActivity: () => void): Promise<{
-  modelStream: ReadableStream<Uint8Array>
-  capture: ModelServerCapture
-}> {
-  const directory = join(tmpdir(), 'dsh-provider-qoder', 'sse-captures', `${requestId}-${crypto.randomUUID()}`)
-  const requestPath = join(directory, 'request.json')
-  const responsePath = join(directory, 'response.sse')
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  const file = await (async () => {
-    try {
-      await writeFile(requestPath, requestBody, { flag: 'wx', mode: 0o600 })
-      return await open(responsePath, 'wx', 0o600)
-    } catch (error) {
-      await unlink(requestPath).catch(() => undefined)
-      await rmdir(directory).catch(() => undefined)
-      throw error
-    }
-  })()
-  const [modelStream, captureStream] = stream.tee()
-  const reader = captureStream.getReader()
-  const done = (async () => {
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        onActivity()
-        let offset = 0
-        while (offset < value.byteLength) {
-          const result = await file.write(value, offset, value.byteLength - offset)
-          if (result.bytesWritten === 0) throw new Error('Qoder SSE capture write made no progress.')
-          offset += result.bytesWritten
-        }
-      }
-    } finally {
-      reader.releaseLock()
-      await file.close()
-    }
-  })()
-  // The model parser may still be running when the capture branch settles.
-  void done.catch(() => undefined)
-  return { modelStream, capture: { directory, requestPath, responsePath, done } }
 }
 
 /** Convert the shared Qoder turn into the model-server's OpenAI-shaped request. */
@@ -126,7 +56,9 @@ export async function* streamModelServerChat(
   messages: QoderWireMessage[],
   dependencies: QoderModelServerDependencies,
 ): AsyncGenerator<StreamChunk> {
-  const request = await prepareQoderRequest(options, credentials.userID, messages, model)
+  const identityScope = options.purpose === undefined && dependencies.hostRunId !== undefined
+    ? JSON.stringify([dependencies.region, dependencies.hostRunId]) : dependencies.region
+  const request = await prepareQoderRequest(options, credentials.userID, messages, model, undefined, undefined, identityScope)
   const body = JSON.stringify(modelServerBody(request))
   const startedAt = performance.now()
   dependencies.logger?.debug?.('[Qoder Stream] Request context', {
@@ -164,9 +96,17 @@ export async function* streamModelServerChat(
           url: getQoderModelServerUrl(dependencies.region), protocol: 'http', body,
           enabled: dependencies.requestCompression, signal: controller.signal,
           logger: dependencies.logger, requestId: request.requestId,
-          onRejection: rejection => captureHttpRejection(request.requestId, body, 'compression-rejection.json', {
-            ...rejection, request: compression.diagnostics,
-          }, dependencies.logger),
+          onRejection: async rejection => {
+            dependencies.logger?.warn?.('[Qoder Stream] Compression rejected', {
+              requestId: request.requestId,
+              status: rejection.status,
+              contentType: rejection.contentType,
+              serverRequestId: rejection.serverRequestId,
+              bodyTruncated: rejection.bodyTruncated,
+              reason: rejection.reason,
+              request: compression.diagnostics,
+            })
+          },
           dispatch: async (wireBody, headers) => {
             headerTimer = setTimeout(() => { headerTimedOut = true; controller.abort('response header timeout') }, dependencies.responseHeaderTimeoutMs)
             try {
@@ -206,12 +146,14 @@ export async function* streamModelServerChat(
         catch { cause = undefined }
         if (idleTimer) clearTimeout(idleTimer)
         if (controller.signal.aborted) throw new QoderLlmError('Qoder model-server error body was interrupted.', 'ABORTED')
-        // Persist bounded diagnostics without authentication headers.
-        await captureHttpRejection(request.requestId, body, 'response-error.json', {
-          status: response.status, contentType: response.headers.get('content-type'),
-          serverRequestId: responseRequestId, request: compression.diagnostics,
-          body: cause, bodyAvailable: typeof cause === 'string',
-        }, dependencies.logger)
+        dependencies.logger?.warn?.('[Qoder Stream] HTTP request rejected', {
+          requestId: request.requestId,
+          status: response.status,
+          contentType: response.headers.get('content-type'),
+          serverRequestId: responseRequestId,
+          request: compression.diagnostics,
+          bodyAvailable: typeof cause === 'string',
+        })
         const error = qoderModelServerError(response.status, cause, 'http', response.headers)
         if (attempt === 0 && canRefreshModelCredentials(error)) {
           activeCredentials = await dependencies.refreshCredentials(activeCredentials, options.signal)
@@ -223,76 +165,40 @@ export async function* streamModelServerChat(
         throw error
       }
       if (!response.body) throw new QoderLlmError('Qoder model-server response has no body.', 'EMPTY_RESPONSE')
-      let modelStream: ReadableStream<Uint8Array> = response.body
-      let capture: ModelServerCapture | undefined
-      try {
-        const started = await captureModelServerStream(request.requestId, body, response.body, resetIdle)
-        modelStream = started.modelStream
-        capture = started.capture
-      } catch (error) {
-        dependencies.logger?.warn?.('[Qoder Stream] SSE capture could not start', {
-          requestId: request.requestId,
-          reason: error instanceof Error ? error.message : String(error),
-        })
-      }
       resetIdle()
       const streamStartedAt = performance.now()
       let chunkCount = 0
       let firstChunkReceived = false
       let finishReason: string | undefined
-      let streamCompleted = false
-      try {
-        for await (const chunk of parseModelServerSse(modelStream, {
-          headers: response.headers,
-          httpStatus: response.status,
-          onActivity: resetIdle,
-          onControlFrame: kind => {
-            if (kind !== 'done') dependencies.logger?.warn?.('[Qoder Stream] Control frame skipped', {
-              transport: 'http',
-              kind,
-              ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
-            })
-          },
-          onMalformedFrame: details => dependencies.logger?.warn?.('[Qoder Stream] Malformed SSE frame', {
+      for await (const chunk of parseModelServerSse(response.body, {
+        headers: response.headers,
+        httpStatus: response.status,
+        onActivity: resetIdle,
+        onControlFrame: kind => {
+          if (kind !== 'done') dependencies.logger?.warn?.('[Qoder Stream] Control frame skipped', {
             transport: 'http',
-            ...details,
+            kind,
             ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
-          }),
-        })) {
-          compression.confirm()
-          chunkCount++
-          if (!firstChunkReceived) {
-            firstChunkReceived = true
-            dependencies.logger?.debug?.('[Qoder Stream] First chunk received', {
-              transport: 'http',
-              durationMs: Math.round(performance.now() - startedAt),
-              ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
-            })
-          }
-          if (chunk.type === 'finish') finishReason = chunk.reason.kind
-          yield chunk
+          })
+        },
+        onMalformedFrame: details => dependencies.logger?.warn?.('[Qoder Stream] Malformed SSE frame', {
+          transport: 'http',
+          ...details,
+          ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
+        }),
+      })) {
+        compression.confirm()
+        chunkCount++
+        if (!firstChunkReceived) {
+          firstChunkReceived = true
+          dependencies.logger?.debug?.('[Qoder Stream] First chunk received', {
+            transport: 'http',
+            durationMs: Math.round(performance.now() - startedAt),
+            ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
+          })
         }
-        streamCompleted = true
-      } finally {
-        if (capture !== undefined) {
-          let captureComplete = true
-          try { await capture.done }
-          catch (error) {
-            captureComplete = false
-            dependencies.logger?.warn?.('[Qoder Stream] SSE capture ended early', {
-              requestId: request.requestId,
-              reason: error instanceof Error ? error.message : String(error),
-            })
-          }
-          const details = {
-            requestId: request.requestId,
-            requestPath: capture.requestPath,
-            responsePath: capture.responsePath,
-            complete: captureComplete,
-          }
-          if (streamCompleted && captureComplete) dependencies.logger?.debug?.('[Qoder Stream] SSE capture saved', details)
-          else dependencies.logger?.warn?.('[Qoder Stream] SSE capture saved', details)
-        }
+        if (chunk.type === 'finish') finishReason = chunk.reason.kind
+        yield chunk
       }
       dependencies.logger?.debug?.('[Qoder Stream] Stream completed', {
         transport: 'http',
