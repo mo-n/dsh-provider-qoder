@@ -50,6 +50,12 @@ export function getQoderQueueFinishUrl(region: QoderRegion): string {
   return `${resolveQoderEndpoints(region).baseUrl}algo/api/v2/service/ask/finish?Encode=1`
 }
 
+/**  model-server HTTP endpoint. */
+export function getQoderModelServerUrl(region: QoderRegion = 'global'): string {
+  const host = region === 'china' ? 'gateway.qoder.com.cn' : 'api2-v2.qoder.sh'
+  return `https://${host}/model/v1/chat/completions`
+}
+
 export function getQoderModelListUrl(region: QoderRegion = 'global'): string {
   const { baseUrl } = resolveQoderEndpoints(region)
   return `${baseUrl}algo/api/v2/model/list?Encode=1`

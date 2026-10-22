@@ -23,7 +23,7 @@ export interface QoderSearchClientOptions {
   logger?: QoderLogger
   timeoutMs?: number
   resolveCredentials: (signal?: AbortSignal) => Promise<CosyCredentials>
-  refreshCredentials?: (signal?: AbortSignal) => Promise<CosyCredentials>
+  refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
   now?: () => number
 }
 
@@ -57,7 +57,7 @@ export class QoderSearchClient {
   private readonly logger?: QoderLogger
   private readonly timeoutMs: number
   private readonly resolveCredentials: (signal?: AbortSignal) => Promise<CosyCredentials>
-  private readonly refreshCredentials?: (signal?: AbortSignal) => Promise<CosyCredentials>
+  private readonly refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
   private readonly now: () => number
 
   constructor(options: QoderSearchClientOptions) {
@@ -85,7 +85,7 @@ export class QoderSearchClient {
         reason: first.reason,
       })
       try {
-        credentials = await this.refreshCredentials(signal)
+        credentials = await this.refreshCredentials(credentials, signal)
       } catch (error) {
         if (signal?.aborted) throw searchAborted(signal, error)
         throw new WebError(`Qoder credential refresh failed: ${String(error)}`, 'WEB_PROVIDER_ERROR', { cause: error })

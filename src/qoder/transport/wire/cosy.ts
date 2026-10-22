@@ -10,6 +10,11 @@
 import crypto from 'node:crypto'
 import { hostname } from 'node:os'
 import { getMachineId } from '../machine-id.ts'
+import { qoderClientType, qoderIdeVersion, qoderMachineOs } from './client-identity.ts'
+import type { QoderCredentials } from './credentials.ts'
+
+export { defaultUserAgent, qoderClientType, qoderIdeVersion, qoderMachineOs } from './client-identity.ts'
+export type { QoderCredentials as CosyCredentials } from './credentials.ts'
 
 const qoderRSAPublicKey = `-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
@@ -18,29 +23,9 @@ MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`
 
-// Declared upstream client version; offline protocol fixtures retain their audited version.
-export const qoderIdeVersion = '1.1.65'
-export const qoderClientType = '5'
-export const defaultUserAgent = `qoder/${qoderIdeVersion}`
 const qoderDataPolicy = 'disagree'
 const qoderLoginVersion = 'v2'
 const qoderMachineTypeMagic = '5'
-
-export function qoderMachineOs(platform: string = process.platform, arch: string = process.arch): string {
-  const architecture = arch === 'arm64' ? 'aarch64' : arch === 'x64' ? 'x86_64' : arch
-  return `${architecture}_${platform}`
-}
-
-export interface CosyCredentials {
-  userID: string
-  authToken: string
-  name: string
-  email: string
-  machineID?: string
-  organizationId?: string
-  organizationTags?: string[]
-  dataPolicyAgreed?: boolean
-}
 
 interface UserInfo {
   uid: string
@@ -86,7 +71,7 @@ function aesEncryptCBCBase64(plaintext: string, keyStr: string): string {
 export function buildAuthHeaders(
   body: Buffer | string | null,
   requestURL: string,
-  creds: CosyCredentials,
+  creds: QoderCredentials,
 ): Record<string, string> {
   if (!creds.userID) {
     throw new Error('cosy: user id is empty')

@@ -4,7 +4,7 @@ import { defaultModelQueueMaxWaitMs } from '../qoder/queue.ts'
 import z from '@deepseek-ai/schemastery'
 import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
-import { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs } from '../qoder/transport/index.ts'
+import { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs, type QoderModelTransport } from '../qoder/transport/index.ts'
 
 export interface QoderModelsByRegion {
   global?: QoderCatalogModel[]
@@ -12,6 +12,7 @@ export interface QoderModelsByRegion {
 }
 
 export type QoderWebSearchMode = 'auto' | 'always' | 'disabled'
+export type { QoderModelTransport }
 
 export interface Config {
   modelQueueMaxWaitMs?: number
@@ -21,6 +22,8 @@ export interface Config {
   responseHeaderTimeoutMs?: number
   preserveThinking?: boolean
   webSearchMode?: QoderWebSearchMode
+  requestCompression?: boolean
+  modelTransport?: QoderModelTransport
 }
 
 const catalogModel = z.object({
@@ -61,6 +64,8 @@ export const Config: z<Config> = z.object({
   responseHeaderTimeoutMs: z.number().step(1).min(1).default(defaultResponseHeaderTimeoutMs),
   preserveThinking: z.boolean().default(true),
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
+  requestCompression: z.boolean().default(false),
+  modelTransport: z.union(['http', 'legacy'] as const).default('legacy'),
 })
 
 // DSH profile configuration is live; direct apply calls can also pass plain config.

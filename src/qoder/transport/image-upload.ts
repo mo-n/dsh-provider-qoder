@@ -50,7 +50,7 @@ export interface QoderImageUploaderOptions {
   cacheCapacity?: number
   maxConcurrency?: number
   /** Re-resolve credentials after the center service rejects the current ones. */
-  refreshCredentials?: (signal?: AbortSignal, rejected?: CosyCredentials) => Promise<CosyCredentials>
+  refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
   now?: () => number
 }
 
@@ -135,7 +135,7 @@ export class QoderImageUploader {
   private readonly cacheTtlMs: number
   private readonly cacheCapacity: number
   private readonly maxConcurrency: number
-  private readonly refreshCredentials?: (signal?: AbortSignal, rejected?: CosyCredentials) => Promise<CosyCredentials>
+  private readonly refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
   private readonly now: () => number
   private active = 0
   private readonly queue: Array<() => void> = []
@@ -290,7 +290,7 @@ export class QoderImageUploader {
         reason: first.reason,
       })
       try {
-        refreshed = await this.refreshCredentials(signal, credentials)
+        refreshed = await this.refreshCredentials(credentials, signal)
       } catch (error) {
         if (signal.aborted) throw aborted()
         this.warnDegraded('credential refresh failed', error)

@@ -3,14 +3,14 @@
 import type { ContentBlock, ImageBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { QoderLlmError } from '../../errors.ts'
-import type { CosyCredentials } from './cosy.ts'
+import type { QoderCredentials } from './credentials.ts'
 import type {
   QoderWireImagePart,
   QoderWireMessage,
   QoderWireTextPart,
   QoderWireTool,
   QoderWireToolCall,
-} from './wire-types.ts'
+} from './model-types.ts'
 
 /** Legacy hosts wrap tool results in content blocks; current hosts use role: tool. */
 interface ToolResultBlock {
@@ -31,7 +31,7 @@ export type QoderImageAttachments = Pick<AttachmentStore, 'imageLimits' | 'readI
 export interface QoderImageResolver {
   resolveImageUrl(
     image: RequestImageAttachment,
-    credentials: CosyCredentials,
+    credentials: QoderCredentials,
     signal?: AbortSignal,
   ): Promise<string>
 }
@@ -39,7 +39,7 @@ export interface QoderImageResolver {
 export interface QoderTranslateContext {
   attachments?: QoderImageAttachments
   uploader?: QoderImageResolver
-  credentials?: CosyCredentials
+  credentials?: QoderCredentials
   signal?: AbortSignal
 }
 

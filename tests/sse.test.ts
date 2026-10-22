@@ -8,7 +8,7 @@ function streamOf(lines: readonly string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
   return new ReadableStream({
     start(controller) {
-      for (const line of lines) controller.enqueue(encoder.encode(`${line}\n`))
+      for (const line of lines) controller.enqueue(encoder.encode(`${line}\n\n`))
       controller.close()
     },
   })
@@ -19,6 +19,23 @@ function data(body: unknown): string {
 }
 
 const done = `data: ${JSON.stringify({ statusCodeValue: 200, body: '[DONE]' })}`
+
+test('legacy SSE skips quota and notification control frames inside or outside envelopes', async () => {
+  const controls = ['[NOT_EXCEED_QUOTA]', '[EXCEED_QUOTA]#{}', '[NOTIFICATIONS]#{"notifications":[]}']
+  const chunks = []
+  const observed: string[] = []
+  for await (const chunk of parseQoderSse(streamOf([
+    ...controls.map(value => `data: ${value}`),
+    ...controls.map(value => `data: ${JSON.stringify({ statusCodeValue: 200, body: value })}`),
+    data({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+    done,
+  ]), { onControlFrame: kind => observed.push(kind) })) chunks.push(chunk)
+  assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), 'ok')
+  assert.deepEqual(observed, [
+    'quota-available', 'quota-exceeded', 'notifications',
+    'quota-available', 'quota-exceeded', 'notifications', 'done',
+  ])
+})
 
 test('parseQoderSse unwraps text, disjoint usage, and envelope-body DONE', async () => {
   const body = JSON.stringify({
@@ -228,7 +245,7 @@ test('parseQoderSse accepts a final frame without a trailing newline', async () 
   const inner = JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}\n`))
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ statusCodeValue: 200, body: inner })}\n\n`))
       controller.enqueue(encoder.encode('data: [DONE]'))
       controller.close()
     },

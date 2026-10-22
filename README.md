@@ -56,15 +56,13 @@ Browser authorization is stored per region, shared across the DSH instance and r
 
 ### 2. View Account & Manage Models
 
-Open **Settings → Qoder** to view account and quota details, configure the web search policy, and adjust enabled models:
+Open **Settings → Qoder** to view account and quota details, configure web search, and adjust enabled models.
 
 <p align="center">
   <img src="./assets/account-quota.png" alt="Qoder account quota and model settings" width="650" />
 </p>
 
 For advanced YAML options (queue wait limits, request timeouts, and historical reasoning preservation), see [Configuration](./docs/wiki/configuration.md).
-
-For models offering multiple Qoder context tiers, use the context selector beside the conversation input. When opening a historical conversation, the selector waits for DSH to restore the session before reading its effective tier; manual selections take precedence over the historical tier and model settings.
 
 ## Upcoming Features
 

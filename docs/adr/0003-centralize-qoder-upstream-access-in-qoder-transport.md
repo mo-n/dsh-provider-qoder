@@ -32,3 +32,26 @@ Ordinary failure delay hints still follow DSH's retry policy.
 Other transport capabilities retain their own error protocols. DSH owns the
 existing retry and generic quota presentation, while transport diagnostics retain
 the concrete upstream code and distinguish HTTP status from SSE business status.
+
+## Model-server HTTP and legacy model transport
+
+The model transport defaults to the COSY `/algo/` model protocol (`legacy`).
+Qoder's model-server HTTP SSE protocol with a Bearer subscriber token remains
+selectable as `http`. These are separate wire protocols; both remain inside Qoder transport.
+Model discovery, account reads, image publication, and web search continue to use
+their independently verified endpoints and authentication formats.
+
+Qoder transport owns one auth manager per region-bound instance. It exchanges the
+Managed Qoder PAT, merges concurrent refreshes, rejects stale credential results,
+and performs at most one same-protocol recovery before a model stream starts.
+An HTTP-successful stream is never replayed after a later authentication or quota
+error. Model protocols are switched only by explicit subscriber configuration.
+Legacy queue recovery before output retains the turn-scoped lease behavior above;
+ordinary model-generation retries remain DSH-owned.
+Refresh remains request-driven, so this decision does not introduce a background
+refresh timer.
+
+Zstd request-body compression is disabled by default. Subscribers can opt in
+through the YAML setting `requestCompression: true`; the provider does not consume
+the CLI's remote compression feature gate. Model transport is also configured only
+through YAML.

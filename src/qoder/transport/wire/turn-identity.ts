@@ -26,7 +26,7 @@
  */
 
 import crypto from 'node:crypto'
-import type { QoderWireMessage } from './wire-types.ts'
+import type { QoderWireMessage } from './model-types.ts'
 
 /**
  * Resolved identity fields for a Qoder wire request.

@@ -14,6 +14,7 @@ import type { QoderAuthorizationTransport, QoderCredentialLease } from '../autho
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 
 export { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs }
+export type QoderModelTransport = 'http' | 'legacy'
 
 export interface QoderTransport {
   /** Optional on third-party test transports; always present on the default transport. */
@@ -30,6 +31,9 @@ export interface QoderTransportOptions {
   onQueueUpdate?: (update: QoderQueueUpdate) => void
   /** Capture the current host run before I/O; reject late leases after its boundary closes. */
   captureQueueLeaseOwner?: (sessionId: string) => QoderQueueOwner | undefined
+
+  requestCompression?: boolean
+  modelTransport?: QoderModelTransport
   resolvePat: () => Promise<string>
   /** Resolve an instance-managed browser authorization; undefined retains legacy PAT behavior. */
   resolveCredential?: (signal?: AbortSignal) => Promise<QoderCredentialLease | undefined>

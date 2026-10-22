@@ -8,6 +8,7 @@ import {
   type StreamChunk,
   type TokenUsage,
 } from '@deepseek-ai/dsh-llm'
+import { QoderRequestCompression } from './request-compression.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import { ModelQueue, queueFailure, type QueueClock } from './queue.ts'
 import type { QoderQueueLease, QoderQueueUpdate } from '../queue.ts'
@@ -27,6 +28,7 @@ export interface QoderChatDependencies {
   fetch: typeof fetch
   logger?: QoderLogger
   region: QoderRegion
+  requestCompression?: boolean
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   modelQueueMaxWaitMs?: number
@@ -125,10 +127,7 @@ async function* streamAttempt(
   let lastActivityAt = startedAt
   const onCallerAbort = (): void => requestController.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', onCallerAbort, { once: true })
-  let headerTimer = setTimeout(() => {
-    headerTimedOut = true
-    requestController.abort('response header timeout')
-  }, dependencies.responseHeaderTimeoutMs)
+  let headerTimer: ReturnType<typeof setTimeout> | undefined
   const resetIdleTimer = (): void => {
     lastActivityAt = performance.now()
     if (idleTimer !== undefined) clearTimeout(idleTimer)
@@ -150,18 +149,26 @@ async function* streamAttempt(
       contextTier: markedTiers.length === 1 ? markedTiers[0][0] : null,
       context_length: request.parameters.context_length ?? null,
     }))
+    const compression = new QoderRequestCompression()
     let response: Response | undefined
     let activeCredentials = credentials
     for (let attempt = 0; attempt < 2; attempt++) {
       if (options.signal?.aborted) throw aborted('Request was aborted.')
-      if (attempt > 0) {
-        headerTimer = setTimeout(() => {
-          headerTimedOut = true
-          requestController.abort('response header timeout')
-        }, dependencies.responseHeaderTimeoutMs)
-      }
-      response = await dependencies.fetch(chatUrl, {
-        method: 'POST',
+      response = await compression.send({
+        url: chatUrl, protocol: 'legacy', body: encodedBytes.toString('latin1'),
+        enabled: dependencies.requestCompression, signal: requestController.signal,
+        logger: dependencies.logger, requestId: request.request_id,
+        dispatch: async (wireBody, headers) => {
+          headerTimer = setTimeout(() => {
+            headerTimedOut = true
+            requestController.abort('response header timeout')
+          }, dependencies.responseHeaderTimeoutMs)
+          try {
+            return await dependencies.fetch(chatUrl, {
+              method: 'POST', headers, body: wireBody, signal: requestController.signal,
+            })
+          } finally { clearTimeout(headerTimer) }
+        },
         headers: {
           'content-type': 'application/json',
           'accept': 'text/event-stream',
@@ -175,8 +182,6 @@ async function* streamAttempt(
           'X-Request-Id': request.request_id,
           'X-Session-ID': request.session_id,
         },
-        body: encodedBytes,
-        signal: requestController.signal,
       })
       clearTimeout(headerTimer)
       reqId = qoderRequestId(response.headers)
@@ -227,22 +232,40 @@ async function* streamAttempt(
     let finishReason: string | undefined
     const streamStartedAt = performance.now()
 
-    for await (const chunk of parseQoderSse(response.body, { queueRecovery: true, onActivity: resetIdleTimer, headers: response.headers, httpStatus: response.status })) {
-      chunkCount++
-      if (firstChunkDurationMs === undefined) {
-        firstChunkDurationMs = Math.round(performance.now() - startedAt)
-        dependencies.logger?.debug?.('[Qoder Stream] First chunk received', {
-          durationMs: firstChunkDurationMs,
-          ...reqId === undefined ? {} : { requestId: reqId },
-        })
+    try {
+      for await (const chunk of parseQoderSse(response.body, {
+        queueRecovery: true,
+        onActivity: resetIdleTimer,
+        headers: response.headers,
+        httpStatus: response.status,
+        onControlFrame: kind => {
+          if (kind !== 'done') dependencies.logger?.warn?.('[Qoder Stream] Control frame skipped', {
+            transport: 'legacy',
+            kind,
+            ...reqId === undefined ? {} : { requestId: reqId },
+          })
+        },
+      })) {
+        compression.confirm()
+        chunkCount++
+        if (firstChunkDurationMs === undefined) {
+          firstChunkDurationMs = Math.round(performance.now() - startedAt)
+          dependencies.logger?.debug?.('[Qoder Stream] First chunk received', {
+            durationMs: firstChunkDurationMs,
+            ...reqId === undefined ? {} : { requestId: reqId },
+          })
+        }
+        if (chunk.type === 'usage') {
+          tokenUsage = chunk.usage
+        }
+        if (chunk.type === 'finish') {
+          finishReason = chunk.reason.kind
+        }
+        yield chunk
       }
-      if (chunk.type === 'usage') {
-        tokenUsage = chunk.usage
-      }
-      if (chunk.type === 'finish') {
-        finishReason = chunk.reason.kind
-      }
-      yield chunk
+    } catch (error) {
+      if (chunkCount === 0) compression.rejectLegacyError(error)
+      throw error
     }
 
     dependencies.logger?.debug?.('[Qoder Stream] Stream completed', {
