@@ -64,8 +64,8 @@ export const Config: z<Config> = z.object({
   responseHeaderTimeoutMs: z.number().step(1).min(1).default(defaultResponseHeaderTimeoutMs),
   preserveThinking: z.boolean().default(true),
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
-  requestCompression: z.boolean().default(true),
-  modelTransport: z.union(['http', 'legacy'] as const).default('http'),
+  requestCompression: z.boolean().default(false),
+  modelTransport: z.union(['http', 'legacy'] as const).default('legacy'),
 })
 
 // DSH profile configuration is live; direct apply calls can also pass plain config.

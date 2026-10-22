@@ -120,7 +120,7 @@ export class QoderRequestCompression {
       return options.dispatch(wireBody, wireHeaders)
     }
     signal.throwIfAborted()
-    const enabled = envBoolean(process.env.QODER_ZSTD_REQUEST_BODIES) ?? options.enabled ?? true
+    const enabled = envBoolean(process.env.QODER_ZSTD_REQUEST_BODIES) ?? options.enabled ?? false
     const key = endpointKey(protocol, url)
     const minChars = envInteger(process.env.QODER_ZSTD_REQUEST_BODY_MIN_CHARS, 4096)
     const level = envInteger(process.env.QODER_ZSTD_REQUEST_BODY_LEVEL, 1, 22)

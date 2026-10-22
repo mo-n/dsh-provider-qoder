@@ -108,8 +108,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     modelQueueMaxWaitMs: config.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
     preserveThinking: config.preserveThinking ?? true,
     webSearchMode: config.webSearchMode ?? 'auto',
-    requestCompression: config.requestCompression ?? true,
-    modelTransport: config.modelTransport ?? 'http',
+    requestCompression: config.requestCompression ?? false,
+    modelTransport: config.modelTransport ?? 'legacy',
   }
   let current = (): QoderConfig => baseConfig
   let authorization: QoderBrowserAuthorizationManager
@@ -124,8 +124,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     resolvePat: resolvePat ?? (() => resolveManagedQoderPat(ctx.credentials)),
     resolveCredential: resolvePat ? undefined : signal => authorization.lease(region, signal),
 
-    requestCompression: current().requestCompression ?? true,
-    modelTransport: current().modelTransport ?? 'http',
+    requestCompression: current().requestCompression ?? false,
+    modelTransport: current().modelTransport ?? 'legacy',
     logger,
     streamIdleTimeoutMs,
     responseHeaderTimeoutMs,
@@ -147,8 +147,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       modelQueueMaxWaitMs: value.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
       preserveThinking: value.preserveThinking ?? true,
       webSearchMode: value.webSearchMode ?? 'auto',
-      requestCompression: value.requestCompression ?? true,
-      modelTransport: value.modelTransport ?? 'http',
+      requestCompression: value.requestCompression ?? false,
+      modelTransport: value.modelTransport ?? 'legacy',
     }
   }
 

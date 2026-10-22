@@ -19,7 +19,7 @@ const options = (signal?: AbortSignal): GenerateOptions => ({
   sessionId: 'test-session' as GenerateOptions['sessionId'],
   messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
 })
-const envelope = (body: unknown, statusCodeValue = 200): string => `data: ${JSON.stringify({ statusCodeValue, body: JSON.stringify(body) })}\n`
+const envelope = (body: unknown, statusCodeValue = 200): string => `data: ${JSON.stringify({ statusCodeValue, body: JSON.stringify(body) })}\n\n`
 const queueFrame = envelope({ code: '10605', data: { isQueued: true, queueCount: 2, waitTime: 4 } }, 429)
 const success = (): Response => new Response(envelope({ choices: [{ delta: { content: 'Answer' } }] }) + 'data: [DONE]\n')
 const collect = async (stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> => {

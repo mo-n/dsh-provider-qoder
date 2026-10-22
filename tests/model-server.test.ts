@@ -29,16 +29,44 @@ async function collect(transport: ReturnType<typeof createQoderTransport>): Prom
   return content
 }
 
-test('existing settings select Bearer HTTP and legacy remains explicit', () => {
-  assert.equal(Config({}).modelTransport, 'http')
-  assert.equal(Config({ modelTransport: 'legacy' }).modelTransport, 'legacy')
+test('existing settings select legacy and Bearer HTTP remains explicit', () => {
+  assert.equal(Config({}).modelTransport, 'legacy')
+  assert.equal(Config({ modelTransport: 'http' }).modelTransport, 'http')
   assert.throws(() => Config({ modelTransport: 'other' as 'http' }))
 })
 
-test('default transport sends Bearer model-server request and reads direct SSE', async () => {
+test('unspecified transport and compression use uncompressed legacy requests', async () => {
+  let modelCalls = 0
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: async () => 'pt-model',
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-model', expires_in: 3600 }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-model' }))
+      assert.match(url, /algo\/api\/v2\/service\/pro\/sse\/agent_chat_generation/u)
+      modelCalls++
+      const headers = new Headers(init?.headers)
+      assert.equal(headers.get('content-encoding'), null)
+      assert.ok(headers.get('cosy-key'))
+      assert.equal(typeof init?.body, 'string')
+      const body = JSON.stringify({ choices: [{ delta: { content: 'legacy response' }, finish_reason: 'stop' }] })
+      return new Response(`data: ${JSON.stringify({ statusCodeValue: 200, body })}\n\ndata: [DONE]\n\n`)
+    }) as typeof fetch,
+  })
+  let text = ''
+  const largeRequest = request()
+  largeRequest.messages = [createUserMessage({ content: [{ type: 'text', text: 'history '.repeat(2000) }], source: { kind: 'user' } })]
+  for await (const chunk of transport.stream(largeRequest)) if (chunk.type === 'text-delta') text += chunk.text
+  assert.equal(text, 'legacy response')
+  assert.equal(modelCalls, 1)
+})
+
+test('explicit HTTP transport sends Bearer model-server request and reads direct SSE', async () => {
   let chatCalls = 0
   const debug: unknown[][] = []
   const transport = createQoderTransport({
+    modelTransport: 'http',
     region: 'global',
     resolvePat: async () => 'pt-model',
     resolveMachineId: () => 'machine-test',
@@ -86,6 +114,7 @@ test('model-server HTTP 401 refreshes the rejected job token once and keeps requ
   let exchanges = 0
   const requestIds: string[] = []
   const transport = createQoderTransport({
+    modelTransport: 'http',
     region: 'china',
     resolvePat: async () => 'pt-model',
     resolveMachineId: () => 'machine-test',
@@ -131,6 +160,7 @@ test('model-server business rejection does not refresh or enter legacy', async (
   let exchanges = 0
   let modelCalls = 0
   const transport = createQoderTransport({
+    modelTransport: 'http',
     region: 'global',
     resolvePat: async () => 'pt-model',
     fetch: (async (input: RequestInfo | URL) => {
@@ -153,6 +183,7 @@ test('model-server business rejection does not refresh or enter legacy', async (
 test('model-server stream authentication error is not replayed', async () => {
   let modelCalls = 0
   const transport = createQoderTransport({
+    modelTransport: 'http',
     region: 'global',
     resolvePat: async () => 'pt-model',
     fetch: (async (input: RequestInfo | URL) => {
@@ -445,6 +476,7 @@ test('model-server records response timing and request ID without logging creden
   const entries: Array<{ message: string; details: unknown[] }> = []
   const warnings: Array<{ message: string; details: unknown[] }> = []
   const transport = createQoderTransport({
+    modelTransport: 'http',
     region: 'global',
     resolvePat: async () => 'pt-model',
     logger: {
@@ -479,6 +511,7 @@ test('model-server records response timing and request ID without logging creden
 test('model-server logs only structural diagnostics after a streamed frame fails to decode', async () => {
   const warnings: unknown[][] = []
   const transport = createQoderTransport({
+    modelTransport: 'http',
     region: 'global',
     resolvePat: async () => 'pt-model',
     logger: { warn: (...details) => warnings.push(details) },
@@ -506,6 +539,7 @@ test('failed tool-call parsing saves the complete request body and raw SSE respo
   const rawResponse = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_image","arguments":"{\\"path\\":"}}]},"finish_reason":"tool_calls"}]}\n\n' +
     'data: [DONE]\n\n'
   const transport = createQoderTransport({
+    modelTransport: 'http',
     region: 'global',
     resolvePat: async () => 'pt-model',
     logger: { warn: (...details) => warnings.push(details) },

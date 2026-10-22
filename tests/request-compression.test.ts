@@ -13,7 +13,7 @@ const body = JSON.stringify({ messages: [{ role: 'user', content: '历史 histor
 let endpoint = 0
 function options(protocol: 'http' | 'legacy' = 'http') {
   return {
-    url: `https://compression-${++endpoint}.example/model`, protocol, body,
+    url: `https://compression-${++endpoint}.example/model`, protocol, body, enabled: true,
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test', 'Content-Length': '100' },
     signal: new AbortController().signal, requestId: 'test-request',
   }
@@ -28,6 +28,15 @@ test('Zstd preserves complete UTF-8 JSON and removes stale content length', asyn
     assert.equal(headers['Content-Encoding'], 'zstd')
     assert.equal(headers.Authorization, 'Bearer test')
     assert.ok(!('Content-Length' in headers))
+    return new Response('ok')
+  } })
+})
+
+test('compression sends identity when the caller leaves its setting unspecified', async () => {
+  const { enabled: _enabled, ...args } = options()
+  await new QoderRequestCompression().send({ ...args, dispatch: async (wire, headers) => {
+    assert.equal(wire, body)
+    assert.equal(new Headers(headers).get('content-encoding'), null)
     return new Response('ok')
   } })
 })
@@ -197,8 +206,8 @@ test('CLI environment overrides the provider switch and validates thresholds', a
       assert.equal(zstdDecompressSync(wire).toString(), 'a'.repeat(1000))
       return new Response('ok')
     } })
-    assert.equal(Config({}).requestCompression, true)
-    assert.equal(Config({ requestCompression: false }).requestCompression, false)
+    assert.equal(Config({}).requestCompression, false)
+    assert.equal(Config({ requestCompression: true }).requestCompression, true)
   } finally {
     keys.forEach((key, index) => {
       if (saved[index] === undefined) delete process.env[key]
@@ -218,7 +227,7 @@ test('HTTP compresses history exceeding 256 KiB and keeps identity across authen
   const text: string[] = []
   for await (const chunk of streamModelServerChat(request, undefined, credentials,
     [{ role: 'user', content: 'large history '.repeat(25000) }], {
-      region: 'global', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+      requestCompression: true, region: 'global', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
       refreshCredentials: async () => { refreshes++; return { ...credentials, authToken: 'new' } },
       fetch: (async (_url, init) => {
         const headers = new Headers(init?.headers)
@@ -247,7 +256,7 @@ test('HTTP failures capture the actual request encoding and bounded response wit
     for await (const _chunk of streamModelServerChat(request, undefined,
       { userID: 'capture-user', authToken: 'never-save-this-token', name: '', email: '' },
       [{ role: 'user', content: 'long history '.repeat(2000) }], {
-        region: 'global', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+        requestCompression: true, region: 'global', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
         logger: { warn: (...details) => logs.push(details) },
         refreshCredentials: async () => { throw new Error('unexpected authentication recovery') },
         fetch: (async () => new Response(upstream, { status: 500, headers: { 'content-type': 'application/json' } })) as typeof fetch,
@@ -281,7 +290,7 @@ test('legacy compresses WAF bytes and returns a DSH-retryable pre-output SSE rej
   await assert.rejects(async () => {
     for await (const _chunk of streamQoderChat(request, undefined, credentials,
       [{ role: 'user', content: 'history '.repeat(2000) }], {
-        region: 'china', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+        requestCompression: true, region: 'china', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
         fetch: (async (_url, init) => {
           calls++
           assert.equal(new Headers(init?.headers).get('content-encoding'), 'zstd')
@@ -338,7 +347,7 @@ for (const fallbackStatus of [500, 200]) {
       for await (const _chunk of streamModelServerChat(request, undefined,
         { userID: 'first-rejection-user', authToken: 'do-not-capture-authorization', name: '', email: '' },
         [{ role: 'user', content: 'history '.repeat(2000) }], {
-          region: 'global', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
+          requestCompression: true, region: 'global', responseHeaderTimeoutMs: 1000, streamIdleTimeoutMs: 1000,
           logger: { warn: (...details) => logs.push(details), debug: (...details) => logs.push(details) },
           refreshCredentials: async () => { throw new Error('unexpected refresh') },
           fetch: (async (_url, init) => {

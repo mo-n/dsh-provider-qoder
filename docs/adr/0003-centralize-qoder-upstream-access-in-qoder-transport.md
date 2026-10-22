@@ -35,17 +35,22 @@ the concrete upstream code and distinguish HTTP status from SSE business status.
 
 ## Model-server HTTP and legacy model transport
 
-The model transport defaults to Qoder's model-server HTTP SSE protocol with a
-Bearer Qoder job token. The COSY `/algo/` model protocol remains selectable as
-`legacy`. These are separate wire protocols; both remain inside Qoder transport.
+The model transport defaults to the COSY `/algo/` model protocol (`legacy`).
+Qoder's model-server HTTP SSE protocol with a Bearer subscriber token remains
+selectable as `http`. These are separate wire protocols; both remain inside Qoder transport.
 Model discovery, account reads, image publication, and web search continue to use
 their independently verified endpoints and authentication formats.
 
 Qoder transport owns one auth manager per region-bound instance. It exchanges the
 Managed Qoder PAT, merges concurrent refreshes, rejects stale credential results,
 and performs at most one same-protocol recovery before a model stream starts.
-An HTTP-successful stream is never replayed after a later error. The first version
-does not automatically switch model protocols after a failure; users can select
-`legacy` explicitly. This preserves DSH ownership of model-generation retries.
+An HTTP-successful stream is never replayed after a later authentication or quota
+error. Model protocols are switched only by explicit subscriber configuration.
+Legacy queue recovery before output retains the turn-scoped lease behavior above;
+ordinary model-generation retries remain DSH-owned.
 Refresh remains request-driven, so this decision does not introduce a background
 refresh timer.
+
+Zstd request-body compression is disabled by default. Subscribers can opt in
+through `requestCompression: true` or the explicit CLI-compatible environment
+override; the provider does not consume the CLI's remote compression feature gate.

@@ -61,8 +61,8 @@ export class DefaultQoderTransport implements QoderTransport {
     this.onQueueUpdate = options.onQueueUpdate
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
-    this.requestCompression = options.requestCompression ?? true
-    this.modelTransport = options.modelTransport ?? 'http'
+    this.requestCompression = options.requestCompression ?? false
+    this.modelTransport = options.modelTransport ?? 'legacy'
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
     this.authorization = new QoderBrowserAuthorization(options)
@@ -152,12 +152,9 @@ export class DefaultQoderTransport implements QoderTransport {
 
   async searchWeb(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
     const lease = await this.lease(signal)
-    let token: string | undefined
     const client = new QoderSearchClient({ fetch: this.fetchImpl, logger: this.logger, region: this.region,
       resolveCredentials: async nextSignal => {
-        const credentials = await lease.resolve(nextSignal)
-        token = credentials.authToken
-        return credentials
+        return lease.resolve(nextSignal)
       },
       refreshCredentials: (rejected, nextSignal) => lease.resolve(nextSignal, rejected.authToken),
     })

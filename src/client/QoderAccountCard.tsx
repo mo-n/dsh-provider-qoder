@@ -271,7 +271,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
   }
 
   const webSearchMode: QoderWebSearchMode = modelSnapshot.value?.webSearchMode ?? 'auto'
-  const modelTransport = modelSnapshot.value?.modelTransport ?? 'http'
+  const modelTransport = modelSnapshot.value?.modelTransport ?? 'legacy'
   const canModifySearchMode = modelSnapshot.status === 'ready' && modelSnapshot.writable
 
   const handleSearchModeChange = async (mode: QoderWebSearchMode) => {
