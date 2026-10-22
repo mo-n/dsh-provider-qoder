@@ -39,7 +39,6 @@ test('client settings mounts with declared services and reports rejected writes'
     storeRegion(region: string): Promise<boolean>
     storeModels(region: string, models: unknown[]): Promise<boolean>
     storeWebSearchMode(mode: string): Promise<boolean>
-    storeModelTransport(mode: string): Promise<boolean>
   }
   let accepted: boolean | undefined
   const writes: unknown[] = []
@@ -92,9 +91,7 @@ test('client settings mounts with declared services and reports rejected writes'
   assert.equal(await operations.storeRegion('global'), false)
   assert.equal(await operations.storeModels('china', []), false)
   assert.equal(await operations.storeWebSearchMode('disabled'), false)
-  assert.equal(await operations.storeModelTransport('legacy'), false)
-  assert.equal(writes.length, 5)
-  assert.deepEqual(JSON.parse(JSON.stringify(writes[4])), ['modelTransport', 'legacy'])
+  assert.equal(writes.length, 4)
   assert.deepEqual(JSON.parse(JSON.stringify(writes[2])), [{
     op: 'set', path: ['modelsByRegion', 'china'], value: [],
   }])

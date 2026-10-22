@@ -71,7 +71,6 @@ export class DefaultQoderTransport implements QoderTransport {
     this.logger?.debug?.('[Qoder Transport] Request compression configuration', {
       implementation: 'zstd-v1', node: process.version,
       requestCompression: this.requestCompression,
-      environmentOverrideConfigured: process.env.QODER_ZSTD_REQUEST_BODIES !== undefined,
     })
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs
     this.responseHeaderTimeoutMs = options.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs

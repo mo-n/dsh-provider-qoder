@@ -271,35 +271,12 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
   }
 
   const webSearchMode: QoderWebSearchMode = modelSnapshot.value?.webSearchMode ?? 'auto'
-  const modelTransport = modelSnapshot.value?.modelTransport ?? 'legacy'
   const canModifySearchMode = modelSnapshot.status === 'ready' && modelSnapshot.writable
 
   const handleSearchModeChange = async (mode: QoderWebSearchMode) => {
     if (!canModifySearchMode || mode === webSearchMode) return
     await operations.storeWebSearchMode(mode)
   }
-
-  const renderModelTransportSection = () => (
-    <div className={css.searchModeSection}>
-      <div className={css.quotaHeader}><span className={css.quotaLabel}>{t('modelTransportLabel')}</span></div>
-      <div className={css.regionGroup} role="radiogroup" aria-label={t('modelTransportLabel')}>
-        {(['http', 'legacy'] as const).map(mode => (
-          <button
-            key={mode}
-            type="button"
-            role="radio"
-            aria-checked={modelTransport === mode}
-            className={`${css.regionOption} ${modelTransport === mode ? css.regionOptionActive : ''}`}
-            disabled={!canModifySearchMode}
-            onClick={() => { void operations.storeModelTransport(mode) }}
-          >
-            {t(mode === 'http' ? 'modelTransportHttp' : 'modelTransportLegacy')}
-          </button>
-        ))}
-      </div>
-      <p className={css.searchModeHintText}>{t('modelTransportHint')}</p>
-    </div>
-  )
 
   const renderWebSearchSection = () => {
     return (
@@ -387,7 +364,6 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
         </span>
       </div>
       {renderAccount()}
-      {renderModelTransportSection()}
       {renderWebSearchSection()}
       {renderModelCatalogSection()}
     </section>

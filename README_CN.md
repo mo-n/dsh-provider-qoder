@@ -56,7 +56,7 @@ dsh plugin --profile web add dsh-provider-qoder
 
 ### 2. 查看账号与设置模型
 
-打开 **设置 → Qoder** 查看账号额度，并可切换模型传输、联网搜索策略与调整启用的模型。
+打开 **设置 → Qoder** 查看账号额度，并可切换联网搜索策略与调整启用的模型。
 
 <p align="center">
   <img src="./assets/account-quota_CN.png" alt="Qoder 账号额度与模型设置" width="650" />

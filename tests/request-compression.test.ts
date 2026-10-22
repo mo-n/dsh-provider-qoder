@@ -189,19 +189,17 @@ test('already cancelled requests never dispatch', async () => {
   }), { name: 'AbortError' })
 })
 
-test('CLI environment overrides the provider switch and validates thresholds', async () => {
-  const keys = ['QODER_ZSTD_REQUEST_BODIES', 'QODER_ZSTD_REQUEST_BODY_MIN_CHARS', 'QODER_ZSTD_REQUEST_BODY_LEVEL']
+test('CLI threshold and level tuning preserves the provider compression switch', async () => {
+  const keys = ['QODER_ZSTD_REQUEST_BODY_MIN_CHARS', 'QODER_ZSTD_REQUEST_BODY_LEVEL']
   const saved = keys.map(key => process.env[key])
   try {
-    process.env.QODER_ZSTD_REQUEST_BODIES = 'false'
-    await new QoderRequestCompression().send({ ...options(), dispatch: async wire => {
+    await new QoderRequestCompression().send({ ...options(), enabled: false, dispatch: async wire => {
       assert.equal(wire, body)
       return new Response('ok')
     } })
-    process.env.QODER_ZSTD_REQUEST_BODIES = 'true'
     process.env.QODER_ZSTD_REQUEST_BODY_MIN_CHARS = '1'
     process.env.QODER_ZSTD_REQUEST_BODY_LEVEL = '999'
-    await new QoderRequestCompression().send({ ...options(), enabled: false, body: 'a'.repeat(1000), dispatch: async wire => {
+    await new QoderRequestCompression().send({ ...options(), enabled: true, body: 'a'.repeat(1000), dispatch: async wire => {
       assert.ok(wire instanceof Uint8Array)
       assert.equal(zstdDecompressSync(wire).toString(), 'a'.repeat(1000))
       return new Response('ok')

@@ -28,13 +28,6 @@ function vpcEndpoint(url: string): boolean {
   return host === 'vpc.qoder.com.cn' || host.endsWith('.vpc.qoder.com.cn')
 }
 
-function envBoolean(value: string | undefined): boolean | undefined {
-  if (value === undefined) return undefined
-  if (['true', '1'].includes(value.trim().toLowerCase())) return true
-  if (['false', '0'].includes(value.trim().toLowerCase())) return false
-  return undefined
-}
-
 function envInteger(value: string | undefined, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
   if (value === undefined || !value.trim()) return fallback
   const parsed = Number(value)
@@ -120,7 +113,7 @@ export class QoderRequestCompression {
       return options.dispatch(wireBody, wireHeaders)
     }
     signal.throwIfAborted()
-    const enabled = envBoolean(process.env.QODER_ZSTD_REQUEST_BODIES) ?? options.enabled ?? false
+    const enabled = options.enabled ?? false
     const key = endpointKey(protocol, url)
     const minChars = envInteger(process.env.QODER_ZSTD_REQUEST_BODY_MIN_CHARS, 4096)
     const level = envInteger(process.env.QODER_ZSTD_REQUEST_BODY_LEVEL, 1, 22)

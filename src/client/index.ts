@@ -166,13 +166,6 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
         return false
       }
     },
-    storeModelTransport: async (mode) => {
-      try {
-        return await modelScope.set('modelTransport', mode) !== false
-      } catch {
-        return false
-      }
-    },
     discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
     setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region) => {
       const scope = { sessionId, modelId, tierKey, region }

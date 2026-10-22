@@ -52,5 +52,6 @@ Refresh remains request-driven, so this decision does not introduce a background
 refresh timer.
 
 Zstd request-body compression is disabled by default. Subscribers can opt in
-through `requestCompression: true` or the explicit CLI-compatible environment
-override; the provider does not consume the CLI's remote compression feature gate.
+through the YAML setting `requestCompression: true`; the provider does not consume
+the CLI's remote compression feature gate. Model transport is also configured only
+through YAML.
