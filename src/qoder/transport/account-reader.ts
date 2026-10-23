@@ -314,7 +314,7 @@ export class QoderUsageReader {
   async readWithCredentials(
     key: string,
     resolve: (signal?: AbortSignal) => Promise<CosyCredentials>,
-    options?: { force?: boolean; signal?: AbortSignal },
+    options?: { force?: boolean; signal?: AbortSignal; refresh?: (rejected: CosyCredentials, signal: AbortSignal) => Promise<CosyCredentials> },
   ): Promise<QoderAccountInfo> {
     const cacheKey = `${this.region}:${key}`
 
@@ -328,7 +328,19 @@ export class QoderUsageReader {
     return this.flights.run(
       cacheKey,
       options?.signal,
-      sharedSignal => this.loadAccount(resolve, sharedSignal, cacheKey),
+      async sharedSignal => {
+        let credentials: CosyCredentials | undefined
+        try {
+          return await this.loadAccount(async signal => {
+            credentials = await resolve(signal)
+            return credentials
+          }, sharedSignal, cacheKey)
+        } catch (error) {
+          if (!(error instanceof QoderLlmError) || error.code !== 'AUTH' || !credentials || !options?.refresh) throw error
+          const refreshed = await options.refresh(credentials, sharedSignal)
+          return this.loadAccount(async () => refreshed, sharedSignal, cacheKey)
+        }
+      },
       () => new QoderLlmError('Qoder account request was aborted.', 'ABORTED'),
     )
   }

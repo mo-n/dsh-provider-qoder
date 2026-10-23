@@ -38,14 +38,23 @@ export function registerQoderRpc(
     throw new Error('provider-qoder: connection exposes no exact Fetch route registry')
   }
   const streams = new Set<() => void>()
-  const disposers = qoderRpcEndpoints.map(endpoint => registry.register({
-    path: qoderRpcPath(endpoint),
-    methods: ['POST'],
-    requestBody: 'buffered',
-    fetch: request => endpoint === 'sessionTierEvents' && subscribeTiers
-      ? Promise.resolve(sessionTierEvents(request, subscribeTiers, streams))
-      : handleQoderRpcRequest(endpoint, handler, request),
-  }))
+  const disposers: Array<() => unknown> = []
+  try {
+    for (const endpoint of qoderRpcEndpoints) disposers.push(registry.register({
+      path: qoderRpcPath(endpoint),
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: request => endpoint === 'sessionTierEvents' && subscribeTiers
+        ? Promise.resolve(sessionTierEvents(request, subscribeTiers, streams))
+        : handleQoderRpcRequest(endpoint, handler, request),
+    }))
+  } catch (error) {
+    for (const close of streams) close()
+    for (const dispose of disposers.reverse()) {
+      try { void Promise.resolve(dispose()).catch(() => {}) } catch { /* Continue rollback. */ }
+    }
+    throw error
+  }
   return () => {
     for (const close of streams) close()
     for (const dispose of disposers) {

@@ -42,8 +42,11 @@ export class QoderModelCatalogEditor {
     const followsConfig = this.snapshot.catalog === this.confirmed
     this.confirmed = models.map(cloneCatalogModel)
     const selected = new Map(this.confirmed.map(model => [model.id, model]))
+    const catalog = new Map(this.snapshot.catalog.map(model => [model.id, selected.get(model.id) ?? model]))
+    for (const model of this.confirmed) catalog.set(model.id, model)
     this.publish({ ...this.snapshot, models: this.confirmed,
-      catalog: followsConfig ? this.confirmed : this.snapshot.catalog.map(model => selected.get(model.id) ?? model) })
+      catalog: followsConfig ? this.confirmed : [...catalog.values()],
+      unavailableIds: new Set([...this.snapshot.unavailableIds].filter(id => !selected.has(id))) })
   }
 
   activate(): void {

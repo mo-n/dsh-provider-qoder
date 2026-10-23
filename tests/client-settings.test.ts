@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { Context, Service } from '@deepseek-ai/cordis'
 
-const loadClientPlugin = async () => {
+const loadClientPlugin = async (send: typeof fetch = async () => { throw new Error('Unexpected network request') }) => {
   let plugin!: { apply(ctx: unknown): void; inject: string[] }
   const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   runInNewContext(source, {
@@ -20,9 +20,7 @@ const loadClientPlugin = async () => {
         },
       },
     },
-    fetch: async () => {
-      throw new Error('Unexpected network request')
-    },
+    fetch: send,
   })
   return plugin
 }
@@ -155,3 +153,28 @@ test('new conversation receives the default model directory before a model selec
     await ctx.fiber.dispose()
   }
 })
+
+for (const authorizationOk of [false, true]) {
+  test(`PAT save only succeeds after authorization selection (${authorizationOk})`, async () => {
+    const paths: string[] = []
+    const plugin = await loadClientPlugin((async (path: string) => {
+      paths.push(path)
+      return Response.json(path.endsWith('/authorization')
+        ? authorizationOk ? { ok: true, value: { method: 'browser' } } : { ok: false, error: { code: 'INTERNAL' } }
+        : { ok: true, value: { method: 'pat' } })
+    }) as typeof fetch)
+    let operations!: { store(value: string): Promise<boolean> }
+    plugin.apply({
+      configForms: { get: () => ({ getSnapshot: () => ({ value: { region: 'global' } }) }) },
+      effect: (callback: () => unknown) => callback(),
+      locale: { register() {}, bind: () => (key: string) => key },
+      remote: { credentials: { set: async () => ({ ok: true }) } }, inject() {},
+      slots: { inject: (_name: string, callback: () => unknown) => callback(),
+        register: (spec: { name: string; inject(): { operations: typeof operations } }) => {
+          if (spec.name === 'settings.section') operations = spec.inject().operations
+        } },
+    })
+    assert.equal(await operations.store('synthetic-pat'), authorizationOk)
+    assert.equal(paths.some(path => path.endsWith('/selectAuthorization')), authorizationOk)
+  })
+}

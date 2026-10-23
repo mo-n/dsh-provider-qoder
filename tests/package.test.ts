@@ -18,6 +18,7 @@ import * as plugin from '../src/index.ts'
 import { Config, type LiveConfig } from '../src/dsh/config.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
+import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
 
@@ -266,6 +267,7 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
+  t.mock.method(ctx.credentials, 'resolve', async () => ({ value: 'pt-test', source: 'memory' }) as ResolvedCredential)
   await ctx.plugin(MemorySettings).await()
   applyWithSettings(ctx, { modelsByRegion: { global: [
     { id: 'large', name: 'Large', contextWindow: 1_000_000 },
@@ -275,6 +277,8 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
   const discover = () => ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID, apiKey: 'pt-test' })
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].inputModalities, ['text'])
   supportsImages = true
+  await ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID, apiKey: 'pt-other' })
+  assert.deepEqual((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'large' })).inputModalities, ['text'])
   await discover()
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].inputModalities, ['text', 'image'])
   for (const [id, expected] of [['large', 200_000], ['small', 100_000]] as const) {
@@ -896,4 +900,17 @@ test('session tier RPC awaits host restoration before reading or saving historic
     finishRestore()
     await fiber.dispose()
   }
+})
+
+test('host session disposal releases adapter Context Tier state', async (t) => {
+  const released: string[] = []
+  t.mock.method(QoderAdapter.prototype, 'forgetSession', (id: string) => { released.push(id) })
+  const ctx = new Context()
+  try {
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(TestCredentials)
+    plugin.apply(ctx)
+    ctx.emit('session/disposed', { id: 'removed-session' } as never)
+    assert.deepEqual(released, ['removed-session'])
+  } finally { await ctx.fiber.dispose() }
 })
