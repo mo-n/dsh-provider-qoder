@@ -113,6 +113,12 @@ export class QoderAdapter extends LlmAdapter {
     }
   }
 
+  forgetSession(sessionId: string): void {
+    for (const key of this.sessionTiers.keys()) {
+      if ((JSON.parse(key) as string[])[1] === sessionId) this.sessionTiers.delete(key)
+    }
+  }
+
   subscribeSessionTiers(listener: (scope: QoderSessionTierScope) => void): () => void {
     this.tierListeners.add(listener)
     return () => { this.tierListeners.delete(listener) }

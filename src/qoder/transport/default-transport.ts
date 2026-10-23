@@ -134,19 +134,10 @@ export class DefaultQoderTransport implements QoderTransport {
 
   async readAccount(options?: { force?: boolean; signal?: AbortSignal }): Promise<QoderAccountInfo> {
     const lease = await this.lease(options?.signal)
-    let used: CosyCredentials | undefined
-    const read = (force = options?.force) => this.usage.readWithCredentials(lease.key, async signal => {
-      used = await lease.resolve(signal)
-      return used
-    }, {
-      force,
-      signal: options?.signal,
+    return this.usage.readWithCredentials(lease.key, signal => lease.resolve(signal), {
+      ...options,
+      refresh: (rejected, signal) => lease.resolve(signal, rejected.authToken),
     })
-    try { return await read() } catch (error) {
-      if (!(error instanceof QoderLlmError) || error.code !== 'AUTH' || !used) throw error
-      await lease.resolve(options?.signal, used.authToken)
-      return read(true)
-    }
   }
 
   async searchWeb(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
@@ -196,7 +187,7 @@ export class DefaultQoderTransport implements QoderTransport {
 
     // Phase 1: static validation finishes before credential resolution or any
     // provider I/O, so an unusable request never consumes a subscription.
-    validateQoderRequestShape(options, model)
+    validateQoderRequestShape(options, model, this.attachments)
     // Phase 2: credentials, which the center image exchange must be able to sign with.
     const lease = await this.lease(options.signal)
     const credentials = await lease.resolve(options.signal)

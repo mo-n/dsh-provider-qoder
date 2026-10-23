@@ -3,12 +3,12 @@
 import type { QoderHostRun } from '../../turn.ts'
 
 import crypto from 'node:crypto'
-import { contentHasImage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { selectedContextTier, type QoderCatalogModel } from '../../catalog.ts'
 import { QoderLlmError } from '../../errors.ts'
 import type { QoderCredentials } from './credentials.ts'
 import { qoderIdeVersion } from './client-identity.ts'
-import { translateTools, validateAndTranslateMessages } from './translate.ts'
+import { translateTools, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
 import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
 import { QoderTurnTracker, wireMessageText, type QoderCallKind } from './turn-identity.ts'
 import type { QoderBusiness, QoderContextConfig, QoderWireMessage, QoderWireTool } from './model-types.ts'
@@ -49,7 +49,8 @@ function callKind(options: GenerateOptions): QoderCallKind {
   return options.purpose === undefined ? 'conversation' : 'auxiliary'
 }
 
-export function validateQoderRequestShape(options: GenerateOptions, model?: QoderCatalogModel): void {
+export function validateQoderRequestShape(options: GenerateOptions, model?: QoderCatalogModel, attachments?: QoderImageAttachments): void {
+  const hasImages = validateMessageShapes(options.messages, attachments)
   if (options.reasoningEffort !== undefined) {
     const effort = String(options.reasoningEffort)
     if (!model?.reasoningEfforts?.some(candidate => candidate.id === effort)) {
@@ -59,7 +60,7 @@ export function validateQoderRequestShape(options: GenerateOptions, model?: Qode
       )
     }
   }
-  if (options.messages.some(message => contentHasImage(message.content)) && model?.supportsImages !== true) {
+  if (hasImages && model?.supportsImages !== true) {
     throw new QoderLlmError(`Qoder model "${options.model}" does not advertise image input.`, 'UNSUPPORTED_CONTENT')
   }
 }

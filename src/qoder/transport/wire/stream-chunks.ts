@@ -200,14 +200,16 @@ export async function* parseQoderChunks(
       } else {
         options.onActivity?.()
         buffer += decoder.decode(value, { stream: true })
-        if (buffer.length > maxBufferChars) {
-          throw malformed('Qoder SSE frame exceeded its size limit.')
-        }
+        // A read may contain many complete events. Bound each event below, not the read.
       }
 
       while (!sawDone) {
         const lineEnd = buffer.indexOf('\n')
-        if (lineEnd === -1) break
+        if (lineEnd === -1) {
+          if (buffer.length + eventDataChars > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
+          break
+        }
+        if (lineEnd > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
         let line = buffer.substring(0, lineEnd)
         buffer = buffer.substring(lineEnd + 1)
         if (line.endsWith('\r')) line = line.slice(0, -1)

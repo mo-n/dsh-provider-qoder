@@ -4,12 +4,12 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import { QoderQueueLeases, bindQoderQueueLeases } from './queue-leases.ts'
 import { QoderQueueStatusStore } from './queue-status.ts'
-import { defaultModelQueueMaxWaitMs } from '../qoder/queue.ts'
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-web'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { QoderTransportRuntime, transportConfig, type QoderRuntimeConfig } from './transport-runtime.ts'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { initiatingModelProvider, QoderSearchProvider, shouldUseQoderSearch } from './search-provider.ts'
@@ -20,8 +20,6 @@ import type { QoderRegion } from '../qoder/region.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import {
   createQoderTransport,
-  defaultResponseHeaderTimeoutMs,
-  defaultStreamIdleTimeoutMs,
   type QoderTransport,
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
@@ -101,73 +99,28 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
   const initialRegion = config.region ?? 'global'
   const baseConfig: QoderConfig = {
-    region: initialRegion,
+    ...transportConfig(config),
     modelsByRegion: { ...config.modelsByRegion },
-    streamIdleTimeoutMs: config.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
-    responseHeaderTimeoutMs: config.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
-    modelQueueMaxWaitMs: config.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
-    preserveThinking: config.preserveThinking ?? true,
     webSearchMode: config.webSearchMode ?? 'auto',
-    requestCompression: config.requestCompression ?? false,
-    modelTransport: config.modelTransport ?? 'legacy',
   }
+
   let current = (): QoderConfig => baseConfig
   let authorization: QoderBrowserAuthorizationManager
-  const createTransport = (
-    region: QoderRegion,
-    streamIdleTimeoutMs: number,
-    responseHeaderTimeoutMs: number,
-    preserveThinking: boolean,
-    resolvePat?: () => Promise<string>,
-  ): QoderTransport => createQoderTransport({
-    region,
+  const createTransport = (value: QoderRuntimeConfig, resolvePat?: () => Promise<string>): QoderTransport => createQoderTransport({
+    ...value,
     resolvePat: resolvePat ?? (() => resolveManagedQoderPat(ctx.credentials)),
-    resolveCredential: resolvePat ? undefined : signal => authorization.lease(region, signal),
-
-    requestCompression: current().requestCompression ?? false,
-    modelTransport: current().modelTransport ?? 'legacy',
+    resolveCredential: resolvePat ? undefined : signal => authorization.lease(value.region, signal),
     logger,
-    streamIdleTimeoutMs,
-    responseHeaderTimeoutMs,
     attachments: ctx.attachments,
-    preserveThinking,
-    modelQueueMaxWaitMs: current().modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
     onQueueUpdate: queueStatus.update,
     captureQueueLeaseOwner: leases.capture,
   })
-
   const resolveConfig = () => {
     const value = current()
-    const region = value.region ?? 'global'
-    return {
-      region,
-      models: modelsFor(value, region),
-      streamIdleTimeoutMs: value.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs,
-      responseHeaderTimeoutMs: value.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
-      modelQueueMaxWaitMs: value.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
-      preserveThinking: value.preserveThinking ?? true,
-      webSearchMode: value.webSearchMode ?? 'auto',
-      requestCompression: value.requestCompression ?? false,
-      modelTransport: value.modelTransport ?? 'legacy',
-    }
+    const transport = transportConfig(value)
+    return { ...transport, models: modelsFor(value, transport.region), webSearchMode: value.webSearchMode ?? 'auto' }
   }
-
-  const initial = resolveConfig()
-  let activeTransport = createTransport(
-    initial.region,
-    initial.streamIdleTimeoutMs,
-    initial.responseHeaderTimeoutMs,
-    initial.preserveThinking,
-  )
-  let activeTransportConfig = {
-    region: initial.region,
-    streamIdleTimeoutMs: initial.streamIdleTimeoutMs,
-    responseHeaderTimeoutMs: initial.responseHeaderTimeoutMs,
-    modelQueueMaxWaitMs: initial.modelQueueMaxWaitMs,
-    preserveThinking: initial.preserveThinking,
-    requestCompression: initial.requestCompression,
-    modelTransport: initial.modelTransport,
-  }
+  const runtime = new QoderTransportRuntime(current(), createTransport)
   const authorizationTransports = new Map<QoderRegion, NonNullable<QoderTransport['authorization']>>()
   authorization = new QoderBrowserAuthorizationManager({
     credentials: ctx.credentials,
@@ -186,33 +139,36 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   })
   ctx.effect(() => () => authorization.dispose(), 'provider-qoder: browser authorization lifecycle')
   const catalog = new QoderCatalogLifecycle({
-    resolveTransport: () => activeTransport,
-    region: () => activeTransportConfig.region,
+    resolveTransport: () => runtime.transport,
+    region: () => runtime.config.region,
     configuredModels: region => modelsFor(current(), region),
     onDiscovered: () => registration.replace([providerQoder]),
     onPersistenceError: error => logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error)),
   })
   ctx.effect(() => () => catalog.dispose(), 'provider-qoder: catalog lifecycle')
   const adapter = new QoderAdapter({
-    resolveTransport: () => activeTransport,
+    resolveTransport: () => runtime.transport,
     catalog,
-    region: () => activeTransportConfig.region,
+    region: () => runtime.config.region,
     providerId: providerQoder,
     providerName: 'Qoder',
     sessions: ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined,
     agents: ctx.get('agents') as import('./adapter.ts').QoderAdapterAgentStore | undefined,
   })
 
+  ctx.on('session/disposed', session => adapter.forgetSession(session.id))
+
   const registration = ctx.llm.registerAdapter([providerQoder], adapter)
   const refreshAuthentication = (): void => {
     const value = resolveConfig()
-    activeTransport = createTransport(value.region, value.streamIdleTimeoutMs, value.responseHeaderTimeoutMs, value.preserveThinking)
+    runtime.update(value, true)
+    authorization.activateRegion(runtime.config.region)
     catalog.clearDiscovered()
     catalog.observeTransport()
     registration.replace([providerQoder])
   }
   ctx.on('credentials/record-updated', key => {
-    if (key === browserAuthorizationKey(activeTransportConfig.region)) {
+    if (key === browserAuthorizationKey(runtime.config.region)) {
       refreshAuthentication()
       void catalog.refresh()
     }
@@ -222,31 +178,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   })
   const refreshAdapter = (): void => {
     const next = resolveConfig()
-    if (next.region !== activeTransportConfig.region
-      || next.streamIdleTimeoutMs !== activeTransportConfig.streamIdleTimeoutMs
-      || next.responseHeaderTimeoutMs !== activeTransportConfig.responseHeaderTimeoutMs
-      || next.modelQueueMaxWaitMs !== activeTransportConfig.modelQueueMaxWaitMs
-
-      || next.requestCompression !== activeTransportConfig.requestCompression
-      || next.modelTransport !== activeTransportConfig.modelTransport
-      || next.preserveThinking !== activeTransportConfig.preserveThinking) {
-      authorization.activateRegion(next.region)
-      activeTransport = createTransport(
-        next.region,
-        next.streamIdleTimeoutMs,
-        next.responseHeaderTimeoutMs,
-        next.preserveThinking,
-      )
-      activeTransportConfig = {
-        region: next.region,
-        streamIdleTimeoutMs: next.streamIdleTimeoutMs,
-        responseHeaderTimeoutMs: next.responseHeaderTimeoutMs,
-        modelQueueMaxWaitMs: next.modelQueueMaxWaitMs,
-        preserveThinking: next.preserveThinking,
-        requestCompression: next.requestCompression,
-        modelTransport: next.modelTransport,
-      }
-    }
+    if (runtime.update(next)) authorization.activateRegion(runtime.config.region)
     catalog.observeTransport()
     adapter.replaceModels(next.models)
     registration.replace([providerQoder])
@@ -294,15 +226,14 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   const discoverModels = async (signal?: AbortSignal, suppliedPat?: string): Promise<readonly QoderCatalogModel[]> => {
     const snapshot = resolveConfig()
     const normalizedPat = suppliedPat?.trim()
-    const transport = normalizedPat
-      ? createTransport(
-          snapshot.region,
-          snapshot.streamIdleTimeoutMs,
-          snapshot.responseHeaderTimeoutMs,
-          snapshot.preserveThinking,
-          () => Promise.resolve(normalizedPat),
-        )
-      : activeTransport
+    const transport = runtime.transport
+    if (normalizedPat) {
+      const view = await authorization.describe(snapshot.region)
+      const managedPat = await resolveManagedQoderPat(ctx.credentials)
+      if (view.method !== 'pat' || normalizedPat !== managedPat.trim() || transport !== runtime.transport) {
+        return createTransport(transportConfig(snapshot), () => Promise.resolve(normalizedPat)).discoverModels(signal)
+      }
+    }
     return catalog.discover(signal, transport)
   }
 
@@ -384,7 +315,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     logger?.debug?.('[Qoder RPC] Reading subscriber account', { force })
     const outcome = await executeRpc(
       'load Qoder account',
-      () => activeTransport.readAccount({ force, signal }),
+      () => runtime.transport.readAccount({ force, signal }),
       signal,
       logger,
     )
@@ -403,7 +334,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   ctx.inject(['web'], (webCtx) => {
     const searchProvider = new QoderSearchProvider({
       ctx,
-      resolveTransport: () => activeTransport,
+      resolveTransport: () => runtime.transport,
       getWebSearchMode: () => resolveConfig().webSearchMode ?? 'auto',
     })
     webCtx.web.registerSearchProvider(searchProvider)

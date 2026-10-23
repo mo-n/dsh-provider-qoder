@@ -26,7 +26,7 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
   const old = [{ id: 'chosen', name: 'Chosen', supportsImages: false, priceFactor: 2 }]
   let complete!: (models: readonly QoderCatalogModel[]) => void
   let calls = 0
-  const remote = transport(() => ++calls === 1
+  let remote = transport(() => ++calls === 1
     ? Promise.resolve(old)
     : new Promise(resolve => { complete = resolve }))
   const published: Array<readonly QoderCatalogModel[]> = []
@@ -43,7 +43,8 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
     reasoningEfforts: [{ id: 'high', name: 'High' }] }]
   // Both automatic and explicit discovery cross the same lifecycle seam.
   const freshTransport = transport(async () => fresh)
-  await catalog.discover(undefined, freshTransport)
+  remote = freshTransport
+  await catalog.discover()
   const resolved = await adapter.resolveModel(QODER_PROVIDER_ID, 'chosen')
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
   assert.equal(resolved.reasoning?.efforts[0].id, 'high')

@@ -173,6 +173,42 @@ function consumeToolCallId(
   return pendingIds.shift() ?? `call_unknown_${fallbackIndex}`
 }
 
+/** Validate the entire batch without reading attachments or resolving credentials. */
+export function validateMessageShapes(messages: readonly QoderMessage[], attachments?: QoderImageAttachments): boolean {
+  let hasImages = false
+  const validateImages = (blocks: QoderMessage['content']) => {
+    const images = blocks.filter((block): block is ImageBlock => block.type === 'image')
+    hasImages ||= images.length > 0
+    if (attachments) enforceImageLimits(images, attachments)
+  }
+  for (const message of messages) {
+    if (!['system', 'user', 'assistant', 'tool'].includes(message.role) || !Array.isArray(message.content)) {
+      throw unsupported('Qoder received an unsupported message shape.')
+    }
+    const results = message.content.filter((block): block is ToolResultBlock => block.type === 'tool-result')
+    for (const result of results) {
+      if (!Array.isArray(result.content) || result.content.some(block => block.type !== 'text' && block.type !== 'image')) {
+        throw unsupported('Qoder tool results support text and images only.')
+      }
+      validateImages(result.content)
+    }
+    const blocks = message.content.filter(block => block.type !== 'tool-result')
+    for (const block of blocks) {
+      if (message.role === 'tool' && block.type !== 'text' && block.type !== 'image') {
+        throw unsupported('Qoder tool results support text and images only.')
+      }
+      if (block.type === 'image' && message.role !== 'user' && message.role !== 'tool' && results.length === 0) {
+        throw unsupported('Qoder image content is valid only in user messages.')
+      }
+      if (!['text', 'image', 'reasoning', 'tool-call'].includes(block.type)) {
+        throw unsupported(`Qoder does not support ${String(block.type)} content.`)
+      }
+    }
+    validateImages(blocks)
+  }
+  return hasImages
+}
+
 export async function validateAndTranslateMessages(
   messages: readonly QoderMessage[],
   systemPrompt?: string,
@@ -180,6 +216,7 @@ export async function validateAndTranslateMessages(
   signal?: AbortSignal,
   pipeline?: Pick<QoderTranslateContext, 'uploader' | 'credentials'> & { preserveThinking?: boolean },
 ): Promise<QoderWireMessage[]> {
+  validateMessageShapes(messages, attachments)
   const context: QoderTranslateContext = {
     attachments,
     signal,
