@@ -1,5 +1,7 @@
 /** Qoder chat request encoding, queue recovery, timeout lifecycle, and SSE streaming. */
 
+import type { QoderHostRun } from '../turn.ts'
+
 import { randomUUID } from 'node:crypto'
 
 import {
@@ -33,7 +35,7 @@ export interface QoderChatDependencies {
   streamIdleTimeoutMs: number
   modelQueueMaxWaitMs?: number
   /** Immutable boundary captured before I/O, independent of message-history inference. */
-  hostRunId?: string
+  hostRun?: QoderHostRun
   onQueueUpdate?: (update: QoderQueueUpdate) => void
   onQueueLease?: (lease: QoderQueueLease) => boolean
   queueClock?: QueueClock
@@ -54,9 +56,7 @@ export async function* streamQoderChat(
 ): AsyncGenerator<StreamChunk> {
   // The host boundary prevents a compacted, identical next turn from reusing a
   // queue key that an older asynchronous finish can still release.
-  const identityScope = options.purpose === undefined && dependencies.hostRunId !== undefined
-    ? JSON.stringify([dependencies.region, dependencies.hostRunId]) : dependencies.region
-  const request = await buildQoderRequestBody(options, credentials.userID, messages, model, undefined, undefined, identityScope)
+  const request = await buildQoderRequestBody(options, credentials.userID, messages, model, undefined, undefined, dependencies.region, dependencies.hostRun)
   request.session_type = dependencies.region === 'china' ? 'qoderclicn' : 'qodercli'
   const startedAt = performance.now()
   let activeCredentials = credentials

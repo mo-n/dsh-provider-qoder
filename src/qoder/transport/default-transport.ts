@@ -219,7 +219,7 @@ export class DefaultQoderTransport implements QoderTransport {
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
       modelQueueMaxWaitMs: this.modelQueueMaxWaitMs,
       onQueueUpdate: this.onQueueUpdate,
-      hostRunId: queueOwner?.runId,
+      hostRun: queueOwner?.run,
       onQueueLease: queueOwner?.retain,
       resolveCredentials: async (refresh, signal) => {
         const current = await lease.resolve(signal)

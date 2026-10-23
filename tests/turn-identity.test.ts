@@ -11,6 +11,7 @@ import test from 'node:test'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { buildQoderRequestBody } from '../src/qoder/transport/wire/serialize.ts'
 import type { QoderWireMessage } from '../src/qoder/transport/wire/wire-types.ts'
+import { QoderQueueLeases } from '../src/dsh/queue-leases.ts'
 import { QoderTurnTracker } from '../src/qoder/transport/wire/turn-identity.ts'
 
 function user(text: string) {
@@ -436,4 +437,86 @@ test('provider identities isolate queue request sets between subscribers and reg
   assert.notEqual(other.business.id, first.business.id)
   assert.notEqual(regional.request_set_id, first.request_set_id)
   assert.equal(same.request_set_id, first.request_set_id)
+})
+
+test('hosted turns survive injected context, projected history and steering, but honor model switches', async () => {
+  const tracker = new QoderTurnTracker()
+  const run = Object.freeze({ id: 'hosted-context' })
+  const input = options([], 'hosted-context')
+  const build = (messages: QoderWireMessage[], model = 'cmodel', purpose?: GenerateOptions['purpose']) =>
+    buildQoderRequestBody({ ...input, model, purpose }, 'user', messages, undefined, undefined, tracker, 'global', run)
+  const first = await build([wireUser('Fix tests')])
+  for (const messages of [
+    [wireUser('Fix tests'), wireUser('Time sampled while preparing turn 1, step 2: now')],
+    [wireUser('Fix tests'), wireUser('Current runtime context: none. Earlier runtime-context snapshots no longer apply.')],
+    [wireUser('This is an automatically generated checkpoint condensing history')],
+    [wireUser('Also check types')],
+  ]) {
+    const next = await build(messages)
+    assert.equal(next.business.id, first.business.id)
+    assert.equal(next.business.begin_at, first.business.begin_at)
+    assert.equal(next.request_set_id, first.request_set_id)
+    assert.equal(next.business.stage, 'processing')
+    assert.notEqual(next.request_id, first.request_id)
+  }
+  const auxiliary = await build([wireUser('Title')], 'cmodel', 'session-title')
+  assert.notEqual(auxiliary.business.id, first.business.id)
+  assert.equal((await build([])).business.id, first.business.id)
+  const switched = await build([], 'other-model')
+  assert.notEqual(switched.business.id, first.business.id)
+  assert.notEqual(switched.request_set_id, first.request_set_id)
+  assert.equal(switched.business.stage, 'start')
+  assert.equal((await build([], 'other-model')).business.id, switched.business.id)
+})
+
+test('completed host runs and standalone cache pressure cannot evict an active host run', async () => {
+  const tracker = new QoderTurnTracker({ maxSessions: 2 })
+  const runs = new QoderQueueLeases()
+  runs.start('active', 1)
+  const input = options([], 'active')
+  const build = (session: string, run = runs.capture(session)?.run, region = 'global', user = 'user') =>
+    buildQoderRequestBody({ ...input, sessionId: session as GenerateOptions['sessionId'] }, user,
+      [wireUser('Hello')], undefined, undefined, tracker, region, run)
+  const first = await build('active')
+  for (let turn = 1; turn <= 80; turn++) {
+    runs.start('other', turn)
+    await build('other')
+    await runs.end('other', turn)
+    await build(`standalone-${turn}`)
+  }
+  const continued = await build('active')
+  assert.equal(continued.business.id, first.business.id)
+  assert.equal(continued.business.begin_at, first.business.begin_at)
+  assert.equal(continued.request_set_id, first.request_set_id)
+  assert.equal(continued.business.stage, 'processing')
+  const run = runs.capture('active')!.run
+  assert.notEqual((await build('active', run, 'china')).business.id, first.business.id)
+  assert.notEqual((await build('active', run, 'global', 'other-user')).business.id, first.business.id)
+  assert.notEqual((await build('another-session', run)).business.id, first.business.id)
+  await runs.dispose()
+})
+
+test('captured requests retain their identity after host end and cannot affect a new identical turn', async () => {
+  const tracker = new QoderTurnTracker()
+  const runs = new QoderQueueLeases()
+  const input = options([], 'late-request')
+  runs.start('late-request', 1)
+  const old = runs.capture('late-request')!
+  assert.equal(runs.capture('late-request')!.run, old.run)
+  const build = (run = old.run) => buildQoderRequestBody(input, 'user', [wireUser('Hello')],
+    undefined, undefined, tracker, 'global', run)
+  const first = await build()
+  await runs.end('late-request', 1)
+  assert.equal(runs.capture('late-request'), undefined)
+  runs.start('late-request', 2)
+  const current = runs.capture('late-request')!
+  const second = await build(current.run)
+  const late = await build()
+  assert.equal(late.business.id, first.business.id)
+  assert.equal(late.request_set_id, first.request_set_id)
+  assert.notEqual(second.business.id, first.business.id)
+  assert.notEqual(second.request_set_id, first.request_set_id)
+  assert.equal((await build(current.run)).business.id, second.business.id)
+  assert.equal(old.retain({ key: 'late', sessionId: 'late-request', release: async () => {} }), false)
+  await runs.dispose()
 })

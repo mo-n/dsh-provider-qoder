@@ -62,7 +62,7 @@ test('a captured old call cannot retain a lease in a newer turn, and unload awai
   const closing = runs.end('session', 1)
   runs.start('session', 2)
   assert.equal(oldOwner.retain({ key: 'late', sessionId: 'session', release: async () => {} }), false)
-  assert.notEqual(runs.capture('session')?.runId, oldOwner.runId)
+  assert.notEqual(runs.capture('session')?.run, oldOwner.run)
   let disposed = false
   const unloading = runs.dispose().then(() => { disposed = true })
   await setImmediate()
