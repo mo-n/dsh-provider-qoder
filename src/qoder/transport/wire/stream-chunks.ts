@@ -206,13 +206,18 @@ export async function* parseQoderChunks(
       while (!sawDone) {
         const lineEnd = buffer.indexOf('\n')
         if (lineEnd === -1) {
-          if (buffer.length + eventDataChars > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
+          // Use the same payload accounting before and after the newline arrives.
+          const pending = buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer
+          const pendingChars = pending.startsWith('data:')
+            ? eventDataChars + pending.slice(pending.startsWith('data: ') ? 6 : 5).length + 1
+            : pending.length
+          if (pendingChars > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
           break
         }
-        if (lineEnd > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
         let line = buffer.substring(0, lineEnd)
         buffer = buffer.substring(lineEnd + 1)
         if (line.endsWith('\r')) line = line.slice(0, -1)
+        if (!line.startsWith('data:') && line.length > maxBufferChars) throw malformed('Qoder SSE frame exceeded its size limit.')
         if (line.startsWith('event:')) {
           eventType = line.substring(6).trim()
           continue

@@ -47,6 +47,12 @@ function unsupported(message: string): QoderLlmError {
   return new QoderLlmError(message, 'UNSUPPORTED_CONTENT')
 }
 
+function validateText(block: ContentBlock | ToolResultBlock): void {
+  if ((block.type === 'text' || block.type === 'reasoning') && typeof block.text !== 'string') {
+    throw unsupported('Qoder text and reasoning content must contain a string text value.')
+  }
+}
+
 /** Keep multimodal tool results attached to their call. */
 async function translateToolResultContent(
   blocks: QoderMessage['content'],
@@ -190,10 +196,15 @@ export function validateMessageShapes(messages: readonly QoderMessage[], attachm
       if (!Array.isArray(result.content) || result.content.some(block => block.type !== 'text' && block.type !== 'image')) {
         throw unsupported('Qoder tool results support text and images only.')
       }
+      for (const block of result.content) validateText(block)
       validateImages(result.content)
     }
     const blocks = message.content.filter(block => block.type !== 'tool-result')
     for (const block of blocks) {
+      validateText(block)
+      if (block.type === 'tool-call' && message.role !== 'assistant') {
+        throw unsupported('Qoder tool-call content is valid only in assistant messages.')
+      }
       if (message.role === 'tool' && block.type !== 'text' && block.type !== 'image') {
         throw unsupported('Qoder tool results support text and images only.')
       }

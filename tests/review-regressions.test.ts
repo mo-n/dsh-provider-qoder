@@ -8,6 +8,7 @@ import { QoderTransportRuntime } from '../src/dsh/transport-runtime.ts'
 import { registerQoderRpc } from '../src/dsh/rpc.ts'
 import { parseModelServerSse } from '../src/qoder/transport/wire/model-server-sse.ts'
 import { parseQoderSse } from '../src/qoder/transport/wire/sse.ts'
+import { validateAndTranslateMessages } from '../src/qoder/transport/wire/translate.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 
@@ -126,6 +127,66 @@ test('invalid later message is rejected before any credential or attachment I/O'
     for await (const _chunk of transport.stream(options, { id: 'vision', name: 'Vision', supportsImages: true })) continue
   }, { code: 'UNSUPPORTED_CONTENT' })
   assert.equal(calls, 0)
+})
+
+test('SSE payload limits accept exact-size frames at every split and reject oversized payloads', async () => {
+  for (const legacy of [false, true]) {
+    const payload = { choices: [{ delta: { content: 'ok' } }] }
+    const json = JSON.stringify(legacy ? { body: JSON.stringify(payload) } : payload)
+    for (const lines of [[json], ['{', json.slice(1)]]) {
+      const limit = lines.reduce((size, line) => size + line.length + 1, 0)
+      for (const newline of ['\n', '\r\n']) {
+        for (const prefix of ['data:', 'data: ']) {
+          const wire = lines.map(line => prefix + line + newline).join('') + newline + 'data: [DONE]' + newline + newline
+          const collect = async (parts: string[], maxBufferChars = limit) => {
+            const stream = new ReadableStream<Uint8Array>({ start(controller) {
+              for (const part of parts) controller.enqueue(new TextEncoder().encode(part))
+              controller.close()
+            } })
+            const chunks = []
+            for await (const chunk of (legacy ? parseQoderSse : parseModelServerSse)(stream, { maxBufferChars })) chunks.push(chunk)
+            return chunks
+          }
+          const expected = await collect([wire])
+          assert.equal(expected.some(chunk => chunk.type === 'text-delta' && chunk.text === 'ok'), true)
+          for (let split = 1; split < wire.length; split++) {
+            assert.deepEqual(await collect([wire.slice(0, split), wire.slice(split)]), expected)
+          }
+          assert.deepEqual(await collect([...wire]), expected)
+          for (const parts of [[wire], [...wire], [wire.slice(0, wire.indexOf(newline + newline))]]) {
+            await assert.rejects(collect(parts, limit - 1), { code: 'MALFORMED_RESPONSE' })
+          }
+        }
+      }
+    }
+  }
+})
+
+test('invalid tool-call roles and non-string text fail before credential or network I/O', async () => {
+  const toolCall = { type: 'tool-call', id: 'call-test', name: 'lookup', arguments: '{}' }
+  const invalid: Array<{ role: string; content: unknown[] }> = ['user', 'system', 'tool'].map(role => ({ role, content: [toolCall] }))
+  for (const text of [undefined, null, 123, {}, []]) {
+    for (const role of ['user', 'system', 'assistant', 'tool']) {
+      invalid.push({ role, content: [{ type: 'text', text }] })
+    }
+    invalid.push({ role: 'assistant', content: [{ type: 'reasoning', text }] })
+    invalid.push({ role: 'user', content: [{ type: 'tool-result', toolCallId: 'call-test', content: [{ type: 'text', text }] }] })
+  }
+  let calls = 0
+  const transport = createQoderTransport({ region: 'global', resolvePat: async () => { calls++; return 'test' },
+    fetch: async () => { calls++; throw new Error('No network allowed') } })
+  for (const message of invalid) {
+    const options = { model: 'test', messages: [message] } as unknown as GenerateOptions
+    await assert.rejects(async () => {
+      for await (const _chunk of transport.stream(options, { id: 'test', name: 'Test' })) continue
+    }, { code: 'UNSUPPORTED_CONTENT' })
+    await assert.rejects(validateAndTranslateMessages(options.messages), { code: 'UNSUPPORTED_CONTENT' })
+  }
+  assert.equal(calls, 0)
+  const messages = [{ role: 'assistant', content: [toolCall] }, { role: 'user', content: [{ type: 'text', text: '' }] }]
+  const translated = await validateAndTranslateMessages(messages as unknown as GenerateOptions['messages'])
+  assert.equal(translated[0].tool_calls?.[0].function.name, 'lookup')
+  assert.equal(translated[1].content, '')
 })
 
 test('session cleanup releases all regions without changing another session selection', () => {
