@@ -122,7 +122,8 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
         if (response.ok) {
           const region = regionOf(readModelSnapshot().value)
           const current = await authorizationOperations.read(region)
-          if (current.ok && current.value.method !== 'pat') return (await authorizationOperations.select(region, 'pat')).ok
+          if (!current.ok) return false
+          if (current.value.method !== 'pat') return (await authorizationOperations.select(region, 'pat')).ok
         }
         return response.ok
       } catch {

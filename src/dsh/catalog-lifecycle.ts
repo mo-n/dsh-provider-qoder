@@ -95,12 +95,16 @@ export class QoderCatalogLifecycle {
     }
   }
 
-  /** Explicit discovery supersedes older work as soon as it starts, even if it fails. */
+  /** Active discovery supersedes older work; a foreign transport is an isolated preview. */
   discover(signal?: AbortSignal, requestTransport?: QoderTransport): Promise<readonly QoderCatalogModel[]> {
     if (this.disposed || signal?.aborted) {
       return Promise.reject(new QoderLlmError('Qoder model discovery was aborted.', 'ABORTED'))
     }
     this.observeTransport()
+    if (requestTransport && requestTransport !== this.activeTransport) {
+      // A credential preview is a read, never a mutation of the active catalog.
+      return requestTransport.discoverModels(signal)
+    }
     const region = this.options.region()
     const state = this.catalogs[region]
     const transport = this.activeTransport!

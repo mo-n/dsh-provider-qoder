@@ -47,6 +47,12 @@ function unsupported(message: string): QoderLlmError {
   return new QoderLlmError(message, 'UNSUPPORTED_CONTENT')
 }
 
+function validateText(block: ContentBlock | ToolResultBlock): void {
+  if ((block.type === 'text' || block.type === 'reasoning') && typeof block.text !== 'string') {
+    throw unsupported('Qoder text and reasoning content must contain a string text value.')
+  }
+}
+
 /** Keep multimodal tool results attached to their call. */
 async function translateToolResultContent(
   blocks: QoderMessage['content'],
@@ -173,6 +179,53 @@ function consumeToolCallId(
   return pendingIds.shift() ?? `call_unknown_${fallbackIndex}`
 }
 
+/** Validate the entire batch without reading attachments or resolving credentials. */
+export function validateMessageShapes(messages: readonly QoderMessage[], attachments?: QoderImageAttachments): boolean {
+  let hasImages = false
+  const validateImages = (blocks: QoderMessage['content']) => {
+    const images = blocks.filter((block): block is ImageBlock => block.type === 'image')
+    hasImages ||= images.length > 0
+    if (attachments) enforceImageLimits(images, attachments)
+  }
+  for (const message of messages) {
+    if (!['system', 'user', 'assistant', 'tool'].includes(message.role) || !Array.isArray(message.content)) {
+      throw unsupported('Qoder received an unsupported message shape.')
+    }
+    const results = message.content.filter((block): block is ToolResultBlock => block.type === 'tool-result')
+    for (const result of results) {
+      if (!Array.isArray(result.content) || result.content.some(block => block.type !== 'text' && block.type !== 'image')) {
+        throw unsupported('Qoder tool results support text and images only.')
+      }
+      for (const block of result.content) validateText(block)
+      validateImages(result.content)
+    }
+    const blocks = message.content.filter(block => block.type !== 'tool-result')
+    for (const block of blocks) {
+      validateText(block)
+      if (block.type === 'tool-call') {
+        if (message.role !== 'assistant') {
+          throw unsupported('Qoder tool-call content is valid only in assistant messages.')
+        }
+        if (asCallId(block.id) === undefined || typeof block.name !== 'string' || block.name.trim().length === 0
+          || typeof block.arguments !== 'string') {
+          throw unsupported('Qoder tool-call content requires a non-empty string id and name, and string arguments.')
+        }
+      }
+      if (message.role === 'tool' && block.type !== 'text' && block.type !== 'image') {
+        throw unsupported('Qoder tool results support text and images only.')
+      }
+      if (block.type === 'image' && message.role !== 'user' && message.role !== 'tool') {
+        throw unsupported('Qoder image content is valid only in user and tool messages.')
+      }
+      if (!['text', 'image', 'reasoning', 'tool-call'].includes(block.type)) {
+        throw unsupported(`Qoder does not support ${String(block.type)} content.`)
+      }
+    }
+    validateImages(blocks)
+  }
+  return hasImages
+}
+
 export async function validateAndTranslateMessages(
   messages: readonly QoderMessage[],
   systemPrompt?: string,
@@ -180,6 +233,7 @@ export async function validateAndTranslateMessages(
   signal?: AbortSignal,
   pipeline?: Pick<QoderTranslateContext, 'uploader' | 'credentials'> & { preserveThinking?: boolean },
 ): Promise<QoderWireMessage[]> {
+  validateMessageShapes(messages, attachments)
   const context: QoderTranslateContext = {
     attachments,
     signal,
@@ -237,8 +291,8 @@ export async function validateAndTranslateMessages(
         continue
       }
       if (block.type === 'image') {
-        if (message.role !== 'user' && toolResults.length === 0) {
-          throw unsupported('Qoder image content is valid only in user messages.')
+        if (message.role !== 'user') {
+          throw unsupported('Qoder image content is valid only in user and tool messages.')
         }
         hasImage = true
         // Reserve the slot now so publication can proceed concurrently

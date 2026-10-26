@@ -261,6 +261,33 @@ test('validateAndTranslateMessages rejects assistant images and non-image tool-r
   }
 })
 
+test('legacy tool results preserve user and tool sibling images and nested assistant result images', async () => {
+  const image = { type: 'image' as const, attachment: imageRef }
+  const imagePart = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } }
+  for (const role of ['user', 'tool', 'assistant']) {
+    const result = { type: 'tool-result' as const, toolCallId: 'call-1', content: [image] }
+    const content = role === 'assistant' ? [result] : [result, image]
+    assert.deepEqual(await validateAndTranslateMessages([{ role, content }], undefined, imageAttachments()), [
+      { role: 'tool', tool_call_id: 'call-1', content: [imagePart] },
+      ...role === 'assistant' ? [] : [{
+        role,
+        ...role === 'tool' ? { tool_call_id: 'call_unknown_1' } : {},
+        content: [imagePart],
+      }],
+    ])
+  }
+})
+
+test('tool-call validation preserves empty string arguments', async () => {
+  const [message] = await validateAndTranslateMessages([{
+    role: 'assistant',
+    content: [{ type: 'tool-call', id: ToolCallId('call-empty'), name: 'ping', arguments: '' }],
+  }])
+  assert.deepEqual(message.tool_calls, [{
+    id: 'call-empty', type: 'function', function: { name: 'ping', arguments: '' },
+  }])
+})
+
 test('buildQoderRequestBody uses the resolved identity and configured model', async () => {
   const options = {
     provider: 'dsh-provider-qoder',
