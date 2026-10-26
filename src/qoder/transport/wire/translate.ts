@@ -202,14 +202,20 @@ export function validateMessageShapes(messages: readonly QoderMessage[], attachm
     const blocks = message.content.filter(block => block.type !== 'tool-result')
     for (const block of blocks) {
       validateText(block)
-      if (block.type === 'tool-call' && message.role !== 'assistant') {
-        throw unsupported('Qoder tool-call content is valid only in assistant messages.')
+      if (block.type === 'tool-call') {
+        if (message.role !== 'assistant') {
+          throw unsupported('Qoder tool-call content is valid only in assistant messages.')
+        }
+        if (asCallId(block.id) === undefined || typeof block.name !== 'string' || block.name.trim().length === 0
+          || typeof block.arguments !== 'string') {
+          throw unsupported('Qoder tool-call content requires a non-empty string id and name, and string arguments.')
+        }
       }
       if (message.role === 'tool' && block.type !== 'text' && block.type !== 'image') {
         throw unsupported('Qoder tool results support text and images only.')
       }
-      if (block.type === 'image' && message.role !== 'user' && message.role !== 'tool' && results.length === 0) {
-        throw unsupported('Qoder image content is valid only in user messages.')
+      if (block.type === 'image' && message.role !== 'user' && message.role !== 'tool') {
+        throw unsupported('Qoder image content is valid only in user and tool messages.')
       }
       if (!['text', 'image', 'reasoning', 'tool-call'].includes(block.type)) {
         throw unsupported(`Qoder does not support ${String(block.type)} content.`)
@@ -285,8 +291,8 @@ export async function validateAndTranslateMessages(
         continue
       }
       if (block.type === 'image') {
-        if (message.role !== 'user' && toolResults.length === 0) {
-          throw unsupported('Qoder image content is valid only in user messages.')
+        if (message.role !== 'user') {
+          throw unsupported('Qoder image content is valid only in user and tool messages.')
         }
         hasImage = true
         // Reserve the slot now so publication can proceed concurrently

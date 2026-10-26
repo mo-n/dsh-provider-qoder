@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { createQoderTransport } from '../src/qoder/transport/index.ts'
+import type { QoderImageAttachments } from '../src/qoder/transport/wire/translate.ts'
 
 const catalog = JSON.stringify({ assistant: [{ key: 'cmodel', enable: true, display_name: 'Cantus' }] })
 
@@ -241,6 +242,47 @@ test('QoderTransport rejects images for a non-vision model before authenticating
   ))
   assert.equal(patCalls, 0)
   assert.equal(fetchCalls, 0)
+})
+
+test('QoderTransport rejects incomplete tool calls and assistant images before credentials or I/O', async () => {
+  const validCall = { type: 'tool-call', id: 'call-1', name: 'read', arguments: '{}' }
+  const invalidCalls = ['id', 'name', 'arguments'].flatMap(field =>
+    [undefined, null, 42, ...(field === 'arguments' ? [] : ['', '  '])].map(value => ({ ...validCall, [field]: value })),
+  )
+  const result = { type: 'tool-result', toolCallId: 'call-1', content: [{ type: 'text', text: 'result' }] }
+  const invalidContents = [
+    ...invalidCalls.map(call => [call]),
+    [{ type: 'image', attachment: imageRef }],
+    [result, { type: 'image', attachment: imageRef }],
+  ]
+  for (const modelTransport of ['legacy', 'http'] as const) {
+    for (const content of invalidContents) {
+      let patCalls = 0
+      let fetchCalls = 0
+      let reads = 0
+      const transport = createQoderTransport({
+        modelTransport,
+        region: 'global',
+        resolvePat: async () => { patCalls++; throw new Error('unexpected credential resolution') },
+        resolveMachineId: () => 'machine-test',
+        attachments: {
+          ...transportAttachments() as QoderImageAttachments,
+          readImageRequest: async () => { reads++; throw new Error('unexpected attachment read') },
+        },
+        fetch: async () => { fetchCalls++; throw new Error('unexpected network request') },
+      })
+      const request = {
+        provider: 'dsh-provider-qoder', model: 'cmodel',
+        messages: [{ role: 'assistant', content }],
+      } as unknown as GenerateOptions
+      await assert.rejects(async () => {
+        for await (const _chunk of transport.stream(request, visionModel)) continue
+      }, (error: unknown) => error instanceof QoderLlmError && error.code === 'UNSUPPORTED_CONTENT')
+      assert.equal(patCalls, 0)
+      assert.equal(fetchCalls, 0)
+      assert.equal(reads, 0)
+    }
+  }
 })
 
 test('QoderTransport still streams when center image publication fails', async () => {
