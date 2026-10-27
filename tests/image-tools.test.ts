@@ -166,10 +166,11 @@ test('a disabled switch does not cancel generation already in progress', async (
 test('generation delivery failures retain generated status and never regenerate', async () => {
   for (const options of [{ failSave: true }, { noPath: true }]) {
     const f = fixture(options)
-    await assert.rejects(f.tools.get('ImageGen')!.execute({ name: 'cat', prompt: 'cat' }, f.exec), /generated.*delivery failed.*requestId=generated-id.*Do not generate again/)
+    await assert.rejects(f.tools.get('ImageGen')!.execute({ name: 'cat', prompt: 'cat' }, f.exec), /generated.*delivery failed.*Automatic recovery is unavailable.*Do not call ImageGen again.*report requestId=generated-id to the user/)
     assert.equal(f.calls.length, 1)
   }
   const error = new QoderImageArtifactDeliveryError('request-id', 'https://images.example/result?signature=private', new Error('disk full'))
+  assert.doesNotMatch(error.message, /retry|disk full/)
   assert.equal(error.imageUrl, 'https://images.example/result?signature=private')
   assert.doesNotMatch(JSON.stringify(error), /signature=private/)
 })

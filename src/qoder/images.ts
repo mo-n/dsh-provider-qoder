@@ -56,7 +56,7 @@ export interface QoderImageGenerationResult {
   imageUrl: string
 }
 
-/** Generation succeeded: retry delivery, never generation.
+/** Generation succeeded; no delivery recovery is currently exposed.
  * imageUrl may contain a signed credential; never log it.
  */
 export class QoderImageDeliveryError extends Error {
@@ -64,7 +64,7 @@ export class QoderImageDeliveryError extends Error {
   declare readonly imageUrl: string
 
   constructor(requestId: string, imageUrl: string, cause?: unknown) {
-    super(`Qoder image was generated but delivery failed: ${imageFailureDetails(cause).reason}. Do not regenerate; retry delivery (request ${requestId}).`)
+    super(`Qoder image was generated but delivery failed: ${imageFailureDetails(cause).reason}. Automatic recovery is unavailable. Do not call ImageGen again; report requestId=${requestId} to the user.`)
     this.name = 'QoderImageDeliveryError'
     this.requestId = requestId
     Object.defineProperty(this, 'cause', { value: cause, enumerable: false })

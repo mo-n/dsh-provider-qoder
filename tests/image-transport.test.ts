@@ -314,6 +314,9 @@ test('generated delivery failures retain safe recovery identity and never replay
     await assert.rejects(generateImage({ prompt: 'cat' }, deps), (error: unknown) => {
       assert.ok(error instanceof QoderImageDeliveryError)
       assert.equal(error.imageUrl, url); assert.ok(error.requestId)
+      assert.match(error.message, /Automatic recovery is unavailable\. Do not call ImageGen again; report requestId=/)
+      assert.ok(error.message.includes(`requestId=${error.requestId} to the user`))
+      assert.doesNotMatch(error.message, /retry/)
       assert.ok(!JSON.stringify(error).includes(url)); return true
     })
     assert.equal(calls, 1)

@@ -22,7 +22,7 @@ export class QoderImageArtifactDeliveryError extends Error {
   readonly requestId: string
   declare readonly imageUrl: string
   constructor(requestId: string, imageUrl: string, cause: unknown) {
-    super(`Qoder image was generated, but file delivery failed. requestId=${requestId}. Do not generate again; retry delivery of the existing image. ${cause instanceof Error ? cause.message : 'Attachment storage failed.'}`, { cause })
+    super(`Qoder image was generated, but file delivery failed. Automatic recovery is unavailable. Do not call ImageGen again; report requestId=${requestId} to the user.`, { cause })
     this.name = 'QoderImageArtifactDeliveryError'
     this.requestId = requestId
     Object.defineProperty(this, 'imageUrl', { value: imageUrl, enumerable: false })
