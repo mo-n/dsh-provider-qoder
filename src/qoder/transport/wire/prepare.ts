@@ -45,6 +45,12 @@ function stableHash(prefix: string, ...inputs: string[]): string {
 /** One tracker preserves agent-run identity across both model protocols. */
 export const qoderTurnTracker = new QoderTurnTracker()
 
+/** Shared subscriber-scoped conversation identity for model and image requests. */
+export function qoderSessionId(userId: string, sessionId?: string): string {
+  return `${stableHash('qoder-session', userId)}-${sessionId ?? crypto.randomUUID()}`
+}
+
+
 function callKind(options: GenerateOptions): QoderCallKind {
   return options.purpose === undefined ? 'conversation' : 'auxiliary'
 }
@@ -111,9 +117,7 @@ export async function prepareQoderRequest(
       break
     }
   }
-  const stablePart = stableHash('qoder-session', userId)
-  const sessionId = options.sessionId === undefined
-    ? `${stablePart}-${crypto.randomUUID()}` : `${stablePart}-${String(options.sessionId)}`
+  const sessionId = qoderSessionId(userId, options.sessionId === undefined ? undefined : String(options.sessionId))
   const requestId = crypto.randomUUID()
   const sessionIdParam = options.sessionId === undefined ? undefined : String(options.sessionId)
   const identity = tracker.resolveTurnIdentity(sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]), messages, callKind(options), requestId, modelKey, hostRun)

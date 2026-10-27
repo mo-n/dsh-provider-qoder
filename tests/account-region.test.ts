@@ -80,7 +80,7 @@ async function mountCard(describe = async (): Promise<QoderCredentialStatus> => 
   const exports: Record<string, (props: object) => VNode> = {}
   runInNewContext(source, { exports, require: (id: string) => id === 'react' ? hooks
     : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) }
-    : id.endsWith('/QoderModelCatalog.tsx') ? { QoderModelCatalog: () => null } : require(id) })
+    : (id.endsWith('/QoderModelCatalog.tsx') || id.endsWith('/QoderFeatureSettings.tsx')) ? { QoderModelCatalog: () => null, QoderFeatureSettings: () => null } : require(id) })
   let region: QoderRegion = 'global'
   let snapshot: QoderModelSettingsSnapshot = { status: 'ready', value: { region, modelsByRegion: { global: [], china: [] } },
     base: {}, user: {}, revision: 0, writable: true, mode: 'host' }

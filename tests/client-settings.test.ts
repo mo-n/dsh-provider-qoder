@@ -37,6 +37,8 @@ test('client settings mounts with declared services and reports rejected writes'
     storeRegion(region: string): Promise<boolean>
     storeModels(region: string, models: unknown[]): Promise<boolean>
     storeWebSearchMode(mode: string): Promise<boolean>
+    storeImageSearchEnabled(enabled: boolean): Promise<boolean>
+    storeImageGenEnabled(enabled: boolean): Promise<boolean>
   }
   let accepted: boolean | undefined
   const writes: unknown[] = []
@@ -89,7 +91,16 @@ test('client settings mounts with declared services and reports rejected writes'
   assert.equal(await operations.storeRegion('global'), false)
   assert.equal(await operations.storeModels('china', []), false)
   assert.equal(await operations.storeWebSearchMode('disabled'), false)
-  assert.equal(writes.length, 4)
+  assert.equal(await operations.storeImageSearchEnabled(false), false)
+  assert.equal(await operations.storeImageGenEnabled(false), false)
+  accepted = true
+  assert.equal(await operations.storeImageSearchEnabled(true), true)
+  assert.equal(await operations.storeImageGenEnabled(true), true)
+  assert.deepEqual(JSON.parse(JSON.stringify(writes.slice(4))), [
+    ['imageSearchEnabled', false], ['imageGenEnabled', false],
+    ['imageSearchEnabled', true], ['imageGenEnabled', true],
+  ])
+  assert.equal(writes.length, 8)
   assert.deepEqual(JSON.parse(JSON.stringify(writes[2])), [{
     op: 'set', path: ['modelsByRegion', 'china'], value: [],
   }])

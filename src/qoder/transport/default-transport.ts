@@ -17,6 +17,8 @@ import {
 import { translateQoderMessages, validateQoderRequestShape } from './wire/prepare.ts'
 import { QoderImageUploader } from './image-upload.ts'
 import { QoderUsageReader } from './account-reader.ts'
+import { searchImages, generateImage, validateImageSearch, validateImageGeneration, type ImageToolDependencies } from './image-tools.ts'
+import type { QoderImageSearchRequest, QoderImageSearchResult, QoderImageGenerationRequest, QoderImageGenerationResult } from '../images.ts'
 import { QoderSearchClient } from './search.ts'
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 import type { QoderAccountInfo } from '../account.ts'
@@ -149,6 +151,25 @@ export class DefaultQoderTransport implements QoderTransport {
       refreshCredentials: (rejected, nextSignal) => lease.resolve(nextSignal, rejected.authToken),
     })
     return client.search(request, signal)
+  }
+
+  async searchImages(request: QoderImageSearchRequest, signal?: AbortSignal): Promise<QoderImageSearchResult> {
+    validateImageSearch(request)
+    return searchImages(request, await this.imageToolDependencies(signal), signal)
+  }
+
+  async generateImage(request: QoderImageGenerationRequest, signal?: AbortSignal): Promise<QoderImageGenerationResult> {
+    validateImageGeneration(request)
+    const hostRun = request.hostRun ?? (request.sessionId === undefined ? undefined : this.captureQueueLeaseOwner?.(request.sessionId)?.run)
+    return generateImage({ ...request, hostRun }, await this.imageToolDependencies(signal), signal)
+  }
+
+  private async imageToolDependencies(signal?: AbortSignal): Promise<ImageToolDependencies> {
+    const lease = await this.lease(signal)
+    return { fetch: this.fetchImpl, region: this.region,
+      resolveCredentials: nextSignal => lease.resolve(nextSignal),
+      refreshCredentials: (rejected, nextSignal) => lease.resolve(nextSignal, rejected.authToken),
+    }
   }
 
   private async requirePat(signal?: AbortSignal): Promise<string> {

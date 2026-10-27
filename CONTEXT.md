@@ -108,6 +108,14 @@ _Avoid_: Qoder tool execution, Qoder agent loop
 The web discovery capability provided by the Qoder center service and authorized via subscriber credentials.
 _Avoid_: external search, Google search, crawler
 
+**Qoder image search**:
+The subscription capability that discovers existing web images and their source metadata.
+_Avoid_: Qoder web search, image generation
+
+**Qoder image generation**:
+The subscription capability that creates a new raster image from a text prompt and returns a generated image for delivery.
+_Avoid_: Qoder image publication, image reading
+
 **Qoder search route**:
 The center-hosted API path providing structured web search results.
 _Avoid_: unifiedSearch, search proxy
@@ -127,7 +135,7 @@ The temporary service-side permission associated with a model and Qoder agent ru
 _Avoid_: Qoder job token, subscriber Credits, local concurrency slot
 
 **Qoder transport**:
-The provider-side capability owning all communication with Qoder, including authentication, model discovery, subscriber account reads, model requests, image publication, and web search. It does not own agent tools or workspace operations.
+The provider-side capability owning all communication with Qoder, including authentication, model discovery, subscriber account reads, model requests, image publication, web search, image search, and image generation. It does not own agent tools or workspace operations.
 _Avoid_: generic HTTP client, Qoder agent, Qoder Agent SDK
 
 **Qoder settings RPC**:

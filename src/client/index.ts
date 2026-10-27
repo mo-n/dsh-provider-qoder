@@ -167,6 +167,14 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
         return false
       }
     },
+    storeImageSearchEnabled: async (enabled) => {
+      try { return await modelScope.set('imageSearchEnabled', enabled) !== false }
+      catch { return false }
+    },
+    storeImageGenEnabled: async (enabled) => {
+      try { return await modelScope.set('imageGenEnabled', enabled) !== false }
+      catch { return false }
+    },
     discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
     setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region) => {
       const scope = { sessionId, modelId, tierKey, region }

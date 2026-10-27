@@ -1,0 +1,55 @@
+{
+  "source": "qodercli 1.1.73 offline QoderContext.prepareRequest with fixture credentials, 2026-10-26",
+  "requests": [
+    {
+      "path": "/algo/api/v2/service/pro/imageSearch?Encode=1",
+      "url": "https://api3.qoder.sh/algo/api/v2/service/pro/imageSearch?Encode=1",
+      "headers": {
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+        "Authorization": "Bearer COSY.eyJ2ZXJzaW9uIjoidjEiLCJyZXF1ZXN0SWQiOiI0Yzg4MTc4NS0xM2E3LTRkOTctOWI1NC1lN2Y4NGNhZmU4NzMiLCJpbmZvIjoiZml4dHVyZS1pbmZvIiwiY29zeVZlcnNpb24iOiIxLjEuNzMiLCJpZGVWZXJzaW9uIjoiIn0=.0b5a1a9115caf5b915b1aa6f9cdcac83",
+        "Content-Type": "application/json",
+        "Cosy-Business-Product": "cli",
+        "Cosy-Business-Type": "agent",
+        "Cosy-ClientIp": "fixture-machine",
+        "Cosy-ClientType": "cli",
+        "Cosy-Data-Policy": "disagree",
+        "Cosy-Date": "1792997774",
+        "Cosy-Key": "fixture-key",
+        "Cosy-MachineId": "fixture-machine",
+        "Cosy-MachineToken": "fixture-machine",
+        "Cosy-MachineType": "5",
+        "Cosy-Scene": "assistant",
+        "Cosy-User": "fixture-user",
+        "Cosy-Version": "1.1.73",
+        "Login-Version": "v2"
+      },
+      "body": "DxK^PSWhBMn*V,KWmkw*GoKLuOjbDHFSmYKf#xLru(gzBMn*"
+    },
+    {
+      "path": "/api/v2/service/pro/generateImage?Encode=1",
+      "url": "https://api3.qoder.sh/algo/api/v2/service/pro/generateImage?Encode=1",
+      "headers": {
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+        "Authorization": "Bearer COSY.eyJ2ZXJzaW9uIjoidjEiLCJyZXF1ZXN0SWQiOiI2YjU1NTdkYS1kZTcwLTQxNTMtODE1YS05ZDA4YzE1NTAyYjQiLCJpbmZvIjoiZml4dHVyZS1pbmZvIiwiY29zeVZlcnNpb24iOiIxLjEuNzMiLCJpZGVWZXJzaW9uIjoiIn0=.e7003a3ed615e5dc2ba83133b8fe5105",
+        "Content-Type": "application/json",
+        "Cosy-Business-Product": "cli",
+        "Cosy-Business-Type": "agent",
+        "Cosy-ClientIp": "fixture-machine",
+        "Cosy-ClientType": "cli",
+        "Cosy-Data-Policy": "disagree",
+        "Cosy-Date": "1792997774",
+        "Cosy-Key": "fixture-key",
+        "Cosy-MachineId": "fixture-machine",
+        "Cosy-MachineToken": "fixture-machine",
+        "Cosy-MachineType": "5",
+        "Cosy-Scene": "assistant",
+        "Cosy-User": "fixture-user",
+        "Cosy-Version": "1.1.73",
+        "Login-Version": "v2"
+      },
+      "body": "DxK^PSWhBMn*V,KWmkw*GoKLuOjbDHFSmYKf#xLru(gzBMn*"
+    }
+  ]
+}
