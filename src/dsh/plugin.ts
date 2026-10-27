@@ -125,6 +125,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   }
   const runtime = new QoderTransportRuntime(current(), createTransport)
   const imageTools = bindQoderImageTools(ctx, {
+    logger,
     resolveTransport: () => runtime.transport,
     getImageSearchEnabled: () => current().imageSearchEnabled ?? true,
     getImageGenEnabled: () => current().imageGenEnabled ?? true,

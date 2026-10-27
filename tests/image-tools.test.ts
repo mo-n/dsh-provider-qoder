@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test, mock } from 'node:test'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { ToolRuntime, type ToolDefinition, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import LlmRuntime, { LlmAdapter, ToolCallId, createToolResultMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -7,6 +7,7 @@ import type { QoderTransport } from '../src/qoder/transport/index.ts'
 import { bindQoderImageTools, QoderImageArtifactDeliveryError } from '../src/dsh/image-tools.ts'
 import { imageArtifactName } from '../src/dsh/image-artifacts.ts'
 import { validateAndTranslateMessages } from '../src/qoder/transport/wire/translate.ts'
+import { QoderImageSearchError } from '../src/qoder/images.ts'
 
 function fixture(options: { files?: boolean; failSave?: boolean; noPath?: boolean } = {}) {
   const tools = new Map<string, ToolDefinition>()
@@ -15,6 +16,7 @@ function fixture(options: { files?: boolean; failSave?: boolean; noPath?: boolea
   let searchEnabled = true
   let genEnabled = true
   const calls: unknown[] = []
+  const logs: Array<{ level: string; details: Record<string, unknown> }> = []
   let generate = async (request: unknown) => {
     calls.push(request)
     return { bytes: new Uint8Array([1, 2, 3]), mediaType: 'image/png', requestId: 'generated-id', imageUrl: 'https://images.example/result.png' }
@@ -42,6 +44,10 @@ function fixture(options: { files?: boolean; failSave?: boolean; noPath?: boolea
     effect: (factory: () => () => void) => { effects.push(factory()) },
   }
   const binding = bindQoderImageTools(ctx as unknown as Context, {
+    logger: {
+      debug: (_message, details) => logs.push({ level: 'debug', details: details as Record<string, unknown> }),
+      warn: (_message, details) => logs.push({ level: 'warn', details: details as Record<string, unknown> }),
+    },
     resolveTransport: () => transport,
     getImageSearchEnabled: () => searchEnabled,
     getImageGenEnabled: () => genEnabled,
@@ -49,13 +55,28 @@ function fixture(options: { files?: boolean; failSave?: boolean; noPath?: boolea
   })
   const exec = { signal: new AbortController().signal, agent: { session: { id: 'session-id' } } } as ToolRunContext
   return {
-    tools, writes, calls, exec,
+    tools, writes, calls, exec, logs,
     setSearch(value: boolean) { searchEnabled = value; binding.refresh() },
     setGeneration(value: boolean) { genEnabled = value; binding.refresh() },
     setGenerate(value: typeof generate) { generate = value },
+    setSearchImages(value: NonNullable<QoderTransport['searchImages']>) { transport.searchImages = value },
     dispose() { for (const dispose of effects.reverse()) dispose() },
   }
 }
+
+test('attachment diagnostics correlate successful and failed storage without logging filenames or URLs', async () => {
+  for (const failSave of [false, true]) {
+    const f = fixture({ failSave })
+    const result = f.tools.get('ImageGen')!.execute({ name: 'private-filename', prompt: 'private-prompt' }, f.exec)
+    if (failSave) await assert.rejects(result)
+    else await result
+    assert.equal(f.logs.length, 2)
+    assert.equal(f.logs[1].level, failSave ? 'warn' : 'debug')
+    assert.ok(f.logs.every(log => log.details.requestId === 'generated-id' && log.details.stage === 'attachment-save'))
+    assert.ok(!/private-|https:/.test(JSON.stringify(f.logs)))
+    f.dispose()
+  }
+})
 
 test('image tools independently unregister and reject retained schemas', async () => {
   const f = fixture()
@@ -82,6 +103,39 @@ test('image search bounds parameters and truncates by Unicode code point', async
   for (const count of [0, 11, 1.5]) await assert.rejects(search.execute({ query: 'cat', count }, f.exec))
   await assert.rejects(search.execute({ query: ' ' }, f.exec), /non-empty/)
   assert.equal(f.calls.length, 1)
+})
+
+test('image search JSON includes the clipped query and measured duration for populated and empty results', async () => {
+  for (const results of [[{ imageUrl: 'https://images.example/result.png', width: 0 }], []]) {
+    const f = fixture()
+    const tool = f.tools.get('ImageSearch')!
+    let clock = 10_000
+    const timing = mock.method(performance, 'now', () => clock)
+    f.setSearchImages(async request => {
+      f.calls.push(request)
+      clock += 2500
+      return { requestId: 'timed-search', results }
+    })
+    try {
+      const result = await tool.execute({ query: '😺'.repeat(101) }, f.exec)
+      const expected = { query: '😺'.repeat(100), durationSeconds: 2.5, results, requestId: 'timed-search' }
+      assert.deepEqual(result, expected)
+      assert.deepEqual(f.calls, [{ query: expected.query, count: 5 }])
+      assert.deepEqual(tool.output.render({}, result as never), [{ type: 'text', text: JSON.stringify(expected) }])
+    } finally { timing.mock.restore(); f.dispose() }
+  }
+})
+
+test('image search tools preserve classified errors and cancellation', async () => {
+  const f = fixture()
+  const tool = f.tools.get('ImageSearch')!
+  const error = new QoderImageSearchError('auth', 'search-id', { httpStatus: 403 })
+  f.setSearchImages(async () => { throw error })
+  await assert.rejects(tool.execute({ query: 'cat' }, f.exec), actual => actual === error)
+  const controller = new AbortController()
+  f.setSearchImages(async () => { controller.abort(); return { requestId: 'cancelled', results: [] } })
+  await assert.rejects(tool.execute({ query: 'cat' }, { ...f.exec, signal: controller.signal }), actual => actual === controller.signal.reason)
+  f.dispose()
 })
 
 test('generation preserves original bytes and turn identity without a vision model', async () => {
@@ -130,6 +184,7 @@ test('artifact display names are safe and unique', () => {
   const b = imageArtifactName('..\\../CON.png', 'image/png')
   assert.match(a, /^CON-[\da-f-]+\.png$/)
   assert.notEqual(a, b)
+  assert.match(imageArtifactName('generated.png', 'image/avif'), /^generated-[\da-f-]+\.avif$/)
   assert.throws(() => imageArtifactName('cat', 'text/html'), /Unsupported/)
 })
 

@@ -63,6 +63,8 @@ dsh plugin --profile web add dsh-provider-qoder
 
 `ImageSearch` 返回图片与来源 URL；`ImageGen` 接受 `name`、`prompt` 和可选 `size`，默认尺寸为 `1024x1024`。生成结果以原始字节保存到 DSH 附件存储，不直接写入工作目录。工具需要宿主提供 DSH tools；图片交付还需要附件存储与执行环境路径映射。插件不另行注册或控制 `read_image`。
 
+生成图片的交付与 qodercli 1.1.73 对齐：支持 base64 data URL 或公网 HTTP/HTTPS URL、最多 5 次重定向、解码后最多 32 MiB，每跳下载超时为 10 分钟，并按文件签名识别 PNG/JPEG/WebP/GIF/AVIF。每个网络跳转均校验全部解析地址，并固定连接已验证的公网地址。交付失败会保留生成请求 ID，不应自动重新生成。
+
 <p align="center">
   <img src="./assets/account-quota_CN.png" alt="Qoder 账号额度与模型设置" width="650" />
 </p>

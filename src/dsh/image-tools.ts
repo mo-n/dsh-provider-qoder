@@ -5,8 +5,11 @@ import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 import type { QoderHostRun } from '../qoder/turn.ts'
 import { saveImageArtifact, type ImageArtifactFileSystem } from './image-artifacts.ts'
+import { imageFailureDetails } from '../qoder/images.ts'
+import type { QoderLogger } from '../qoder/transport/logging.ts'
 
 export interface QoderImageToolsOptions {
+  logger?: QoderLogger
   resolveTransport(): QoderTransport
   getImageSearchEnabled(): boolean
   getImageGenEnabled(): boolean
@@ -53,6 +56,7 @@ export function bindQoderImageTools(ctx: Context, options: QoderImageToolsOption
             render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
           },
           async execute(args, exec) {
+            const started = performance.now()
             if (!options.getImageSearchEnabled()) throw new Error('Qoder image search is disabled.')
             const query = Array.from(nonblank(args.query, 'query')).slice(0, 100).join('')
             const count = args.count ?? 5
@@ -61,8 +65,9 @@ export function bindQoderImageTools(ctx: Context, options: QoderImageToolsOption
             if (!transport.searchImages) throw new Error('Qoder image search is unavailable.')
             exec.signal.throwIfAborted()
             const result = await transport.searchImages({ query, count }, exec.signal)
+            exec.signal.throwIfAborted()
             // Transport result optional fields must not introduce undefined into JSON.
-            return JSON.parse(JSON.stringify(result))
+            return JSON.parse(JSON.stringify({ query, durationSeconds: (performance.now() - started) / 1000, results: result.results, requestId: result.requestId }))
           },
         }))
       }
@@ -109,10 +114,14 @@ export function bindQoderImageTools(ctx: Context, options: QoderImageToolsOption
           const hostRun = sessionId === undefined ? undefined : options.captureHostRun?.(sessionId)
           exec.signal.throwIfAborted()
           const image = await transport.generateImage({ prompt: args.prompt, size: args.size, sessionId, hostRun }, exec.signal)
+          const started = Date.now()
+          options.logger?.debug?.('[Qoder Image] Attachment save started', { requestId: image.requestId, stage: 'attachment-save', byteLength: image.bytes.length })
           try {
             const artifact = await saveImageArtifact(imageCtx.attachments, fs, args.name, image, exec.signal)
+            options.logger?.debug?.('[Qoder Image] Attachment save completed', { requestId: image.requestId, stage: 'attachment-save', durationMs: Date.now() - started })
             return { path: artifact.path, requestId: image.requestId, attachment: { ...artifact.attachment } }
           } catch (error) {
+            options.logger?.warn?.('[Qoder Image] Failed', { requestId: image.requestId, stage: 'attachment-save', durationMs: Date.now() - started, cancelled: exec.signal.aborted, ...imageFailureDetails(error) })
             throw new QoderImageArtifactDeliveryError(image.requestId, image.imageUrl, error)
           }
         },

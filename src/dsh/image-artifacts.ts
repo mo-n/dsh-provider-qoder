@@ -9,7 +9,7 @@ export interface ImageArtifactFileSystem {
 }
 
 export function imageArtifactName(name: string, mediaType: string): string {
-  const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }[mediaType]
+  const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif' }[mediaType]
   if (!extension) throw new Error(`Unsupported generated image media type: ${mediaType}`)
   const stem = name.normalize('NFKC').replace(/\.[^.]*$/, '').replace(/[^\p{L}\p{N}_-]+/gu, '_').slice(0, 80).replace(/^_+|_+$/g, '') || 'image'
   return `${stem}-${randomUUID()}.${extension}`

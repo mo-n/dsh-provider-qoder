@@ -155,7 +155,11 @@ export class DefaultQoderTransport implements QoderTransport {
 
   async searchImages(request: QoderImageSearchRequest, signal?: AbortSignal): Promise<QoderImageSearchResult> {
     validateImageSearch(request)
-    return searchImages(request, await this.imageToolDependencies(signal), signal)
+    let lease: QoderCredentialLease | undefined
+    return searchImages(request, { fetch: this.fetchImpl, region: this.region, logger: this.logger,
+      resolveCredentials: async nextSignal => { lease = await this.lease(nextSignal); return lease.resolve(nextSignal) },
+      refreshCredentials: (rejected, nextSignal) => lease!.resolve(nextSignal, rejected.authToken),
+    }, signal)
   }
 
   async generateImage(request: QoderImageGenerationRequest, signal?: AbortSignal): Promise<QoderImageGenerationResult> {
@@ -166,7 +170,7 @@ export class DefaultQoderTransport implements QoderTransport {
 
   private async imageToolDependencies(signal?: AbortSignal): Promise<ImageToolDependencies> {
     const lease = await this.lease(signal)
-    return { fetch: this.fetchImpl, region: this.region,
+    return { fetch: this.fetchImpl, region: this.region, logger: this.logger,
       resolveCredentials: nextSignal => lease.resolve(nextSignal),
       refreshCredentials: (rejected, nextSignal) => lease.resolve(nextSignal, rejected.authToken),
     }
