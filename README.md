@@ -1,4 +1,8 @@
-# dsh-provider-qoder
+<div align="center">
+
+  <img src="./assets/icon-full.png" alt="dsh-provider-qoder" width="650" />
+
+  <h1>dsh-provider-qoder</h1>
 
 [![npm version](https://img.shields.io/npm/v/dsh-provider-qoder.svg?color=blue)](https://www.npmjs.com/package/dsh-provider-qoder)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -7,27 +11,27 @@
 
 English | [简体中文](./README_CN.md)
 
-Use your Qoder subscription in DeepSeek Harness (DSH), supporting multimodality, web search, and tool calls across Global and China Qoder services.
+Use your Qoder subscription in DeepSeek Harness (DSH).
 
-The plugin handles authentication and model communication, while tool execution, workspace operations, and permission management are handled by DSH.
-This project is a community adapter plugin and is not affiliated with Qoder or DeepSeek.
+</div>
 
 ## Features
 
-- Access your subscription through Qoder website sign-in or a Personal Access Token (PAT).
-- Supports both Global (`global`) and China (`china`) services.
-- Automatically fetches available models for your account, supports selecting enabled models, and displays pricing multipliers and reasoning effort options when reported by the service.
-- Supports multimodality, web search, and tool calls.
-- View account information, quota, and reset dates in Settings.
-- Supports Qoder model queues with cancellable polling and visible waiting progress.
+- Sign in through your browser or authenticate with a Personal Access Token (PAT).
+- Switch between Global and China service regions.
+- Support for Qoder model queues with visible waiting progress.
+- Integrated Qoder web search.
+- Multimodal input, image generation, and image search.
+- Switch between the model's available context tiers during a conversation.
+
+Daily check-ins and multi-account management are not supported.
 
 ## Installation
 
 ### Prerequisites
 
 - An active Qoder subscription matching the selected service region.
-- The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
-- Requirements: DSH `>=0.2.0-rc.2`.
+- Requirements: DSH `>=0.1.7-rc.2`.
 
 ### Install from npm
 
@@ -41,18 +45,11 @@ dsh plugin --profile web add dsh-provider-qoder
 
 ### 1. Select a Service Region and Sign In
 
-In DSH Web, open **Settings → Models → Qoder account** and select your service region:
-
-| Service Region | Account Domain |
-| --- | --- |
-| Global (default) | `qoder.com` |
-| China (CN) | `qoder.com.cn` |
+In DSH Web, open **Settings → Models → Qoder account** and select your service region.
 
 Click **Sign in with Qoder** and complete authorization on the website. Return to DSH to select a model available to your account.
 
 Alternatively, choose **Use PAT**, enter a token and click **Save and use PAT**, or use a saved PAT. **Manage account** or **Manage credentials** lets you change accounts, switch authentication methods or remove authorization.
-
-Browser authorization is stored per region, shared across the DSH instance and renewed automatically. Expired authorization requires sign-in again, without automatic PAT fallback. Removing authorization does not sign you out of the Qoder website.
 
 ### 2. View Account & Manage Models
 
@@ -62,11 +59,9 @@ Open **Settings → Qoder** to view account and quota details, configure web sea
   <img src="./assets/account-quota.png" alt="Qoder account quota and model settings" width="650" />
 </p>
 
-For advanced YAML options (queue wait limits, request timeouts, and historical reasoning preservation), see [Configuration](./docs/wiki/configuration.md).
+### 3. Advanced Settings
 
-## Upcoming Features
-
-- [ ] Connect with Qoder's Protobuf protocol
+For advanced YAML options (queue wait limits, request timeouts, and retaining reasoning content from previous messages), see [Configuration](./docs/wiki/configuration.md).
 
 ## References
 
@@ -75,6 +70,14 @@ For advanced YAML options (queue wait limits, request timeouts, and historical r
 ## Feedback
 
 Please report issues via [GitHub Issues](https://github.com/mo-n/dsh-provider-qoder/issues) with the plugin and DSH versions, selected service region, reproduction steps, and sanitized error messages. Do not submit PATs, short-lived tokens, or personal account information.
+
+## Disclaimer
+
+This is a community adapter plugin and is not affiliated with Qoder or DeepSeek.
+
+Using this project may result in account or feature restrictions, account bans, or service suspension or termination. Successful requests and normal billing do not imply official authorization or eliminate account risks.
+
+Use of Qoder services is subject to the applicable terms of service, subscription limits, and account policies. This project's MIT License applies only to the project code and grants no rights to use Qoder services.
 
 ## License
 

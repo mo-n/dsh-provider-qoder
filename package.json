@@ -10,6 +10,7 @@
     "url": "https://github.com/mo-n/dsh-provider-qoder"
   },
   "homepage": "https://github.com/mo-n/dsh-provider-qoder#readme",
+  "icon": "./assets/icon.png",
   "keywords": [
     "deepseek",
     "deepseek-harness",
@@ -48,6 +49,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "assets/icon.png",
     "lib/**/*.js",
     "lib/**/*.d.ts",
     "cordis.patch.yml",
