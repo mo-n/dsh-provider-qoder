@@ -17,6 +17,14 @@ for (const supportsVolatile of [false, true]) {
       const value = typeof input.get === 'function' ? input.get() : input
       assert.equal(value.region, 'china')
       assert.equal(value.preserveThinking, true)
+      assert.equal(value.webSearchMode, 'auto')
+      assert.equal(value.imageSearchEnabled, true)
+      assert.equal(value.imageGenEnabled, true)
+      const disabled = plugin.Config({ webSearchMode: 'always', imageSearchEnabled: false, imageGenEnabled: false })
+      const disabledValue = typeof disabled.get === 'function' ? disabled.get() : disabled
+      assert.equal(disabledValue.webSearchMode, 'always')
+      assert.equal(disabledValue.imageSearchEnabled, false)
+      assert.equal(disabledValue.imageGenEnabled, false)
       console.log('loaded')
     `], { cwd: new URL('..', import.meta.url), encoding: 'utf8' })
     assert.equal(output.trim(), 'loaded')

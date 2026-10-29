@@ -208,6 +208,7 @@ test('transport runtime replaces changed configuration atomically and retains ca
   const runtime = new QoderTransportRuntime({}, () => { creations++; return {} as unknown as QoderTransport })
   const captured = runtime.transport
   assert.equal(runtime.update({ webSearchMode: 'disabled' }), false)
+  assert.equal(runtime.update({ imageSearchEnabled: false, imageGenEnabled: false }), false)
   assert.equal(runtime.update({ region: 'china' }), true)
   assert.notEqual(runtime.transport, captured)
   assert.equal(runtime.config.region, 'china')

@@ -22,6 +22,8 @@ export interface Config {
   responseHeaderTimeoutMs?: number
   preserveThinking?: boolean
   webSearchMode?: QoderWebSearchMode
+  imageSearchEnabled?: boolean
+  imageGenEnabled?: boolean
   requestCompression?: boolean
   modelTransport?: QoderModelTransport
 }
@@ -64,6 +66,8 @@ export const Config: z<Config> = z.object({
   responseHeaderTimeoutMs: z.number().step(1).min(1).default(defaultResponseHeaderTimeoutMs),
   preserveThinking: z.boolean().default(true),
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
+  imageSearchEnabled: z.boolean().default(true),
+  imageGenEnabled: z.boolean().default(true),
   requestCompression: z.boolean().default(false),
   modelTransport: z.union(['http', 'legacy'] as const).default('legacy'),
 })

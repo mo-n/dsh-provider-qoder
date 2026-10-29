@@ -4,6 +4,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import { QoderQueueLeases, bindQoderQueueLeases } from './queue-leases.ts'
 import { QoderQueueStatusStore } from './queue-status.ts'
+import { bindQoderImageTools } from './image-tools.ts'
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
@@ -102,6 +103,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     ...transportConfig(config),
     modelsByRegion: { ...config.modelsByRegion },
     webSearchMode: config.webSearchMode ?? 'auto',
+    imageSearchEnabled: config.imageSearchEnabled ?? true,
+    imageGenEnabled: config.imageGenEnabled ?? true,
   }
 
   let current = (): QoderConfig => baseConfig
@@ -121,6 +124,13 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     return { ...transport, models: modelsFor(value, transport.region), webSearchMode: value.webSearchMode ?? 'auto' }
   }
   const runtime = new QoderTransportRuntime(current(), createTransport)
+  const imageTools = bindQoderImageTools(ctx, {
+    logger,
+    resolveTransport: () => runtime.transport,
+    getImageSearchEnabled: () => current().imageSearchEnabled ?? true,
+    getImageGenEnabled: () => current().imageGenEnabled ?? true,
+    captureHostRun: sessionId => leases.capture(sessionId)?.run,
+  })
   const authorizationTransports = new Map<QoderRegion, NonNullable<QoderTransport['authorization']>>()
   authorization = new QoderBrowserAuthorizationManager({
     credentials: ctx.credentials,
@@ -182,6 +192,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     catalog.observeTransport()
     adapter.replaceModels(next.models)
     registration.replace([providerQoder])
+    imageTools.refresh()
   }
 
   ctx.inject(['settings'], (settingsCtx) => {

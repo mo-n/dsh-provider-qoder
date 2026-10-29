@@ -2,6 +2,7 @@
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import type { QoderImageSearchRequest, QoderImageSearchResult, QoderImageGenerationRequest, QoderImageGenerationResult } from '../images.ts'
 import type { QoderAccountInfo } from '../account.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import type { QoderRegion } from '../region.ts'
@@ -22,6 +23,8 @@ export interface QoderTransport {
   stream(options: GenerateOptions, model?: QoderCatalogModel): AsyncIterable<StreamChunk>
   discoverModels(signal?: AbortSignal): Promise<readonly QoderCatalogModel[]>
   readAccount(options?: { force?: boolean; signal?: AbortSignal }): Promise<QoderAccountInfo>
+  searchImages?(request: QoderImageSearchRequest, signal?: AbortSignal): Promise<QoderImageSearchResult>
+  generateImage?(request: QoderImageGenerationRequest, signal?: AbortSignal): Promise<QoderImageGenerationResult>
   searchWeb(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>
 }
 

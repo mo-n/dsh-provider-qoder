@@ -55,6 +55,7 @@ const external = [
   '@deepseek-ai/dsh-invariants',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/dsh-tools',
   '@deepseek-ai/schemastery',
 ]
 

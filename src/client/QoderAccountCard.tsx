@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
 import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
-import type { QoderWebSearchMode } from '../dsh/config.ts'
 import {
   modelsOf,
   regionOf,
@@ -12,6 +11,7 @@ import {
 } from './credential-operations.ts'
 import { resolveLocalizedText } from './locales.ts'
 import { QoderModelCatalog } from './QoderModelCatalog.tsx'
+import { QoderFeatureSettings } from './QoderFeatureSettings.tsx'
 import css from './QoderCredentialCard.module.css'
 
 export type QoderAccountCardProps = SettingsSectionOwnerProps & QoderCredentialInjected
@@ -270,57 +270,6 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
     )
   }
 
-  const webSearchMode: QoderWebSearchMode = modelSnapshot.value?.webSearchMode ?? 'auto'
-  const canModifySearchMode = modelSnapshot.status === 'ready' && modelSnapshot.writable
-
-  const handleSearchModeChange = async (mode: QoderWebSearchMode) => {
-    if (!canModifySearchMode || mode === webSearchMode) return
-    await operations.storeWebSearchMode(mode)
-  }
-
-  const renderWebSearchSection = () => {
-    return (
-      <div className={css.searchModeSection}>
-        <div className={css.quotaHeader}>
-          <span className={css.quotaLabel}>{t('searchModeLabel')}</span>
-        </div>
-        <div className={css.regionGroup} role="radiogroup" aria-label={t('searchModeLabel')}>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={webSearchMode === 'auto'}
-            className={`${css.regionOption} ${webSearchMode === 'auto' ? css.regionOptionActive : ''}`}
-            disabled={!canModifySearchMode}
-            onClick={() => { void handleSearchModeChange('auto') }}
-          >
-            {t('searchModeAuto')}
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={webSearchMode === 'always'}
-            className={`${css.regionOption} ${webSearchMode === 'always' ? css.regionOptionActive : ''}`}
-            disabled={!canModifySearchMode}
-            onClick={() => { void handleSearchModeChange('always') }}
-          >
-            {t('searchModeAlways')}
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={webSearchMode === 'disabled'}
-            className={`${css.regionOption} ${webSearchMode === 'disabled' ? css.regionOptionActive : ''}`}
-            disabled={!canModifySearchMode}
-            onClick={() => { void handleSearchModeChange('disabled') }}
-          >
-            {t('searchModeDisabled')}
-          </button>
-        </div>
-        <p className={css.searchModeHintText}>{t('searchModeHint')}</p>
-      </div>
-    )
-  }
-
   const currentRegion = regionOf(modelSnapshot.value)
   const currentModels = modelsOf(modelSnapshot.value, currentRegion)
   const canModifyModels = modelSnapshot.status === 'ready' && modelSnapshot.writable
@@ -364,7 +313,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
         </span>
       </div>
       {renderAccount()}
-      {renderWebSearchSection()}
+      <QoderFeatureSettings operations={operations} snapshot={modelSnapshot} t={t} />
       {renderModelCatalogSection()}
     </section>
   )

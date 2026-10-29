@@ -416,6 +416,20 @@ test('settings edits do not persist fallback models before a successful discover
   assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion, {})
 })
 
+test('image feature settings persist independently without changing web search mode', async () => {
+  const { ctx, ns } = await modelRuntime({ webSearchMode: 'always' })
+  await ctx.settings.update(ns, { imageSearchEnabled: false })
+  await ctx.settings.update(ns, { imageGenEnabled: false })
+  const stored = memorySettings(ctx).get(ns) as plugin.Config
+  assert.equal(stored.webSearchMode, 'always')
+  assert.equal(stored.imageSearchEnabled, false)
+  assert.equal(stored.imageGenEnabled, false)
+  await ctx.settings.update(ns, { imageSearchEnabled: true })
+  const next = memorySettings(ctx).get(ns) as plugin.Config
+  assert.equal(next.imageSearchEnabled, true)
+  assert.equal(next.imageGenEnabled, false)
+})
+
 test('automatic discovery and settings persistence failures remain advisory', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 })
   let offline = false

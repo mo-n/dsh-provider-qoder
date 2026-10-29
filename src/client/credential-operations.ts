@@ -25,6 +25,8 @@ export interface QoderCredentialOperations {
   storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<boolean>
   storeRegion(region: QoderRegion): Promise<boolean>
   storeWebSearchMode(mode: QoderWebSearchMode): Promise<boolean>
+  storeImageSearchEnabled(enabled: boolean): Promise<boolean>
+  storeImageGenEnabled(enabled: boolean): Promise<boolean>
   discoverModels(): Promise<QoderModelDiscoveryResult>
   setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<QoderSessionTierSelection | undefined>
   readSessionTier?(scope: QoderSessionTierScope): Promise<QoderSessionTierSelection | undefined>
@@ -36,6 +38,8 @@ export interface QoderModelSettingsSection {
   region?: QoderRegion
   modelsByRegion?: Partial<Record<QoderRegion, QoderCatalogModel[]>>
   webSearchMode?: QoderWebSearchMode
+  imageSearchEnabled?: boolean
+  imageGenEnabled?: boolean
 }
 
 export function regionOf(value: unknown): QoderRegion {
