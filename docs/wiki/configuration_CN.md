@@ -29,31 +29,6 @@ Web profile 配置文件：`~/.dsh/profiles/web/cordis.patch.yml`。使用其他
 | `streamIdleTimeoutMs` | `300000`（5 分钟） | 流式响应等待下一段数据的时限，收到数据后重新计时 |
 | `preserveThinking` | `true` | 后续请求携带历史 Qoder 推理内容；不控制思考开关或强度，不删除聊天记录 |
 
-## 功能设置
-
-以下选项也可在 **设置 → Qoder → 功能设置** 中修改：
-
-```yaml
-  config:
-    webSearchMode: auto
-    imageSearchEnabled: true
-    imageGenEnabled: true
-```
-
-| 字段 | 默认值 | 行为 |
-| --- | --- | --- |
-| `webSearchMode` | `auto` | `auto`：Qoder 模型走 Qoder 搜索，其他模型交给当前搜索提供方；`always`：始终使用 Qoder；`disabled`：关闭 Qoder 联网搜索 |
-| `imageSearchEnabled` | `true` | 公布并允许调用 `ImageSearch`，返回图片与来源信息，不下载图片 |
-| `imageGenEnabled` | `true` | 公布并允许调用 `ImageGen`，创建图片并以原始字节保存为 DSH 文件附件 |
-
-两个开关独立于联网搜索模式，仅影响新调用，已开始的调用使用原传输实例并正常完成。图片工具使用所选 Qoder 服务区域与授权，不自动回退到其他图片提供方。`ImageGen` 使用 `ge3i`，默认尺寸为 `1024x1024`，可能消耗订阅 Credits。生成文件可通过宿主既有 `read_image` 查看，但查看时聊天模型必须支持图片输入。本插件不增加 `read_image` 开关。
-
-宿主需提供 DSH tools，图片生成还需要原样附件存储与执行环境文件路径映射。图片存入附件存储，不直接写入工作目录。生成失败不会自动重新提交；生成后的交付失败不应通过再次生成来重试下载或保存。
-
-<p align="center">
-  <img src="../../assets/feature-settings_CN.png" alt="联网搜索模式、图片搜索与图片生成功能设置组件预览" width="650" />
-</p>
-
 ## 模型传输渠道
 
 `modelTransport` 支持 `legacy` 和 `http`：

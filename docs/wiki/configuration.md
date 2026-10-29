@@ -29,27 +29,6 @@ These options are configured through YAML and have no editor in the plugin setti
 | `streamIdleTimeoutMs` | `300000` (5 minutes) | Time limit for receiving the next stream chunk; resets when data arrives |
 | `preserveThinking` | `true` | Includes historical Qoder reasoning content in subsequent requests; does not control reasoning mode or effort, or delete chat history |
 
-## Feature settings
-
-These settings are also available in **Settings → Qoder → Features**:
-
-```yaml
-  config:
-    webSearchMode: auto
-    imageSearchEnabled: true
-    imageGenEnabled: true
-```
-
-| Field | Default | Behavior |
-| --- | --- | --- |
-| `webSearchMode` | `auto` | `auto`: Qoder search for Qoder models, ambient search otherwise; `always`: Qoder search regardless of model; `disabled`: no Qoder web search |
-| `imageSearchEnabled` | `true` | Advertise and allow `ImageSearch`, which returns image and source metadata without downloading |
-| `imageGenEnabled` | `true` | Advertise and allow `ImageGen`, which creates an image and delivers its original bytes as a durable DSH file attachment |
-
-Switches affect new calls, independently of web search mode. Calls already in progress retain their transport and complete normally. Both tools use the selected Qoder service region and authorization; no other image provider is used as a fallback. `ImageGen` uses `ge3i`, defaults to `1024x1024`, and may consume subscription Credits. Generated files can be inspected with the host's existing `read_image` when the chat model supports image input. This plugin does not add a `read_image` switch.
-
-The host must provide DSH tools, and generation additionally needs verbatim attachment storage with an execution-world file path mapping. Images are stored in the attachment store rather than directly in the workspace. Generation failures are not automatically resubmitted; after a delivery failure, do not generate again merely to retry a download or save.
-
 ## Model transport
 
 `modelTransport` accepts `legacy` or `http`:
