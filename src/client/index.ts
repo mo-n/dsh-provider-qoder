@@ -24,6 +24,7 @@ import { en, zh, type QoderCredentialCopy } from './locales.ts'
 import { createSessionTierEvents } from './session-tier-events.ts'
 import type { QoderSessionTierSelection } from '../dsh/rpc-channel.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
+import { installQoderSettingsNavIcon } from './settings-nav-icon.ts'
 
 const localeNamespace = 'settings.qoderCredential'
 const settingsNamespace = 'provider-qoder'
@@ -220,6 +221,7 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
    * switch re-resolves provider copy instead of reusing a setup-time snapshot.
    */
   const activeLocale = (): string => ctx.locale.getLocale().active
+  installQoderSettingsNavIcon(ctx, () => t('nav'))
 
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock', id: 'qoder-model-queue', order: 30,

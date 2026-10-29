@@ -49,6 +49,15 @@ const cssModules = {
   },
 }
 
+const inlineSvg = {
+  name: 'qoder-inline-svg',
+  async load(id) {
+    if (!id.endsWith('.svg')) return null
+    this.addWatchFile(id)
+    return `export default ${JSON.stringify(await readFile(id, 'utf8'))};`
+  },
+}
+
 const external = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-credentials',
@@ -98,7 +107,7 @@ export default defineConfig([
       ],
     },
     define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production') },
-    plugins: [cssModules],
+    plugins: [cssModules, inlineSvg],
     outputOptions: {
       entryFileNames: 'client.js',
       banner: 'window.__ModuleLoader__.load({ id: "dsh-provider-qoder", factory: (require) => {',

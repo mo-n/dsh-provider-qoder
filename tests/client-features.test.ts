@@ -34,6 +34,8 @@ async function mountFeatures(write: (field: string, value: unknown) => Promise<b
   }
   const exports: Record<string, (props: object) => unknown> = {}
   runInNewContext(source, { exports, require: (id: string) => id === 'react' ? hooks
+    // Test the feature settings contract; DSH owns primitive rendering and styling.
+    : id === '@deepseek-ai/dsh-client-ui-primitives' ? { Button: 'button', Switch: 'input' }
     : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) } : require(id) })
   const operations = {
     storeWebSearchMode: (value: unknown) => write('webSearchMode', value),
@@ -83,8 +85,8 @@ test('feature writes serialize, retain the published snapshot and show rejected 
   const writes: unknown[] = []
   const ui = await mountFeatures((...args) => { writes.push(args); return new Promise(resolve => { finish = resolve }) })
   const toggles = ui.controls().slice(3)
-  ;(toggles[0].props.onChange as (event: unknown) => void)({ currentTarget: { checked: false } })
-  ;(toggles[1].props.onChange as (event: unknown) => void)({ currentTarget: { checked: false } })
+  ;(toggles[0].props.onChange as (enabled: boolean) => void)(false)
+  ;(toggles[1].props.onChange as (enabled: boolean) => void)(false)
   await ui.settle()
   assert.deepEqual(writes, [['imageSearchEnabled', false]])
   assert.ok(ui.controls().every(node => node.props.disabled === true))
@@ -93,7 +95,7 @@ test('feature writes serialize, retain the published snapshot and show rejected 
   await ui.settle()
   assert.match(ui.text(), /Failed to save the feature setting/)
   assert.ok(ui.controls().every(node => node.props.disabled === false))
-  ;(ui.controls()[4].props.onChange as (event: unknown) => void)({ currentTarget: { checked: false } })
+  ;(ui.controls()[4].props.onChange as (enabled: boolean) => void)(false)
   finish(true)
   await ui.settle()
   assert.deepEqual(writes[1], ['imageGenEnabled', false])
