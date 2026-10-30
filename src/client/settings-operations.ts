@@ -22,7 +22,11 @@ export interface QoderCredentialsRemote {
 
 /** Client storage adapters; host/Qoder protocol access remains in the existing RPC. */
 export function createSettingsOperations(credentials: QoderCredentialsRemote, form: ModelForm, authorization: QoderAuthorizationOperations, rpc: QoderRpcCaller) {
-  const rejectedOutcome = (error: unknown) => ['permission-denied', 'unauthenticated', 'persistence'].includes(operationCause(error)) ? 'not-completed' as const : 'unknown' as const
+  const rejectedOutcome = (error: unknown) => {
+    const invalidRequest = typeof error === 'object' && error !== null && 'code' in error && error.code === 'INVALID_REQUEST'
+    return invalidRequest || ['permission-denied', 'unauthenticated', 'persistence'].includes(operationCause(error))
+      ? 'not-completed' as const : 'unknown' as const
+  }
   const describePat = async (): Promise<OperationResult<QoderCredentialStatus>> => {
     try {
       const response = await credentials.describe([qoderCredentialRef])

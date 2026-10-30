@@ -125,7 +125,8 @@ export function bindQoderImageTools(ctx: Context, options: QoderImageToolsOption
           try {
             const artifact = await saveImageArtifact(imageCtx.attachments, fs, args.name, image, exec.signal)
             options.logger?.debug?.('[Qoder Image] Attachment save completed', { requestId: image.requestId, stage: 'attachment-save', durationMs: Date.now() - started })
-            return { path: artifact.path, requestId: image.requestId, attachment: { ...artifact.attachment } }
+            const { attachmentId, name, bytes } = artifact.attachment
+            return { path: artifact.path, requestId: image.requestId, attachment: { attachmentId, name, bytes } }
           } catch (error) {
             options.logger?.warn?.('[Qoder Image] Failed', { requestId: image.requestId, stage: 'attachment-save', durationMs: Date.now() - started, cancelled: exec.signal.aborted, ...imageFailureDetails(error) })
             throw new QoderImageArtifactDeliveryError(image.requestId, image.imageUrl, error)

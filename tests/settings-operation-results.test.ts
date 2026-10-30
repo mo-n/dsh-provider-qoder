@@ -216,3 +216,19 @@ test('explicit PAT removal refusal is not completed; thrown cancellation remains
   assert.equal(reads, 1)
   assert.equal(log.mock.callCount(), 2)
 })
+
+
+test('invalid Context Tier requests are rejected without reconciliation', async t => {
+  t.mock.method(console, 'error', () => {})
+  const f = fixture()
+  const calls: string[] = []
+  f.rpc.call = async endpoint => {
+    calls.push(endpoint)
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'Unknown Context Tier' } }
+  }
+  const error = errorOf(await f.operations().setSessionTier(scope.sessionId, scope.modelId, 'missing', scope.region))
+  assert.equal(error.outcome, 'not-completed')
+  assert.equal(error.diagnostic.rpcCode, 'INVALID_REQUEST')
+  assert.deepEqual(error.completedStages, [])
+  assert.deepEqual(calls, ['sessionTier'])
+})
