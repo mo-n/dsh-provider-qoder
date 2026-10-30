@@ -18,6 +18,7 @@ import * as plugin from '../src/index.ts'
 import { Config, type LiveConfig } from '../src/dsh/config.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
@@ -817,7 +818,7 @@ test('session tier RPC returns the effective host choice and rejects obsolete re
   assert.deepEqual(await call('readSessionTier', scope), { ok: true, value: { ...scope, tierKey: 'large', tokenCount: 1_000_000 } })
   assert.deepEqual(await call('sessionTier', { ...scope, tierKey: 'small' }), { ok: true, value: { ...scope, tierKey: 'small', tokenCount: 200_000 } })
   assert.deepEqual(await call('readSessionTier', scope), { ok: true, value: { ...scope, tierKey: 'small', tokenCount: 200_000 } })
-  assert.equal((await call('sessionTier', { ...scope, tierKey: 'unknown' })).ok, false)
+  assert.equal((await call('sessionTier', { ...scope, tierKey: 'unknown' })).error.code, 'INVALID_REQUEST')
   await ctx.settings.update('provider-qoder' as SettingsNamespace, { region: 'china' })
   assert.equal((await call('readSessionTier', scope)).ok, false)
   assert.equal((await call('sessionTier', { ...scope, tierKey: 'large' })).ok, false)
@@ -927,4 +928,83 @@ test('host session disposal releases adapter Context Tier state', async (t) => {
     ctx.emit('session/disposed', { id: 'removed-session' } as never)
     assert.deepEqual(released, ['removed-session'])
   } finally { await ctx.fiber.dispose() }
+})
+
+
+test('settings RPC validates defined fields before business work and distinguishes failure sources', async t => {
+  const reads: boolean[] = []
+  let failure: unknown
+  t.mock.method(DefaultQoderTransport.prototype, 'readAccount', async (options: { force?: boolean }) => {
+    reads.push(options.force === true)
+    if (failure) throw failure
+    return { marker: 'account' }
+  })
+  const discover = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [])
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  const routes = new Map<string, { fetch(request: Request): Promise<Response> }>()
+  ctx.provide('connection', { fetch: { register: (route: { path: string; fetch(request: Request): Promise<Response> }) => {
+    routes.set(route.path, route)
+    return () => { routes.delete(route.path) }
+  } } } as any)
+  ctx.provide('attachments', {} as any)
+  let restoreError: unknown
+  let restores = 0
+  ctx.provide('sessions', { get: (id: string) => id === 'known' ? { requestContext: () => undefined } : undefined } as any)
+  ctx.provide('sessionController', { resolveAgent: async () => {
+    restores++
+    if (restoreError) return { error: restoreError }
+    return { agent: {} }
+  } } as any)
+  const fiber = ctx.plugin(plugin, { modelsByRegion: { global: [{ id: 'tiered', name: 'Tiered', contextTier: 'small', contextWindow: 200_000, contextOptions: { small: { tokenCount: 200_000 } } }] } })
+  await fiber.await()
+  const call = async (endpoint: string, data: unknown) => {
+    const path = `/api/qoder-subscription/${endpoint}`
+    return (await routes.get(path)!.fetch(new Request(`http://localhost${path}`, { method: 'POST', body: JSON.stringify(data) }))).json()
+  }
+  const scope = { region: 'global', sessionId: 'known', modelId: 'tiered' }
+  try {
+    for (const endpoint of ['account', 'models', 'queue', 'authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization', 'sessionTier', 'readSessionTier']) {
+      for (const input of [null, [], true, 'payload']) assert.equal((await call(endpoint, input)).error.code, 'INVALID_REQUEST')
+    }
+    for (const force of ['true', 0, null, [], {}]) assert.equal((await call('account', { force })).error.code, 'INVALID_REQUEST')
+    for (const sessionId of ['', ' ', 1, 'x'.repeat(257)]) {
+      assert.equal((await call('queue', { sessionId })).error.code, 'INVALID_REQUEST')
+      assert.equal((await call('readSessionTier', { ...scope, sessionId })).error.code, 'INVALID_REQUEST')
+    }
+    for (const endpoint of ['authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization']) {
+      for (const region of [undefined, 'bad', 'china']) assert.equal((await call(endpoint, { region })).error.code, 'INVALID_REQUEST')
+    }
+    assert.equal((await call('selectAuthorization', { region: 'global', method: 'wrong' })).error.code, 'INVALID_REQUEST')
+    assert.equal((await call('sessionTier', { ...scope, tierKey: 4 })).error.code, 'INVALID_REQUEST')
+    assert.equal((await call('readSessionTier', { ...scope, modelId: '' })).error.code, 'INVALID_REQUEST')
+    assert.equal(restores, 0)
+    assert.deepEqual(reads, [])
+    assert.equal(discover.mock.callCount(), 0)
+    for (const data of [{}, { force: false }, { force: true }, { extra: 'ignored' }]) assert.equal((await call('account', data)).ok, true)
+    assert.deepEqual(reads, [false, false, true, false])
+    assert.deepEqual(await call('queue', { sessionId: 'known', extra: true }), { ok: true, value: [] })
+    assert.equal((await call('readSessionTier', { ...scope, modelId: 'missing' })).error.code, 'INVALID_REQUEST')
+    assert.equal((await call('sessionTier', { ...scope, tierKey: 'missing' })).error.code, 'INVALID_REQUEST')
+    assert.equal((await call('readSessionTier', { ...scope, sessionId: 'missing' })).error.code, 'INVALID_REQUEST')
+    const extraTier = await call('readSessionTier', { ...scope, extra: true })
+    assert.equal(extraTier.ok, true, JSON.stringify(extraTier))
+    assert.equal(extraTier.value.extra, undefined)
+    assert.deepEqual(await call('models', { extra: true }), { ok: true, value: [] })
+    t.mock.method(TestCredentials.prototype, 'describeRecord', async () => ({ configured: false, writable: false }))
+    assert.equal((await call('beginLogin', { region: 'global' })).error.code, 'INTERNAL')
+    restoreError = new QoderLlmError('Storage unavailable', 'INVALID_REQUEST')
+    assert.equal((await call('readSessionTier', { ...scope, sessionId: 'missing' })).error.code, 'INTERNAL')
+    for (const [error, code] of [
+      [new QoderLlmError('Upstream rejected request', 'INVALID_REQUEST'), 'UPSTREAM_ERROR'],
+      [new QoderLlmError('No credentials', 'NO_CREDENTIALS'), 'NO_CREDENTIALS'],
+      [new QoderLlmError('Expired', 'AUTH'), 'UNAUTHENTICATED'],
+      [new QoderLlmError('Timed out', 'TIMEOUT'), 'TIMEOUT'],
+      [new Error('Unexpected internal failure'), 'INTERNAL'],
+    ] as const) {
+      failure = error
+      assert.equal((await call('account', {})).error.code, code)
+    }
+  } finally { await fiber.dispose() }
 })

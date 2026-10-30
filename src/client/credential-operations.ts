@@ -63,7 +63,7 @@ export interface QoderModelSettingsSnapshot {
   mode?: 'host' | 'memory'
 }
 
-export type QoderModelDiscoveryResult = QoderRpcResult<QoderCatalogModel[]>
+export type QoderModelDiscoveryResult = QoderRpcResult<readonly QoderCatalogModel[]>
 
 export interface QoderModelReconciliation {
   catalog: QoderCatalogModel[]

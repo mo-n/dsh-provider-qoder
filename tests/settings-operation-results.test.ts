@@ -190,7 +190,7 @@ test('Context Tier reconciliation confirms desired host state and failed reads p
 test('serialization errors do not become connection failures or submit an RPC request', async () => {
   let sends = 0
   const rpc = createQoderRpcCaller({ fetch: async () => { sends++; throw new Error('Unexpected send') } })
-  const cyclic: { self?: unknown } = {}; cyclic.self = cyclic
+  const cyclic = { ...scope, tierKey: 'large', self: undefined as unknown }; cyclic.self = cyclic
   const result = await rpc.call('sessionTier', cyclic)
   assert.equal(result.ok, false)
   if (result.ok) throw new Error('Expected failure')

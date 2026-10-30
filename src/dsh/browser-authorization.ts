@@ -170,7 +170,7 @@ export class QoderBrowserAuthorizationManager {
     if (!pending(attempt)) return
     attempt!.controller.abort()
     await attempt!.done
-    if (attempt!.cleanupFailed) throw new QoderLlmError('Could not restore the previous Qoder authorization after cancellation. Reload account status.', 'INVALID_REQUEST')
+    if (attempt!.cleanupFailed) throw new QoderLlmError('Could not restore the previous Qoder authorization after cancellation. Reload account status.', 'INTERNAL')
   }
 
   async select(region: QoderRegion, method: 'pat' | 'browser' | 'none'): Promise<QoderAuthorizationView> {
@@ -260,7 +260,7 @@ export class QoderBrowserAuthorizationManager {
 
   private async assertWritable(region: QoderRegion): Promise<void> {
     const info = await this.credentials.describeRecord?.(browserAuthorizationKey(region))
-    if (!info?.writable) throw new QoderLlmError('Qoder authorization storage is read-only or unsupported.', 'INVALID_REQUEST')
+    if (!info?.writable) throw new QoderLlmError('Qoder authorization storage is read-only or unsupported.', 'INTERNAL')
   }
 
   async dispose(): Promise<void> {

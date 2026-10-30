@@ -41,7 +41,7 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
       return failure(operation, 'persist-settings', error, { mutation: true })
     }
   }
-  const readTier = (scope: QoderSessionTierScope) => rpc.call<QoderSessionTierSelection>('readSessionTier', scope)
+  const readTier = (scope: QoderSessionTierScope) => rpc.call('readSessionTier', scope)
   return {
     describePat,
     describe: async (): Promise<OperationResult<QoderCredentialStatus>> => {
@@ -112,7 +112,7 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
       const scope = { sessionId, modelId, region }
       let error: unknown
       try {
-        const result = await rpc.call<QoderSessionTierSelection>('sessionTier', { ...scope, tierKey })
+        const result = await rpc.call('sessionTier', { ...scope, tierKey })
         if (result.ok) return result
         error = result.error
         if (rejectedOutcome(error) === 'not-completed') return failure('setSessionTier', 'persist-context-tier', error, { mutation: true, outcome: 'not-completed', context: { ...scope, tierKey } })

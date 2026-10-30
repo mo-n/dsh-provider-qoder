@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-web'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderTransportRuntime, transportConfig, type QoderRuntimeConfig } from './transport-runtime.ts'
+import { QoderRequestError } from './request-error.ts'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
 import { initiatingModelProvider, QoderSearchProvider, shouldUseQoderSearch } from './search-provider.ts'
@@ -26,7 +27,7 @@ import {
 } from '../qoder/transport/index.ts'
 import { modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } from './config.ts'
 import { bindQoderSettings } from './settings.ts'
-import { isQoderRpcEndpoint, type QoderRpcErrorCode } from './rpc-channel.ts'
+import { isQoderRpcEndpoint, type QoderRpcErrorCode, type QoderJsonRpcEndpoint, type QoderRpcOutput } from './rpc-channel.ts'
 import { registerQoderRpc, type QoderRpcHandler } from './rpc.ts'
 import { QoderBrowserAuthorizationManager, browserAuthorizationKey } from './browser-authorization.ts'
 import { qoderCredentialRef } from './credential-contract.ts'
@@ -61,12 +62,17 @@ function publicError(code: QoderRpcErrorCode, message: string, details: object =
   }
 }
 
-async function executeRpc<T>(
+function validSessionId(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 256
+}
+
+async function executeRpc<E extends QoderJsonRpcEndpoint>(
+  _endpoint: E,
   operation: string,
-  task: () => Promise<T>,
+  task: () => Promise<QoderRpcOutput<E>>,
   signal: AbortSignal,
   logger?: QoderLogger,
-): Promise<QoderHostRpcResult<T>> {
+): Promise<QoderHostRpcResult<QoderRpcOutput<E>>> {
   try {
     return { ok: true, value: await task() }
   } catch (error) {
@@ -76,7 +82,11 @@ async function executeRpc<T>(
     }
     let code: QoderRpcErrorCode = 'INTERNAL'
     if (error instanceof QoderLlmError) {
-      if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
+      if (error instanceof QoderRequestError) {
+        code = 'INVALID_REQUEST'
+      } else if (error.code === 'INTERNAL') {
+        code = 'INTERNAL'
+      } else if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
         code = 'NO_CREDENTIALS'
       } else if (error.code === 'AUTH') {
         code = 'UNAUTHENTICATED'
@@ -263,42 +273,43 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   const handler: QoderRpcHandler = async (endpoint, payload, signal) => {
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
+    if (endpoint === 'sessionTierEvents') return publicError('UNKNOWN_ENDPOINT', 'This endpoint requires the event stream handler')
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return publicError('INVALID_REQUEST', 'An object payload is required')
+    const data = payload as Record<string, unknown>
 
     if (endpoint === 'authorization' || endpoint === 'beginLogin' || endpoint === 'cancelLogin' || endpoint === 'selectAuthorization') {
-      const data = payload as { region?: unknown; method?: unknown } | null
       const region = data?.region
       if ((region !== 'global' && region !== 'china') || region !== resolveConfig().region) {
-        return publicError('INTERNAL', 'The active Qoder service region is required')
+        return publicError('INVALID_REQUEST', 'The active Qoder service region is required')
       }
-      return executeRpc('manage Qoder authorization', async () => {
+      const method = data.method
+      if (endpoint === 'selectAuthorization' && method !== 'pat' && method !== 'browser' && method !== 'none') return publicError('INVALID_REQUEST', 'Invalid authorization method.')
+      return executeRpc(endpoint, 'manage Qoder authorization', async () => {
         if (endpoint === 'beginLogin') return authorization.begin(region)
         if (endpoint === 'cancelLogin') { await authorization.cancel(region); return authorization.describe(region) }
         if (endpoint === 'selectAuthorization') {
-          const method = data?.method
-          if (method !== 'pat' && method !== 'browser' && method !== 'none') throw new QoderLlmError('Invalid authorization method.', 'INVALID_REQUEST')
-          return authorization.select(region, method)
+          return authorization.select(region, method as 'pat' | 'browser' | 'none')
         }
         return authorization.describe(region)
       }, signal, logger)
     }
 
     if (endpoint === 'queue') {
-      const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId
-      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 256) return publicError('INTERNAL', 'A valid sessionId is required')
+      const sessionId = data.sessionId
+      if (!validSessionId(sessionId)) return publicError('INVALID_REQUEST', 'A valid sessionId is required')
       return { ok: true, value: queueStatus.read(sessionId) }
     }
 
     if (endpoint === 'models') {
-      return await executeRpc('discover Qoder models', () => discoverModels(signal), signal, logger)
+      return await executeRpc(endpoint, 'discover Qoder models', () => discoverModels(signal), signal, logger)
     }
 
     if (endpoint === 'sessionTier' || endpoint === 'readSessionTier') {
-      const data = payload as { sessionId?: string; modelId?: string; tierKey?: string; region?: QoderRegion }
-      if (typeof data?.sessionId === 'string' && typeof data?.modelId === 'string' && (endpoint === 'readSessionTier' || typeof data?.tierKey === 'string') && (data.region === 'global' || data.region === 'china')) {
+      if (validSessionId(data.sessionId) && typeof data.modelId === 'string' && data.modelId.trim() && (endpoint === 'readSessionTier' || (typeof data.tierKey === 'string' && data.tierKey.trim())) && (data.region === 'global' || data.region === 'china')) {
         const { sessionId, modelId, tierKey, region } = data
-        return await executeRpc(endpoint === 'sessionTier' ? 'select session context tier' : 'read session context tier', async () => {
+        return await executeRpc(endpoint, endpoint === 'sessionTier' ? 'select session context tier' : 'read session context tier', async () => {
           if (!sessionId.trim() || region !== resolveConfig().region) {
-            throw new QoderLlmError('Invalid session context tier scope.', 'INVALID_REQUEST')
+            throw new QoderRequestError('The active Qoder service region is required.')
           }
           const sessions = ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined
           if (sessions && !sessions.get(sessionId)) {
@@ -308,23 +319,27 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
               resolveAgent(id: string): Promise<{ error?: unknown }>
             } | undefined
             if (controller) {
-              const result = await controller.resolveAgent(sessionId)
-              if ('error' in result) throw result.error
+              try {
+                const result = await controller.resolveAgent(sessionId)
+                if ('error' in result) throw result.error
+              } catch (error) {
+                throw new Error('Failed to restore the host session.', { cause: error })
+              }
             }
           }
           signal.throwIfAborted()
-          if (endpoint === 'sessionTier') adapter.setSessionTier(sessionId, modelId, tierKey!, region)
+          if (endpoint === 'sessionTier') adapter.setSessionTier(sessionId, modelId, tierKey as string, region)
           return adapter.readSessionTier({ sessionId, modelId, region })
         }, signal, logger)
       }
-      return publicError('INTERNAL', 'Invalid sessionTier payload')
+      return publicError('INVALID_REQUEST', 'Invalid session Context Tier payload')
     }
 
-    const force = typeof payload === 'object' && payload !== null && 'force' in payload
-      ? payload.force === true
-      : false
+    if ('force' in data && typeof data.force !== 'boolean') return publicError('INVALID_REQUEST', 'force must be a boolean')
+    const force = data.force === true
     logger?.debug?.('[Qoder RPC] Reading subscriber account', { force })
     const outcome = await executeRpc(
+      endpoint,
       'load Qoder account',
       () => runtime.transport.readAccount({ force, signal }),
       signal,

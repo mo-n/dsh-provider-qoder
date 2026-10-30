@@ -81,7 +81,7 @@ test('scope isolation survives switching region away and back', async () => {
   setRegion('global')
   global.activate(); await settle()
   assert.equal(global.getSnapshot().selection?.tierKey, 'small')
-  assert.throws(() => adapter.readSessionTier({ ...scope, region: 'china' }), /scope/)
+  assert.throws(() => adapter.readSessionTier({ ...scope, region: 'china' }), /region/)
   global.dispose()
 })
 
@@ -180,5 +180,5 @@ test('host read uses the same historical fallback and manual precedence as gener
   assert.equal(adapter.readSessionTier(scope).tokenCount, 200_000)
   adapter.setSessionTier('s', 'a', 'large')
   assert.equal(adapter.readSessionTier(scope).tokenCount, 1_000_000)
-  assert.throws(() => adapter.readSessionTier({ ...scope, sessionId: 'missing' }), /scope/)
+  assert.throws(() => adapter.readSessionTier({ ...scope, sessionId: 'missing' }), /session reference/)
 })

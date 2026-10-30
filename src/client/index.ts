@@ -6,14 +6,11 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { qoderCredentialRef } from '../dsh/credential-contract.ts'
 import { createSettingsOperations, type ModelForm, type QoderCredentialsRemote } from './settings-operations.ts'
-import type { QoderAccountInfo } from '../qoder/account.ts'
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { QoderQueueStatus } from './QoderQueueStatus.tsx'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
 import { QoderContextSelect } from './QoderContextSelect.tsx'
 import { regionOf } from './credential-operations.ts'
-import type { QoderAuthorizationView } from '../qoder/authorization.ts'
 import type {
   QoderCredentialOperations,
   QoderModelSettingsSection,
@@ -77,18 +74,18 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
 
   const readModelSnapshot = () => modelScope.getSnapshot()
   const authorizationOperations = {
-    read: (region: import('../qoder/region.ts').QoderRegion) => rpc.call<QoderAuthorizationView>('authorization', { region }),
-    begin: (region: import('../qoder/region.ts').QoderRegion) => rpc.call<QoderAuthorizationView>('beginLogin', { region }),
-    cancel: (region: import('../qoder/region.ts').QoderRegion) => rpc.call<QoderAuthorizationView>('cancelLogin', { region }),
-    select: (region: import('../qoder/region.ts').QoderRegion, method: 'pat' | 'browser' | 'none') => rpc.call<QoderAuthorizationView>('selectAuthorization', { region, method }),
+    read: (region: import('../qoder/region.ts').QoderRegion) => rpc.call('authorization', { region }),
+    begin: (region: import('../qoder/region.ts').QoderRegion) => rpc.call('beginLogin', { region }),
+    cancel: (region: import('../qoder/region.ts').QoderRegion) => rpc.call('cancelLogin', { region }),
+    select: (region: import('../qoder/region.ts').QoderRegion, method: 'pat' | 'browser' | 'none') => rpc.call('selectAuthorization', { region, method }),
   }
   const operations: QoderCredentialOperations = {
     authorization: authorizationOperations,
     ...createSettingsOperations(credentials, modelScope, authorizationOperations, rpc),
-    getAccount: async (force) => await rpc.call<QoderAccountInfo>('account', { force }),
+    getAccount: async (force) => await rpc.call('account', { force }),
     getModelSnapshot: readModelSnapshot,
     subscribeModels: listener => modelScope.subscribe(listener),
-    discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
+    discoverModels: async () => await rpc.call('models', {}),
     subscribeSessionTiers: (scope, listener) => tierEvents.subscribe(scope, listener),
 
     subscribe: listener => {

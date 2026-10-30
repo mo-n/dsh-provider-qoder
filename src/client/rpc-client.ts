@@ -9,7 +9,9 @@
 import {
   isQoderRpcErrorCode,
   qoderRpcPath,
-  type QoderRpcEndpoint,
+  type QoderJsonRpcEndpoint,
+  type QoderRpcInput,
+  type QoderRpcOutput,
   type QoderRpcErrorCode,
   type QoderRpcResult,
 } from '../dsh/rpc-channel.ts'
@@ -26,7 +28,7 @@ export interface QoderRpcTransport {
 }
 
 export interface QoderRpcCaller {
-  call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcResult<T>>
+  call<E extends QoderJsonRpcEndpoint>(endpoint: E, payload: QoderRpcInput<E>, signal?: AbortSignal): Promise<QoderRpcResult<QoderRpcOutput<E>>>
 }
 
 /**
@@ -39,7 +41,7 @@ export interface QoderRpcCaller {
 export function createQoderRpcCaller(transport: QoderRpcTransport = {}): QoderRpcCaller {
   const send = transport.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
   return {
-    async call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcResult<T>> {
+    async call<E extends QoderJsonRpcEndpoint>(endpoint: E, payload: QoderRpcInput<E>, signal?: AbortSignal): Promise<QoderRpcResult<QoderRpcOutput<E>>> {
       const path = qoderRpcPath(endpoint)
       let phase: 'serialize' | 'send' | 'decode' = 'serialize'
       try {
@@ -65,7 +67,7 @@ export function createQoderRpcCaller(transport: QoderRpcTransport = {}): QoderRp
           }
         }
         const envelope = await response.json() as QoderRpcEnvelope
-        if (envelope?.ok === true) return { ok: true, value: envelope.value as T }
+        if (envelope?.ok === true) return { ok: true, value: envelope.value as QoderRpcOutput<E> }
 
         const rawError = envelope?.error
         let code: QoderRpcErrorCode = 'INTERNAL'

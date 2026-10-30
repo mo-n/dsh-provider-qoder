@@ -52,7 +52,7 @@ export function watchQueueStatus(
     active = controller
     const timeout = setTimeout(() => controller.abort(), 5000)
     try {
-      const result = await rpc.call<unknown>('queue', { sessionId }, controller.signal)
+      const result = await rpc.call('queue', { sessionId }, controller.signal)
       if (disposed || revision !== generation) return
       if (!result.ok) throw new Error('Queue status unavailable')
       items = parseQueueSnapshots(result.value, sessionId)
