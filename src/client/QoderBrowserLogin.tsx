@@ -183,9 +183,9 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
     {readFailed ? <button type="button" className={css.secondary} onClick={() => wakeRef.current?.()}>{t('retry')}</button> : null}
     {view ? <>
       {connected || view.expired ? <div className={css.subscriberRow}>
-        <span className={css.subscriberAvatar} aria-hidden="true">{initial}</span>
+        <span className={css.avatar} aria-hidden="true">{initial}</span>
         <div className={css.subscriberIdentity}>
-          <strong>{identity?.name || t(view.method === 'pat' ? 'patActive' : 'browserMethod')}</strong>
+          <strong className={css.userName}>{identity?.name || t(view.method === 'pat' ? 'patActive' : 'browserMethod')}</strong>
           {identity?.email ? <span>{identity.email}</span> : null}
           <span className={css.label}>{t(view.method === 'browser' ? 'browserMethod' : 'patMethod')}</span>
         </div>
@@ -215,10 +215,10 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
       {!pending && failure ? <p role="alert" className={css.error}>{t(failure)}</p> : null}
 
       {menu && !pending && !editing ? <div id="qoder-account-management" className={css.managementPanel}>
-        <button type="button" className={css.textButton} disabled={busy || !view.writable} onClick={() => { void mutate('begin') }}>{t('changeAccount')}</button>
-        <button type="button" className={css.textButton} disabled={busy || !pat?.writable} onClick={openPat}>{t(view.method === 'pat' ? 'editPat' : 'usePat')}</button>
-        {view.method !== 'browser' && view.profile ? <button type="button" className={css.textButton} disabled={busy || !view.writable} onClick={() => { void mutate('browser') }}>{t('useBrowser')}</button> : null}
-        {view.profile ? <button type="button" className={css.danger} disabled={busy || !view.writable} onClick={() => { void mutate('none') }}>{t('signOutQoder')}</button> : null}
+        <button type="button" className={css.secondary} disabled={busy || !view.writable} onClick={() => { void mutate('begin') }}>{t('changeAccount')}</button>
+        <button type="button" className={css.secondary} disabled={busy || !pat?.writable} onClick={openPat}>{t(view.method === 'pat' ? 'editPat' : 'usePat')}</button>
+        {view.method !== 'browser' && view.profile ? <button type="button" className={css.secondary} disabled={busy || !view.writable} onClick={() => { void mutate('browser') }}>{t('useBrowser')}</button> : null}
+        {view.profile ? <button type="button" className={`${css.textButton} ${css.dangerText}`} disabled={busy || !view.writable} onClick={() => { void mutate('none') }}>{t('signOutQoder')}</button> : null}
       </div> : null}
 
       {!pending && !editing && (!connected || view.expired) ? <div className={css.connectionActions}>

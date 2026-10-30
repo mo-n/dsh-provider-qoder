@@ -78,7 +78,8 @@ test('model catalog renders context tier select and propagates default tier chan
       useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
       useRef: (value: unknown) => ({ current: value }),
       useLayoutEffect: () => {},
-    } : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) } : require(id),
+    } : id === '@deepseek-ai/dsh-client-ui-primitives' ? { Menu: 'menu', IconChevronDownOutlineRegular: 'svg' }
+      : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) } : require(id),
   })
 
   const tieredModel: QoderCatalogModel = {
@@ -121,9 +122,9 @@ test('model catalog renders context tier select and propagates default tier chan
   const tieredChoice = choices[0].props.children as (VNode | null)[]
   const tierSection = tieredChoice.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelTier'))
   assert.ok(tierSection)
-  const tierSelect = (tierSection.props.children as VNode[]).find(c => c.type === 'select')
+  const tierSelect = (tierSection.props.children as VNode[]).find(c => c.type === 'menu')
   assert.ok(tierSelect)
-  assert.equal(tierSelect.props.value, 'small')
+  assert.equal(tierSelect.props.selectedId, 'small')
 
   // Single model has no tier select
   const singleChoice = choices[1].props.children as (VNode | null)[]
@@ -131,8 +132,8 @@ test('model catalog renders context tier select and propagates default tier chan
   assert.equal(singleTierSection, undefined)
 
   // Selecting a new tier saves the updated model to its mounted region
-  const selectHandler = tierSelect.props.onChange as (event: { currentTarget: { value: string } }) => void
-  selectHandler({ currentTarget: { value: 'large' } })
+  const selectHandler = tierSelect.props.onSelect as (key: string) => void
+  selectHandler('large')
   assert.equal(changedModels.length, 2)
   assert.equal(changedModels[0].id, 'tiered')
   assert.equal(changedModels[0].contextTier, 'large')

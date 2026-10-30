@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronDownOutlineRegular, Menu, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderCredentialInjected, QoderModelSettingsSnapshot } from './credential-operations.ts'
 import { operationNotice, type OperationResult } from './operation-result.ts'
@@ -10,6 +10,7 @@ export function QoderFeatureSettings({ operations, snapshot, t }: Pick<QoderCred
   snapshot: QoderModelSettingsSnapshot
 }) {
   const [saving, setSaving] = useState(false)
+  const [searchMenuOpen, setSearchMenuOpen] = useState(false)
   const [failed, setFailed] = useState<QoderCredentialCopy>()
   const pending = useRef(false)
   const mounted = useRef(true)
@@ -37,22 +38,42 @@ export function QoderFeatureSettings({ operations, snapshot, t }: Pick<QoderCred
   const searchModes: Array<[QoderWebSearchMode, 'searchModeAuto' | 'searchModeAlways' | 'searchModeDisabled']> = [
     ['auto', 'searchModeAuto'], ['always', 'searchModeAlways'], ['disabled', 'searchModeDisabled'],
   ]
-  return <section className={css.accountSection} data-qoder-features aria-label={t('featuresTitle')} aria-busy={saving}>
-    <strong className={css.quotaLabel}>{t('featuresTitle')}</strong>
-    <div className={css.featureSetting}>
-      <span className={css.modelCatalogTitle}>{t('searchModeLabel')}</span>
-      <div className={`${css.regionGroup} ${css.featureModes}`} role="radiogroup" aria-label={t('searchModeLabel')}>
-        {searchModes.map(([value, label]) => <Button key={value} type="button" role="radio" size="sm"
-          aria-checked={mode === value} disabled={!writable}
-          variant={mode === value ? 'primary' : 'outline'}
-          onClick={() => { if (mode !== value) void save(() => operations.storeWebSearchMode(value)) }}>{t(label)}</Button>)}
+  return <section className={css.featureSection} data-qoder-features aria-label={t('featuresTitle')} aria-busy={saving}>
+    <strong className={css.featureSectionTitle}>{t('featuresTitle')}</strong>
+    <div className={`${css.featureSetting} ${css.featureToggleRow}`}>
+      <span className={css.featureDescription}>
+        <span className={css.featureTitle}>{t('searchModeLabel')}</span>
+        <span className={css.featureHint}>{t('searchModeHint')}</span>
+      </span>
+      <div className={css.featureControl}>
+        <Menu
+          open={searchMenuOpen && writable}
+          onClose={() => { setSearchMenuOpen(false) }}
+          items={searchModes.map(([id, label]) => ({ id, label: t(label) }))}
+          selectedId={mode}
+          onSelect={id => {
+            setSearchMenuOpen(false)
+            const selected = searchModes.find(([value]) => value === id)?.[0]
+            if (selected !== undefined && mode !== selected) void save(() => operations.storeWebSearchMode(selected))
+          }}
+          align="end"
+          portal
+          anchor={(
+            <button type="button" className={css.searchModeSwitcher}
+              aria-haspopup="menu" aria-expanded={searchMenuOpen && writable}
+              aria-label={t('searchModeLabel')} disabled={!writable}
+              onClick={() => { if (writable) setSearchMenuOpen(!searchMenuOpen) }}>
+              <span className={css.searchModeSwitcherLabel}>{t(searchModes.find(([value]) => value === mode)![1])}</span>
+              <IconChevronDownOutlineRegular className={css.searchModeChevron} size={14} aria-hidden="true" />
+            </button>
+          )}
+        />
       </div>
-      <span className={css.hint}>{t('searchModeHint')}</span>
     </div>
     <div className={`${css.featureSetting} ${css.featureToggleRow}`}>
       <span className={css.featureDescription}>
-        <span className={css.modelCatalogTitle}>{t('imageSearchLabel')}</span>
-        <span className={css.hint}>{t('imageSearchHint')}</span>
+        <span className={css.featureTitle}>{t('imageSearchLabel')}</span>
+        <span className={css.featureHint}>{t('imageSearchHint')}</span>
       </span>
       <Switch label={t('imageSearchLabel')} title={t('imageSearchHint')}
         checked={snapshot.value?.imageSearchEnabled ?? true} disabled={!writable}
@@ -60,8 +81,8 @@ export function QoderFeatureSettings({ operations, snapshot, t }: Pick<QoderCred
     </div>
     <div className={`${css.featureSetting} ${css.featureToggleRow}`}>
       <span className={css.featureDescription}>
-        <span className={css.modelCatalogTitle}>{t('imageGenLabel')}</span>
-        <span className={css.hint}>{t('imageGenHint')}</span>
+        <span className={css.featureTitle}>{t('imageGenLabel')}</span>
+        <span className={css.featureHint}>{t('imageGenHint')}</span>
       </span>
       <Switch label={t('imageGenLabel')} title={t('imageGenHint')}
         checked={snapshot.value?.imageGenEnabled ?? true} disabled={!writable}

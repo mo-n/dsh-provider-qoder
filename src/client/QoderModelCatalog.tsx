@@ -1,4 +1,5 @@
 import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
+import { IconChevronDownOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   contextTiersOf,
   formatContextTokens,
@@ -30,6 +31,7 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
 
 function RegionModelCatalog({ operations, models, region, disabled, fetchDisabled, hideTitle, t }: QoderModelCatalogProps) {
   const [editor] = useState(() => new QoderModelCatalogEditor(region, models, operations))
+  const [openTierModelId, setOpenTierModelId] = useState<string>()
   const snapshot = useSyncExternalStore(editor.subscribe, editor.getSnapshot, editor.getSnapshot)
   useLayoutEffect(() => {
     editor.activate()
@@ -58,8 +60,6 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
     return t('modelRate', { value: current })
   }
 
-  const tieredModels = displayedModels.filter(model => contextTiersOf(model).length > 1)
-
   return (
     <section className={css.modelCatalog} aria-label={t('modelsTitle')}>
       <div className={hideTitle ? css.modelCatalogHeadCompact : css.modelCatalogHead}>
@@ -85,6 +85,11 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
           const tiers = contextTiersOf(model)
           const fallbackTier = tiers.find(tier => tier.isDefault) ?? tiers[tiers.length - 1]
           const selectedTier = resolveContextTier(model)?.key ?? fallbackTier?.key
+          const selectedTierOption = tiers.find(tier => tier.key === selectedTier)
+          const tierDisabled = disabled || busy || unavailable || !selectedIds.has(model.id)
+          const tierLabel = (tier: typeof tiers[number]) => tier.isDefault
+            ? `${formatContextTokens(tier.tokenCount)}${t('contextTierDefaultSuffix')}`
+            : formatContextTokens(tier.tokenCount)
           return (
             <div className={`${css.modelChoice} ${unavailable ? css.modelUnavailable : ''}`} key={model.id}>
               <label className={css.modelChoiceHead}>
@@ -103,30 +108,39 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
               </label>
               {tiers.length > 1
                 ? (
-                  <label className={css.modelTier}>
+                  <div className={css.modelTier}>
                     <span className={css.modelTierLabel}>{t('contextTierLabel')}</span>
-                    <select
-                      className={css.modelTierSelect}
-                      value={selectedTier ?? ''}
-                      disabled={disabled || busy || unavailable || !selectedIds.has(model.id)}
-                      onChange={event => { if (!disabled) void editor.selectTier(model.id, event.currentTarget.value) }}
-                    >
-                      {tiers.map(tier => (
-                        <option key={tier.key} value={tier.key}>
-                          {tier.isDefault
-                            ? `${formatContextTokens(tier.tokenCount)}${t('contextTierDefaultSuffix')}`
-                            : formatContextTokens(tier.tokenCount)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    <Menu
+                      open={openTierModelId === model.id && !tierDisabled}
+                      onClose={() => { setOpenTierModelId(undefined) }}
+                      items={tiers.map(tier => ({ id: tier.key, label: tierLabel(tier) }))}
+                      selectedId={selectedTier}
+                      onSelect={key => {
+                        setOpenTierModelId(undefined)
+                        if (!tierDisabled && key !== selectedTier && tiers.some(tier => tier.key === key)) {
+                          void editor.selectTier(model.id, key)
+                        }
+                      }}
+                      align="start"
+                      portal
+                      anchor={(
+                        <button type="button" className={css.modelTierSelect}
+                          aria-label={`${model.name} ${t('contextTierLabel')}`}
+                          aria-haspopup="menu" aria-expanded={openTierModelId === model.id && !tierDisabled}
+                          disabled={tierDisabled}
+                          onClick={() => { if (!tierDisabled) setOpenTierModelId(openTierModelId === model.id ? undefined : model.id) }}>
+                          <span>{selectedTierOption ? tierLabel(selectedTierOption) : ''}</span>
+                          <IconChevronDownOutlineRegular size={14} aria-hidden="true" />
+                        </button>
+                      )}
+                    />
+                  </div>
                 )
                 : null}
             </div>
           )
         })}
       </div>
-      {tieredModels.length > 0 ? <p className={css.modelTierHint}>{t('contextTierHint')}</p> : null}
     </section>
   )
 }
