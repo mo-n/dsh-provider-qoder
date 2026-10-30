@@ -1,3 +1,4 @@
+import { mockTime, nextTurn } from './helpers/timing.ts'
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
@@ -585,28 +586,32 @@ test('HTTP image content-type rejection happens before reading even magic-byte-c
   assert.equal(cancelled, true)
 })
 
-test('download deadlines interrupt DNS, headers and stalled bodies without replaying generation', async () => {
-  // Keep the process alive while AbortSignal.timeout's unref'ed timer is active.
-  const keepAlive = setInterval(() => {}, 1000)
-  try {
-    for (const stage of ['dns-validation', 'download-headers', 'download-body']) {
-      let submissions = 0
-      let cancelled = false
-      const warnings: Array<Record<string, unknown>> = []
-      const deps = dependencies((async () => { submissions++; return json({ data: [{ url: 'https://images.example.com/a' }] }) }) as typeof fetch)
-      deps.downloadTimeoutMs = 15
-      deps.logger = { warn: (_message, details) => warnings.push(details as Record<string, unknown>) }
-      if (stage === 'dns-validation') deps.resolveDownloadAddresses = () => new Promise(() => {})
-      deps.download = stage === 'download-headers' ? () => new Promise(() => {}) : async () => new Response(new ReadableStream({ cancel() { cancelled = true } }))
-      await assert.rejects(generateImage({ prompt: 'cat' }, deps), QoderImageDeliveryError)
-      assert.equal(submissions, 1)
-      assert.equal(warnings.length, 1)
-      assert.equal(warnings[0].timedOut, true)
-      assert.equal(warnings[0].reason, 'Image delivery timed out')
-      assert.equal(warnings[0].stage, stage === 'dns-validation' ? stage : 'download')
-      if (stage === 'download-body') assert.equal(cancelled, true)
-    }
-  } finally { clearInterval(keepAlive) }
+test('download deadlines interrupt DNS, headers and stalled bodies without replaying generation', async t => {
+  const time = mockTime(t)
+  for (const stage of ['dns-validation', 'download-headers', 'download-body']) {
+    let submissions = 0
+    let cancelled = false
+    const warnings: Array<Record<string, unknown>> = []
+    const deps = dependencies((async () => { submissions++; return json({ data: [{ url: 'https://images.example.com/a' }] }) }) as typeof fetch)
+    deps.downloadTimeoutMs = 15
+    deps.logger = { warn: (_message, details) => warnings.push(details as Record<string, unknown>) }
+    if (stage === 'dns-validation') deps.resolveDownloadAddresses = () => new Promise(() => {})
+    deps.download = stage === 'download-headers' ? () => new Promise(() => {}) : async () => new Response(new ReadableStream({ cancel() { cancelled = true } }))
+    const rejected = assert.rejects(generateImage({ prompt: 'cat' }, deps), QoderImageDeliveryError)
+    await nextTurn() // Drain generation, DNS and response setup to the selected stalled stage.
+    time.tick(14)
+    assert.equal(submissions, 1)
+    assert.equal(warnings.length, 0)
+    assert.equal(cancelled, false)
+    time.tick(1)
+    await rejected
+    assert.equal(submissions, 1)
+    assert.equal(warnings.length, 1)
+    assert.equal(warnings[0].timedOut, true)
+    assert.equal(warnings[0].reason, 'Image delivery timed out')
+    assert.equal(warnings[0].stage, stage === 'dns-validation' ? stage : 'download')
+    if (stage === 'download-body') assert.equal(cancelled, true)
+  }
 })
 
 test('native image downloads select HTTP or HTTPS and use only the validated DNS address', async () => {

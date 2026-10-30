@@ -1,3 +1,4 @@
+import { mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUserMessage, LlmAdapter, LlmError, type GenerateOptions } from '@deepseek-ai/dsh-llm'
@@ -258,7 +259,9 @@ test('QoderAdapter surfaces an unreadable image attachment without starting a mo
   assert.equal(chatCalls, 0)
 })
 
-test('QoderAdapter aborts an idle provider stream', async () => {
+test('QoderAdapter aborts an idle provider stream', async t => {
+  const time = mockTime(t)
+  let aborted = false
   const fetchMock = successfulFetch()
   const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
@@ -268,19 +271,26 @@ test('QoderAdapter aborts an idle provider stream', async () => {
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           init?.signal?.addEventListener('abort', () => {
+            aborted = true
             controller.error(new DOMException('aborted', 'AbortError'))
           }, { once: true })
         },
       }))
     }) as typeof fetch,
   })
-  await assert.rejects(async () => {
+  const rejected = assert.rejects(async () => {
     for await (const _chunk of adapter.stream(request())) continue
   }, (error: Error) => {
     assert.ok(error instanceof QoderLlmError)
     assert.equal((error as QoderLlmError).code, 'TIMEOUT')
     return true
   })
+  await nextTurn() // Drain authentication and headers before advancing the idle deadline.
+  time.tick(9)
+  assert.equal(aborted, false)
+  time.tick(1)
+  await rejected
+  assert.equal(aborted, true)
 })
 
 test('QoderAdapter logs stream failures through the host logger', async () => {

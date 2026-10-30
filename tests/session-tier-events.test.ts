@@ -1,3 +1,4 @@
+import { mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Context } from '@deepseek-ai/cordis'
@@ -7,7 +8,7 @@ import { registerQoderRpc } from '../src/dsh/rpc.ts'
 import { createSessionTierEvents } from '../src/client/session-tier-events.ts'
 
 const scope: QoderSessionTierScope = { region: 'global', sessionId: 's', modelId: 'a' }
-async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve() }
+const settle = nextTurn
 function fixture() {
   const routes: ConnectionFetchRoute[] = []
   const listeners = new Set<(scope: QoderSessionTierScope) => void>()
@@ -75,7 +76,8 @@ test('client shares one authenticated stream, filters scopes and cancels after t
   events.dispose(); host.dispose()
 })
 
-test('client decodes split records and reconnects with a fresh readiness notification', async () => {
+test('client decodes split records and reconnects with a fresh readiness notification', async t => {
+  const time = mockTime(t)
   const encoder = new TextEncoder()
   let calls = 0
   let controller!: ReadableStreamDefaultController<Uint8Array>
@@ -96,7 +98,11 @@ test('client decodes split records and reconnects with a fresh readiness notific
   await settle()
   assert.equal(notifications, 1)
   controller.close()
-  await new Promise(resolve => setTimeout(resolve, 1100))
+  await settle() // Closing the stream schedules reconnect after reader cleanup.
+  time.tick(999)
+  assert.equal(calls, 1)
+  assert.equal(notifications, 1)
+  time.tick(1)
   await settle()
   assert.equal(calls, 2)
   assert.equal(notifications, 2)

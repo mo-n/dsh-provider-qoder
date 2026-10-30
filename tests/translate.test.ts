@@ -1,3 +1,4 @@
+import { deferred } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
@@ -458,19 +459,29 @@ test('validateAndTranslateMessages preserves order across many published images'
     ],
     source: { kind: 'user' },
   })
+  const started = Array.from({ length: 3 }, () => deferred())
+  const releases = Array.from({ length: 3 }, () => deferred())
+  const completed: number[] = []
   let index = 0
   const uploader: QoderImageResolver = {
     resolveImageUrl: async () => {
       const current = index++
       // Resolve out of order to prove slots are reserved, not appended.
-      await new Promise(resolve => setTimeout(resolve, current === 0 ? 8 : 1))
+      started[current].resolve()
+      await releases[current].promise
+      completed.push(current)
       return `https://oss.qoder.sh/${current}.png`
     },
   }
 
-  const [translated] = await validateAndTranslateMessages(
+  const pending = validateAndTranslateMessages(
     [message], undefined, imageAttachments(), undefined, { uploader, credentials: stubCredentials },
   )
+  await Promise.all(started.map(stage => stage.promise))
+  assert.deepEqual(completed, [])
+  releases[2].resolve(); releases[1].resolve(); releases[0].resolve()
+  const [translated] = await pending
+  assert.deepEqual(completed, [2, 1, 0])
   assert.deepEqual(translated.content, [
     { type: 'image_url', image_url: { url: 'https://oss.qoder.sh/0.png' } },
     { type: 'text', text: 'middle' },
