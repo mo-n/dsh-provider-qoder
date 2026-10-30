@@ -1,7 +1,8 @@
 /** Register the Qoder subscription provider with DSH. */
 
 import type {} from '@deepseek-ai/dsh-agent'
-import type {} from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-api-session-controller'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { QoderQueueLeases, bindQoderQueueLeases } from './queue-leases.ts'
 import { QoderQueueStatusStore } from './queue-status.ts'
 import { bindQoderImageTools } from './image-tools.ts'
@@ -13,7 +14,7 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderTransportRuntime, transportConfig, type QoderRuntimeConfig } from './transport-runtime.ts'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
-import { initiatingModelProvider, QoderSearchProvider, shouldUseQoderSearch } from './search-provider.ts'
+import { bindQoderSearch } from './search-provider.ts'
 import { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
 import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { resolveManagedQoderPat } from './credential.ts'
@@ -26,8 +27,8 @@ import {
 } from '../qoder/transport/index.ts'
 import { modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } from './config.ts'
 import { bindQoderSettings } from './settings.ts'
-import { isQoderRpcEndpoint, type QoderRpcErrorCode } from './rpc-channel.ts'
-import { registerQoderRpc, type QoderRpcHandler } from './rpc.ts'
+import { createQoderRpcHandler } from './rpc-handler.ts'
+import { registerQoderRpc } from './rpc.ts'
 import { QoderBrowserAuthorizationManager, browserAuthorizationKey } from './browser-authorization.ts'
 import { qoderCredentialRef } from './credential-contract.ts'
 
@@ -47,47 +48,6 @@ function logError(error: unknown): unknown {
     name: error.name,
     message: error.message,
     ...'code' in error ? { code: error.code } : {},
-  }
-}
-
-type QoderHostRpcResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: { readonly code: QoderRpcErrorCode; readonly message: string; readonly details: object } }
-
-function publicError(code: QoderRpcErrorCode, message: string, details: object = { issues: [] }): QoderHostRpcResult<never> {
-  return {
-    ok: false,
-    error: { code, message, details },
-  }
-}
-
-async function executeRpc<T>(
-  operation: string,
-  task: () => Promise<T>,
-  signal: AbortSignal,
-  logger?: QoderLogger,
-): Promise<QoderHostRpcResult<T>> {
-  try {
-    return { ok: true, value: await task() }
-  } catch (error) {
-    if (signal.aborted || (error instanceof QoderLlmError && error.code === 'ABORTED')) {
-      logger?.debug?.(`[Qoder RPC] ${operation} was aborted`)
-      return publicError('ABORTED', 'Request aborted')
-    }
-    let code: QoderRpcErrorCode = 'INTERNAL'
-    if (error instanceof QoderLlmError) {
-      if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
-        code = 'NO_CREDENTIALS'
-      } else if (error.code === 'AUTH') {
-        code = 'UNAUTHENTICATED'
-      } else if (error.code === 'TIMEOUT') {
-        code = 'TIMEOUT'
-      } else {
-        code = 'UPSTREAM_ERROR'
-      }
-    }
-    logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
-    return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
   }
 }
 
@@ -162,8 +122,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     region: () => runtime.config.region,
     providerId: providerQoder,
     providerName: 'Qoder',
-    sessions: ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined,
-    agents: ctx.get('agents') as import('./adapter.ts').QoderAdapterAgentStore | undefined,
+    sessions: ctx.get('sessions'),
+    agents: ctx.get('agents'),
   })
 
   ctx.on('session/disposed', session => adapter.forgetSession(session.id))
@@ -260,79 +220,23 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     }))
   })
 
-  const handler: QoderRpcHandler = async (endpoint, payload, signal) => {
-    if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
-    if (signal.aborted) return publicError('ABORTED', 'Request aborted')
-
-    if (endpoint === 'authorization' || endpoint === 'beginLogin' || endpoint === 'cancelLogin' || endpoint === 'selectAuthorization') {
-      const data = payload as { region?: unknown; method?: unknown } | null
-      const region = data?.region
-      if ((region !== 'global' && region !== 'china') || region !== resolveConfig().region) {
-        return publicError('INTERNAL', 'The active Qoder service region is required')
-      }
-      return executeRpc('manage Qoder authorization', async () => {
-        if (endpoint === 'beginLogin') return authorization.begin(region)
-        if (endpoint === 'cancelLogin') { await authorization.cancel(region); return authorization.describe(region) }
-        if (endpoint === 'selectAuthorization') {
-          const method = data?.method
-          if (method !== 'pat' && method !== 'browser' && method !== 'none') throw new QoderLlmError('Invalid authorization method.', 'INVALID_REQUEST')
-          return authorization.select(region, method)
-        }
-        return authorization.describe(region)
-      }, signal, logger)
-    }
-
-    if (endpoint === 'queue') {
-      const sessionId = (payload as { sessionId?: unknown } | null)?.sessionId
-      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 256) return publicError('INTERNAL', 'A valid sessionId is required')
-      return { ok: true, value: queueStatus.read(sessionId) }
-    }
-
-    if (endpoint === 'models') {
-      return await executeRpc('discover Qoder models', () => discoverModels(signal), signal, logger)
-    }
-
-    if (endpoint === 'sessionTier' || endpoint === 'readSessionTier') {
-      const data = payload as { sessionId?: string; modelId?: string; tierKey?: string; region?: QoderRegion }
-      if (typeof data?.sessionId === 'string' && typeof data?.modelId === 'string' && (endpoint === 'readSessionTier' || typeof data?.tierKey === 'string') && (data.region === 'global' || data.region === 'china')) {
-        const { sessionId, modelId, tierKey, region } = data
-        return await executeRpc(endpoint === 'sessionTier' ? 'select session context tier' : 'read session context tier', async () => {
-          if (!sessionId.trim() || region !== resolveConfig().region) {
-            throw new QoderLlmError('Invalid session context tier scope.', 'INVALID_REQUEST')
-          }
-          const sessions = ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined
-          if (sessions && !sessions.get(sessionId)) {
-            // The model directory can be ready before history restoration finishes.
-            // Join the host's ordinary restore path; it owns Agent/Session publication.
-            const controller = ctx.get('sessionController') as {
-              resolveAgent(id: string): Promise<{ error?: unknown }>
-            } | undefined
-            if (controller) {
-              const result = await controller.resolveAgent(sessionId)
-              if ('error' in result) throw result.error
-            }
-          }
-          signal.throwIfAborted()
-          if (endpoint === 'sessionTier') adapter.setSessionTier(sessionId, modelId, tierKey!, region)
-          return adapter.readSessionTier({ sessionId, modelId, region })
-        }, signal, logger)
-      }
-      return publicError('INTERNAL', 'Invalid sessionTier payload')
-    }
-
-    const force = typeof payload === 'object' && payload !== null && 'force' in payload
-      ? payload.force === true
-      : false
-    logger?.debug?.('[Qoder RPC] Reading subscriber account', { force })
-    const outcome = await executeRpc(
-      'load Qoder account',
-      () => runtime.transport.readAccount({ force, signal }),
-      signal,
-      logger,
-    )
-    if (outcome.ok) logger?.debug?.('[Qoder RPC] Subscriber account resolved')
-    return outcome
-  }
+  const handler = createQoderRpcHandler({
+    region: () => resolveConfig().region,
+    resolveTransport: () => runtime.transport,
+    discoverModels,
+    authorization,
+    adapter,
+    readQueue: sessionId => queueStatus.read(sessionId),
+    restoreSession: async sessionId => {
+      const sessions = ctx.get('sessions')
+      if (!sessions || sessions.get(SessionId(sessionId))) return
+      const controller = ctx.get('sessionController')
+      if (!controller) return
+      const result = await controller.resolveAgent(SessionId(sessionId))
+      if ('error' in result) throw result.error
+    },
+    logger,
+  })
 
   try {
     ctx.effect(() => registerQoderRpc(ctx, handler, listener => adapter.subscribeSessionTiers(listener)), 'provider-qoder: settings RPC routes')
@@ -342,32 +246,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     logger?.error?.('[Qoder RPC] Failed to register the settings RPC routes', logError(error))
   }
 
-  ctx.inject(['web'], (webCtx) => {
-    const searchProvider = new QoderSearchProvider({
-      ctx,
-      resolveTransport: () => runtime.transport,
-      getWebSearchMode: () => resolveConfig().webSearchMode ?? 'auto',
-    })
-    webCtx.web.registerSearchProvider(searchProvider)
-
-    // Transparent interceptor: ensure that when a Qoder model is active,
-    // ctx.web.search always routes to Qoder even if the host profile configured
-    // a different fixed searchProvider (e.g. deepseek-official).
-    if (typeof webCtx.web.search === 'function') {
-      const originalSearch = webCtx.web.search
-      webCtx.effect(() => {
-        const routedSearch: typeof originalSearch = async (request, signal) => {
-          const mode = resolveConfig().webSearchMode ?? 'auto'
-          if (shouldUseQoderSearch(mode, initiatingModelProvider(ctx))) {
-            return searchProvider.search(request, signal)
-          }
-          return originalSearch.call(webCtx.web, request, signal)
-        }
-        webCtx.web.search = routedSearch
-        return () => {
-          if (webCtx.web.search === routedSearch) webCtx.web.search = originalSearch
-        }
-      }, 'provider-qoder: transparent web search router')
-    }
+  bindQoderSearch(ctx, {
+    resolveTransport: () => runtime.transport,
+    getWebSearchMode: () => resolveConfig().webSearchMode ?? 'auto',
   })
 }

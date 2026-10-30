@@ -4,6 +4,7 @@ import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderAuthorizationOperations, QoderCredentialInjected, QoderCredentialOperations, QoderCredentialStatus } from './credential-operations.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
+import { operationNotice } from './operation-result.ts'
 import css from './QoderCredentialCard.module.css'
 
 export interface QoderBrowserLoginProps {
@@ -42,7 +43,8 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
   const remaining = Math.max(0, Math.ceil(((attempt?.expiresAt ?? now) - now) / 1000))
 
   const read = async () => {
-    const info = await (credentials.describePat ?? credentials.describe)()
+    const described = await (credentials.describePat ?? credentials.describe)()
+    const info = described.ok ? described.value : undefined
     const result = operations ? await operations.read(region) : undefined
     if (result && !result.ok) throw new Error('Authorization status unavailable')
     if (!result && !info) throw new Error('Credential status unavailable')
@@ -104,13 +106,37 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
       let result: Awaited<ReturnType<QoderAuthorizationOperations['read']>> | undefined
       if (action === 'savePat') {
         if (draft.trim()) {
-          if (!await credentials.store(draft.trim())) throw new Error('PAT save failed')
+          const saved = await credentials.store(draft.trim())
+          if (!saved.ok) {
+            if (mounted.current && version === revision.current) {
+              setError(operationNotice(saved.error, 'patSaveFailed'))
+              if (saved.error.completedStages.includes('persist-pat')) {
+                setDraft('')
+                // Refresh PAT status so retry selects the saved PAT instead of writing it again.
+                const refreshed = await read().catch(() => undefined)
+                if (refreshed && mounted.current && version === revision.current) { setView(refreshed.value); setPat(refreshed.info) }
+              }
+            }
+            return
+          }
         } else if (patConfigured) {
-          if (operations) result = await operations.select(region, 'pat')
+          if (operations) {
+            // A partial save may already have selected PAT despite a lost response.
+            const current = await operations.read(region)
+            if (!current.ok) {
+              if (mounted.current && version === revision.current) setError('operationOutcomeUnknown')
+              return
+            }
+            result = current.value.method === 'pat' ? current : await operations.select(region, 'pat')
+          }
         }
         else throw new Error('A PAT is required')
       } else if (action === 'removePat') {
-        if (!await credentials.remove()) throw new Error('PAT removal failed')
+        const removed = await credentials.remove()
+        if (!removed.ok) {
+          if (mounted.current && version === revision.current) setError(operationNotice(removed.error, 'removeFailed'))
+          return
+        }
       } else if (operations) {
         result = action === 'begin' ? await operations.begin(region)
           : action === 'cancel' ? await operations.cancel(region) : await operations.select(region, action)
@@ -157,9 +183,9 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
     {readFailed ? <button type="button" className={css.secondary} onClick={() => wakeRef.current?.()}>{t('retry')}</button> : null}
     {view ? <>
       {connected || view.expired ? <div className={css.subscriberRow}>
-        <span className={css.subscriberAvatar} aria-hidden="true">{initial}</span>
+        <span className={css.avatar} aria-hidden="true">{initial}</span>
         <div className={css.subscriberIdentity}>
-          <strong>{identity?.name || t(view.method === 'pat' ? 'patActive' : 'browserMethod')}</strong>
+          <strong className={css.userName}>{identity?.name || t(view.method === 'pat' ? 'patActive' : 'browserMethod')}</strong>
           {identity?.email ? <span>{identity.email}</span> : null}
           <span className={css.label}>{t(view.method === 'browser' ? 'browserMethod' : 'patMethod')}</span>
         </div>
@@ -189,10 +215,10 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
       {!pending && failure ? <p role="alert" className={css.error}>{t(failure)}</p> : null}
 
       {menu && !pending && !editing ? <div id="qoder-account-management" className={css.managementPanel}>
-        <button type="button" className={css.textButton} disabled={busy || !view.writable} onClick={() => { void mutate('begin') }}>{t('changeAccount')}</button>
-        <button type="button" className={css.textButton} disabled={busy || !pat?.writable} onClick={openPat}>{t(view.method === 'pat' ? 'editPat' : 'usePat')}</button>
-        {view.method !== 'browser' && view.profile ? <button type="button" className={css.textButton} disabled={busy || !view.writable} onClick={() => { void mutate('browser') }}>{t('useBrowser')}</button> : null}
-        {view.profile ? <button type="button" className={css.danger} disabled={busy || !view.writable} onClick={() => { void mutate('none') }}>{t('signOutQoder')}</button> : null}
+        <button type="button" className={css.secondary} disabled={busy || !view.writable} onClick={() => { void mutate('begin') }}>{t('changeAccount')}</button>
+        <button type="button" className={css.secondary} disabled={busy || !pat?.writable} onClick={openPat}>{t(view.method === 'pat' ? 'editPat' : 'usePat')}</button>
+        {view.method !== 'browser' && view.profile ? <button type="button" className={css.secondary} disabled={busy || !view.writable} onClick={() => { void mutate('browser') }}>{t('useBrowser')}</button> : null}
+        {view.profile ? <button type="button" className={`${css.textButton} ${css.dangerText}`} disabled={busy || !view.writable} onClick={() => { void mutate('none') }}>{t('signOutQoder')}</button> : null}
       </div> : null}
 
       {!pending && !editing && (!connected || view.expired) ? <div className={css.connectionActions}>

@@ -192,6 +192,7 @@ test('the browser caller reports transport and endpoint failures without throwin
     error: {
       code: 'UPSTREAM_ERROR',
       message: 'transport failure for /api/qoder-subscription/account: HTTP 405',
+      details: { status: 405 },
     },
   })
 
@@ -233,3 +234,25 @@ test('the browser caller reports transport and endpoint failures without throwin
     error: { code: 'ABORTED', message: 'The operation was aborted' },
   })
 })
+
+
+test('the client preserves INVALID_REQUEST failure envelopes', async () => {
+  const result = { ok: false, error: { code: 'INVALID_REQUEST', message: 'Invalid region' } }
+  const caller = createQoderRpcCaller({ fetch: async () => Response.json(result) })
+  assert.deepEqual(await caller.call('authorization', { region: 'global' }), result)
+})
+
+// Compile-time regression checks: endpoints select both input and output types.
+function rpcContractTypes(caller: ReturnType<typeof createQoderRpcCaller>) {
+  const tier: Promise<import('../src/dsh/rpc-channel.ts').QoderRpcResult<import('../src/dsh/rpc-channel.ts').QoderSessionTierSelection>> = caller.call('readSessionTier', { region: 'global', sessionId: 's', modelId: 'm' })
+  // @ts-expect-error force must be boolean
+  void caller.call('account', { force: 'true' })
+  // @ts-expect-error selected endpoint requires region
+  void caller.call('authorization', {})
+  // @ts-expect-error caller cannot pick an arbitrary output type
+  void caller.call<number>('models', {})
+  // @ts-expect-error NDJSON is not an ordinary RPC result
+  void caller.call('sessionTierEvents', {})
+  return tier
+}
+void rpcContractTypes

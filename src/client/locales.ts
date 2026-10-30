@@ -1,6 +1,8 @@
 import type { QoderLocalizedText } from '../qoder/account.ts'
 
 export const zh = {
+  patSavedSelectionFailed: 'PAT 已保存，但无法确认授权选择。可选择使用已保存的 PAT 重试。',
+  operationOutcomeUnknown: '无法确认更改结果，请先核对当前状态再重试。',
   accountConnectionTitle: 'Qoder 账号',
   signInDescription: '登录 Qoder，使用当前区域的订阅和模型。',
   manageAccount: '管理账号',
@@ -97,7 +99,6 @@ export const zh = {
   modelRateUnknown: '倍率未知',
   contextTierLabel: '上下文',
   contextTierDefaultSuffix: '（默认）',
-  contextTierHint: '选择该模型使用的上下文档位；更大的档位会同时提升 DSH 的上下文预算并改变 Qoder 请求使用的档位。',
   contextSelectFailed: '上下文切换失败，请重试。',
   contextSelectTitle: '选择上下文大小',
   contextSelectMenuHeader: '上下文容量',
@@ -135,6 +136,8 @@ export const zh = {
 }
 
 export const en: typeof zh = {
+  patSavedSelectionFailed: 'PAT saved. Authorization selection could not be confirmed. Use the saved PAT to retry.',
+  operationOutcomeUnknown: 'Could not confirm the change. Check the current state before retrying.',
   accountConnectionTitle: 'Qoder account',
   signInDescription: 'Sign in to use your subscription and models for this region.',
   manageAccount: 'Manage account',
@@ -231,7 +234,6 @@ export const en: typeof zh = {
   modelRateUnknown: 'Rate unknown',
   contextTierLabel: 'Context',
   contextTierDefaultSuffix: ' (default)',
-  contextTierHint: 'Select the context tier for this model. A larger tier raises the DSH context budget and changes the tier the Qoder request uses.',
   contextSelectFailed: 'Could not change the context window. Please retry.',
   contextSelectTitle: 'Select context window size',
   contextSelectMenuHeader: 'Context Capacity',
@@ -281,7 +283,7 @@ function localeMatches(tag: string, requested: string, prefix: boolean): boolean
   const normalized = tag.trim().toLowerCase()
   if (normalized === requested) return true
   if (!prefix) return false
-  const primary = requested.split('-')[0]
+  const primary = requested.slice(0, requested.indexOf('-') < 0 ? requested.length : requested.indexOf('-'))
   return primary.length > 0 && normalized.split('-')[0] === primary
 }
 

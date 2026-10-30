@@ -26,7 +26,8 @@ export function qoderEncodeBodyBytes(plaintext: string | Buffer): Buffer<ArrayBu
   let offset = 0
   const writeRange = (start: number, end: number): void => {
     for (let i = start; i < end; i++) {
-      out[offset++] = qoderEncodeTable[std.charCodeAt(i)]
+      // Buffer base64 is ASCII and each range stays within std; the table covers all bytes.
+      out[offset++] = qoderEncodeTable[std.charCodeAt(i)]!
     }
   }
   // Visit the three ranges in wire order; every output byte is initialized.

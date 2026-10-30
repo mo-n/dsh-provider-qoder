@@ -9,7 +9,7 @@ import { imageArtifactName } from '../src/dsh/image-artifacts.ts'
 import { validateAndTranslateMessages } from '../src/qoder/transport/wire/translate.ts'
 import { QoderImageSearchError } from '../src/qoder/images.ts'
 
-function fixture(options: { files?: boolean; failSave?: boolean; noPath?: boolean } = {}) {
+function fixture(options: { files?: boolean; missingCapability?: 'saveFile' | 'fileHostPath' | 'processPathFromHostPath'; failSave?: boolean; noPath?: boolean } = {}) {
   const tools = new Map<string, ToolDefinition>()
   const effects: Array<() => void> = []
   const writes: Array<{ data: Uint8Array; name: string }> = []
@@ -43,6 +43,8 @@ function fixture(options: { files?: boolean; failSave?: boolean; noPath?: boolea
     },
     effect: (factory: () => () => void) => { effects.push(factory()) },
   }
+  if (options.missingCapability === 'processPathFromHostPath') Reflect.deleteProperty(fs, options.missingCapability)
+  else if (options.missingCapability) Reflect.deleteProperty(ctx.attachments, options.missingCapability)
   const binding = bindQoderImageTools(ctx as unknown as Context, {
     logger: {
       debug: (_message, details) => logs.push({ level: 'debug', details: details as Record<string, unknown> }),
@@ -197,7 +199,7 @@ class ImageTestPrompt extends Service {
 class ImageTestAttachments extends Service {
   constructor(ctx: Context) { super(ctx, 'attachments') }
   async saveFile({ data, name }: { data: Uint8Array; name: string }) {
-    return { attachmentId: 'sha256:generated-image', name, bytes: data.length }
+    return { attachmentId: 'sha256:generated-image', name, bytes: data.length, storageMetadata: 'provider-only' }
   }
   fileHostPath({ name }: { name: string }) { return `/attachments/${name}` }
 }
@@ -244,6 +246,9 @@ test('real Cordis and tools runtime track late services, settings, teardown, and
     const result = await ctx.tools.execute({ name: 'ImageGen', arguments: { name: 'cat', prompt: 'cat' }, callId, signal: new AbortController().signal })
     assert.equal(result.isError, false)
     assert.equal(result.content[1]?.type, 'file')
+    if (result.content[1]?.type === 'file') {
+      assert.deepEqual(Object.keys(result.content[1].attachment).sort(), ['attachmentId', 'bytes', 'name'])
+    }
 
     // Exercise the real LLM's FileBlock-to-handle projection before Qoder's
     // text-only wire validator; generated files must not become vision input.
@@ -278,3 +283,14 @@ test('real Cordis and tools runtime track late services, settings, teardown, and
     assert.equal(ctx.tools.schemas().length, 0)
   } finally { await ctx.fiber.dispose() }
 })
+
+for (const missingCapability of ['saveFile', 'fileHostPath', 'processPathFromHostPath'] as const) {
+  test(`image generation is omitted without ${missingCapability}`, () => {
+    const f = fixture({ missingCapability })
+    try {
+      assert.equal(f.tools.has('ImageGen'), false)
+      assert.equal(f.tools.has('ImageSearch'), true)
+      assert.equal(f.calls.length, 0)
+    } finally { f.dispose() }
+  })
+}

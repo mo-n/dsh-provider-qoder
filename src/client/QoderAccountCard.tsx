@@ -72,7 +72,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
     const requestId = ++latestCredentialRequest.current
     const info = await operations.describe()
     if (requestId !== latestCredentialRequest.current) return
-    setCredentialState(info === undefined ? { status: 'failed' } : { status: 'ready', info })
+    setCredentialState(!info.ok ? { status: 'failed' } : { status: 'ready', info: info.value })
   }, [operations])
 
   const loadAccount = useCallback(async (force = false) => {

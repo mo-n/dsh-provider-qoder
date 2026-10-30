@@ -1,3 +1,4 @@
+import { success, refused } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { SessionTierState } from '../src/client/session-tier-state.ts'
@@ -22,10 +23,10 @@ function host() {
   let region: QoderRegion = 'global'
   const adapter = new QoderAdapter({ models: [model], region: () => region, resolveTransport: () => ({}) as QoderTransport })
   const operations = {
-    readSessionTier: async (owner: QoderSessionTierScope) => adapter.readSessionTier(owner),
+    readSessionTier: async (owner: QoderSessionTierScope) => success(adapter.readSessionTier(owner)),
     setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region: QoderRegion) => {
       adapter.setSessionTier(sessionId, modelId, tierKey, region)
-      return adapter.readSessionTier({ sessionId, modelId, region })
+      return success(adapter.readSessionTier({ sessionId, modelId, region }))
     },
     subscribeSessionTiers: (owner: QoderSessionTierScope, listener: () => void) => adapter.subscribeSessionTiers(changed => {
       if (JSON.stringify(changed) === JSON.stringify(owner)) listener()
@@ -80,7 +81,7 @@ test('scope isolation survives switching region away and back', async () => {
   setRegion('global')
   global.activate(); await settle()
   assert.equal(global.getSnapshot().selection?.tierKey, 'small')
-  assert.throws(() => adapter.readSessionTier({ ...scope, region: 'china' }), /scope/)
+  assert.throws(() => adapter.readSessionTier({ ...scope, region: 'china' }), /region/)
   global.dispose()
 })
 
@@ -88,7 +89,7 @@ test('late reads cannot replace newer host change results', async () => {
   const requests: ReturnType<typeof deferred<QoderSessionTierSelection>>[] = []
   let changed = () => {}
   const state = new SessionTierState(scope, {
-    readSessionTier: () => { const request = deferred<QoderSessionTierSelection>(); requests.push(request); return request.promise },
+    readSessionTier: () => { const request = deferred<QoderSessionTierSelection>(); requests.push(request); return request.promise.then(success) },
     subscribeSessionTiers: (_scope, listener) => { changed = listener; return () => {} },
   })
   state.activate(); changed()
@@ -103,8 +104,8 @@ test('a delayed write response cannot override another window newer selection', 
   const current = selection()
   let changed = () => {}
   const state = new SessionTierState(scope, {
-    readSessionTier: async () => current,
-    setSessionTier: () => write.promise,
+    readSessionTier: async () => success(current),
+    setSessionTier: () => write.promise.then(success),
     subscribeSessionTiers: (_scope, listener) => { changed = listener; return () => {} },
   })
   state.activate(); await settle()
@@ -120,8 +121,8 @@ test('failed writes retain the confirmed tier and support retry', async () => {
   let accepted = false
   let writes = 0
   const state = new SessionTierState(scope, {
-    readSessionTier: async () => selection(),
-    setSessionTier: async () => { writes++; if (!accepted) throw new Error('offline'); return selection('small') },
+    readSessionTier: async () => success(selection()),
+    setSessionTier: async () => { writes++; if (!accepted) throw new Error('offline'); return success(selection('small')) },
   })
   state.activate(); await settle()
   await state.select('small')
@@ -136,7 +137,7 @@ test('failed writes retain the confirmed tier and support retry', async () => {
 
 test('failed initial reads show no inferred default and can be retried', async () => {
   let available = false
-  const state = new SessionTierState(scope, { readSessionTier: async () => available ? selection('small') : undefined })
+  const state = new SessionTierState(scope, { readSessionTier: async () => available ? success(selection('small')) : refused })
   state.activate(); await settle()
   assert.equal(state.getSnapshot().selection, undefined)
   assert.equal(state.getSnapshot().error, true)
@@ -147,7 +148,7 @@ test('failed initial reads show no inferred default and can be retried', async (
 
 test('unmounted reads and writes cannot publish, including StrictMode reactivation', async () => {
   const write = deferred<QoderSessionTierSelection>()
-  const state = new SessionTierState(scope, { readSessionTier: async () => selection(), setSessionTier: () => write.promise })
+  const state = new SessionTierState(scope, { readSessionTier: async () => success(selection()), setSessionTier: () => write.promise.then(success) })
   state.activate(); await settle()
   const saving = state.select('small')
   state.dispose(); state.activate(); await settle()
@@ -155,7 +156,7 @@ test('unmounted reads and writes cannot publish, including StrictMode reactivati
   assert.equal(state.getSnapshot().selection?.tierKey, 'large')
   state.dispose()
   const pending = deferred<QoderSessionTierSelection>()
-  const other = new SessionTierState(scope, { readSessionTier: () => pending.promise })
+  const other = new SessionTierState(scope, { readSessionTier: () => pending.promise.then(success) })
   let updates = 0
   other.subscribe(() => updates++)
   other.activate(); other.dispose()
@@ -165,7 +166,7 @@ test('unmounted reads and writes cannot publish, including StrictMode reactivati
 })
 
 test('read responses from another model or session are rejected', async () => {
-  const state = new SessionTierState(scope, { readSessionTier: async () => selection('small', { ...scope, modelId: 'b' }) })
+  const state = new SessionTierState(scope, { readSessionTier: async () => success(selection('small', { ...scope, modelId: 'b' })) })
   state.activate(); await settle()
   assert.equal(state.getSnapshot().selection, undefined)
   assert.equal(state.getSnapshot().error, true)
@@ -179,5 +180,5 @@ test('host read uses the same historical fallback and manual precedence as gener
   assert.equal(adapter.readSessionTier(scope).tokenCount, 200_000)
   adapter.setSessionTier('s', 'a', 'large')
   assert.equal(adapter.readSessionTier(scope).tokenCount, 1_000_000)
-  assert.throws(() => adapter.readSessionTier({ ...scope, sessionId: 'missing' }), /scope/)
+  assert.throws(() => adapter.readSessionTier({ ...scope, sessionId: 'missing' }), /session reference/)
 })

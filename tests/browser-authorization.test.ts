@@ -1,3 +1,4 @@
+import { mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -74,11 +75,12 @@ function fixture(store = storage(), refresh?: QoderAuthorizationTransport['refre
   }
 }
 
-test('browser device flow binds PKCE to the website, polls 404, verifies identity and returns region-scoped credentials', async () => {
+test('browser device flow binds PKCE to the website, polls 404, verifies identity and returns region-scoped credentials', async t => {
+  const time = mockTime(t)
   for (const region of ['global', 'china'] as const) {
     let website!: URL
     let polls = 0
-    const auth = new QoderBrowserAuthorization({ region, pollIntervalMs: 1, resolveMachineId: () => 'bound-machine',
+    const auth = new QoderBrowserAuthorization({ region, pollIntervalMs: 1000, resolveMachineId: () => 'bound-machine',
       fetch: (async (input: RequestInfo | URL) => {
         const url = new URL(String(input))
         assert.equal(url.hostname, region === 'china' ? 'openapi.qoder.com.cn' : 'openapi.qoder.sh')
@@ -99,7 +101,12 @@ test('browser device flow binds PKCE to the website, polls 404, verifies identit
     assert.equal(website.searchParams.get('machine_id'), 'bound-machine')
     assert.equal(website.searchParams.get('challenge_method'), 'S256')
     assert.equal(website.searchParams.has('verifier'), false)
-    const result = await flow.complete()
+    const pending = flow.complete()
+    await nextTurn() // A consumed 404 response arms the polling delay.
+    time.tick(999)
+    assert.equal(polls, 1)
+    time.tick(1)
+    const result = await pending
     assert.equal(result.region, region)
     assert.equal(result.credentials.userID, 'verified-id')
     assert.equal(result.credentials.machineID, 'bound-machine')
@@ -110,7 +117,8 @@ test('browser device flow binds PKCE to the website, polls 404, verifies identit
   }
 })
 
-test('browser polling cancellation, timeout and malformed responses never expose verifier or provider bodies', async () => {
+test('browser polling cancellation, timeout and malformed responses never expose verifier or provider bodies', async t => {
+  const time = mockTime(t)
   const controller = new AbortController()
   const cancelledAuth = new QoderBrowserAuthorization({ region: 'global', pollIntervalMs: 1, resolveMachineId: () => 'test',
     fetch: (async () => { controller.abort(); throw new Error('sensitive URL') }) as typeof fetch })
@@ -118,7 +126,14 @@ test('browser polling cancellation, timeout and malformed responses never expose
   await assert.rejects(flow.complete(), (error: QoderLlmError) => error.code === 'ABORTED' && !error.message.includes('sensitive'))
   const timeoutAuth = new QoderBrowserAuthorization({ region: 'global', loginTimeoutMs: 5, pollIntervalMs: 1, resolveMachineId: () => 'test',
     fetch: (async () => new Response('', { status: 404 })) as typeof fetch })
-  await assert.rejects((await timeoutAuth.begin(new AbortController().signal)).complete(), (error: QoderLlmError) => error.code === 'TIMEOUT')
+  let settled = false
+  const rejected = assert.rejects((await timeoutAuth.begin(new AbortController().signal)).complete(), (error: QoderLlmError) => error.code === 'TIMEOUT').then(() => { settled = true })
+  await nextTurn()
+  time.tick(4)
+  await nextTurn()
+  assert.equal(settled, false)
+  time.tick(1)
+  await rejected
   const badAuth = new QoderBrowserAuthorization({ region: 'global', resolveMachineId: () => 'test',
     fetch: (async () => new Response('private-provider-body')) as typeof fetch })
   await assert.rejects((await badAuth.begin(new AbortController().signal)).complete(), (error: QoderLlmError) => error.code === 'MALFORMED_RESPONSE' && !error.message.includes('private'))

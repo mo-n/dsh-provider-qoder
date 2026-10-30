@@ -1,3 +1,4 @@
+import { deferred, mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { QoderAuthService, jobTokenExpiry } from '../src/qoder/transport/auth.ts'
@@ -40,11 +41,14 @@ test('QoderAuthService exchanges once, resolves identity, and caches credentials
 })
 
 test('QoderAuthService shares one exchange between concurrent callers', async () => {
+  const started = deferred()
+  const release = deferred()
   let exchangeCalls = 0
   const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
     if (String(input).includes('/jobToken/exchange')) {
       exchangeCalls++
-      await new Promise(resolve => setTimeout(resolve, 20))
+      started.resolve()
+      await release.promise
       return new Response(JSON.stringify({ token: 'jt-shared', expires_in: 3_600_000 }))
     }
     return new Response(JSON.stringify({ id: 'user-shared' }))
@@ -53,11 +57,15 @@ test('QoderAuthService shares one exchange between concurrent callers', async ()
     fetch: fetchMock as typeof fetch,
     resolveMachineId: () => 'machine-test',
   })
-  const credentials = await Promise.all([
+  const pending = Promise.all([
     service.getCredentials('pt-shared'),
     service.getCredentials('pt-shared'),
     service.getCredentials('pt-shared'),
   ])
+  await started.promise
+  assert.equal(exchangeCalls, 1)
+  release.resolve()
+  const credentials = await pending
   assert.equal(exchangeCalls, 1)
   assert.ok(credentials.every(value => value.authToken === 'jt-shared'))
 })
@@ -79,7 +87,7 @@ test('QoderAuthService aborts a caller and the unobserved exchange', async () =>
     assert.equal((error as QoderLlmError).code, 'ABORTED')
     return true
   })
-  await new Promise(resolve => setTimeout(resolve, 0))
+  await nextTurn()
   assert.equal(providerAborted, true)
 })
 
@@ -237,11 +245,8 @@ test('authentication retains organization when optional tag lookup fails', async
 
 
 function pendingTagResponse(signal: AbortSignal, onAbort: () => void): Promise<Response> {
-  // Keep the mock I/O alive: AbortSignal.timeout itself does not keep Node alive.
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => resolve(new Response(JSON.stringify({ tags: ['late'] }))), 1000)
+  return new Promise((_resolve, reject) => {
     const aborted = (): void => {
-      clearTimeout(timer)
       onAbort()
       reject(new DOMException('aborted', 'AbortError'))
     }
@@ -250,7 +255,9 @@ function pendingTagResponse(signal: AbortSignal, onAbort: () => void): Promise<R
   })
 }
 
-test('stalled optional organization tags use an independent budget and cache core credentials', async () => {
+test('stalled optional organization tags use an independent budget and cache core credentials', async t => {
+  const time = mockTime(t)
+  const started = deferred()
   let exchanges = 0
   let tagCalls = 0
   let tagsAborted = false
@@ -266,10 +273,16 @@ test('stalled optional organization tags use an independent budget and cache cor
       }
       if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user', orgId: 'offline-org' }))
       tagCalls++
+      started.resolve()
       return pendingTagResponse(init!.signal!, () => { tagsAborted = true })
     }) as typeof fetch,
   })
-  const credentials = await service.getCredentials('pt-offline')
+  const pending = service.getCredentials('pt-offline')
+  await started.promise
+  time.tick(79)
+  assert.equal(tagsAborted, false)
+  time.tick(1)
+  const credentials = await pending
   assert.equal(credentials.authToken, 'jt-offline')
   assert.equal(credentials.organizationId, 'offline-org')
   assert.equal(credentials.organizationTags, undefined)
@@ -279,7 +292,10 @@ test('stalled optional organization tags use an independent budget and cache cor
   assert.equal(tagCalls, 1)
 })
 
-test('optional organization tags may complete after the required authentication deadline', async () => {
+test('optional organization tags may complete after the required authentication deadline', async t => {
+  const time = mockTime(t)
+  const started = deferred()
+  const release = deferred()
   const service = new QoderAuthService({
     timeoutMs: 40,
     organizationTagsTimeoutMs: 300,
@@ -288,42 +304,51 @@ test('optional organization tags may complete after the required authentication 
       const url = String(input)
       if (url.includes('/exchange')) return new Response(JSON.stringify({ token: 'jt-offline' }))
       if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user', orgId: 'offline-org' }))
-      await new Promise(resolve => setTimeout(resolve, 80))
+      started.resolve()
+      await release.promise
       assert.equal(init?.signal?.aborted, false)
       return new Response(JSON.stringify({ tags: ['Security'] }))
     }) as typeof fetch,
   })
-  const credentials = await service.getCredentials('pt-offline')
+  const pending = service.getCredentials('pt-offline')
+  await started.promise
+  time.tick(80)
+  release.resolve()
+  const credentials = await pending
   assert.deepEqual(credentials.organizationTags, ['Security'])
 })
 
-test('optional organization tag budget includes metadata retry backoff', async () => {
+test('optional organization tag budget includes metadata retry backoff', async t => {
+  const time = mockTime(t)
+  const started = deferred()
   let tags = 0
-  // Hold the event loop while the independent, unref-ed deadline ends retry backoff.
-  const keepAlive = setTimeout(() => {}, 1000)
-  try {
-    const service = new QoderAuthService({
-      timeoutMs: 40,
-      organizationTagsTimeoutMs: 20,
-      resolveMachineId: () => 'offline-machine',
-      fetch: (async input => {
-        const url = String(input)
-        if (url.includes('/exchange')) return new Response(JSON.stringify({ token: 'jt-offline' }))
-        if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user', orgId: 'offline-org' }))
-        tags++
-        return new Response('', { status: 503 })
-      }) as typeof fetch,
-    })
-    const credentials = await service.getCredentials('pt-offline')
-    assert.equal(credentials.organizationId, 'offline-org')
-    assert.equal(credentials.organizationTags, undefined)
-    assert.equal(tags, 1)
-  } finally {
-    clearTimeout(keepAlive)
-  }
+  const service = new QoderAuthService({
+    timeoutMs: 40,
+    organizationTagsTimeoutMs: 20,
+    resolveMachineId: () => 'offline-machine',
+    fetch: (async input => {
+      const url = String(input)
+      if (url.includes('/exchange')) return new Response(JSON.stringify({ token: 'jt-offline' }))
+      if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user', orgId: 'offline-org' }))
+      tags++
+      started.resolve()
+      return new Response('', { status: 503 })
+    }) as typeof fetch,
+  })
+  const pending = service.getCredentials('pt-offline')
+  await started.promise
+  await nextTurn() // Let response parsing schedule metadata backoff.
+  time.tick(19)
+  assert.equal(tags, 1)
+  time.tick(1)
+  const credentials = await pending
+  assert.equal(credentials.organizationId, 'offline-org')
+  assert.equal(credentials.organizationTags, undefined)
+  assert.equal(tags, 1)
 })
 
-test('caller cancellation aborts optional tags and does not cache the cancelled authentication', async () => {
+test('caller cancellation aborts optional tags and does not cache the cancelled authentication', async t => {
+  mockTime(t)
   let exchanges = 0
   let stallTags = true
   let tagsAborted = false
@@ -357,7 +382,8 @@ test('caller cancellation aborts optional tags and does not cache the cancelled 
   assert.equal(exchanges, 2)
 })
 
-test('one cancelled waiter does not abort organization tags needed by another waiter', async () => {
+test('one cancelled waiter does not abort organization tags needed by another waiter', async t => {
+  mockTime(t)
   let tagsAborted = false
   let finishTags!: (response: Response) => void
   let notifyTags!: () => void
@@ -387,17 +413,28 @@ test('one cancelled waiter does not abort organization tags needed by another wa
   assert.deepEqual((await second).organizationTags, ['Security'])
 })
 
-test('a stalled required identity lookup still respects the authentication deadline', async () => {
+test('a stalled required identity lookup still respects the authentication deadline', async t => {
+  const time = mockTime(t)
+  const started = deferred()
+  let signal!: AbortSignal
   const service = new QoderAuthService({
     timeoutMs: 20,
     organizationTagsTimeoutMs: 500,
     resolveMachineId: () => 'offline-machine',
     fetch: (async (input, init) => {
       if (String(input).includes('/exchange')) return new Response(JSON.stringify({ token: 'jt-offline' }))
+      signal = init!.signal!
+      started.resolve()
       return pendingTagResponse(init!.signal!, () => {})
     }) as typeof fetch,
   })
-  await assert.rejects(service.getCredentials('pt-offline'), QoderLlmError)
+  const rejected = assert.rejects(service.getCredentials('pt-offline'), { code: 'ABORTED' })
+  await started.promise
+  time.tick(19)
+  assert.equal(signal.aborted, false)
+  time.tick(1)
+  assert.equal(signal.reason, 'authentication timeout')
+  await rejected
 })
 
 
@@ -413,5 +450,5 @@ test('synchronous caller cancellation while starting an exchange observes the sh
   await assert.rejects(service.getCredentials('pt-offline', caller.signal),
     (error: Error) => error instanceof QoderLlmError && error.code === 'ABORTED')
   // Let the abandoned shared exchange settle; the runner detects unhandled rejections.
-  await new Promise(resolve => setTimeout(resolve, 0))
+  await nextTurn()
 })

@@ -1,3 +1,4 @@
+import { deferred, mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -186,19 +187,26 @@ test('evicts the coldest entry once the cache is full', async () => {
 })
 
 test('shares one publication between concurrent callers', async () => {
+  const started = deferred()
+  const release = deferred()
   let uploads = 0
   const uploader = new QoderImageUploader({
     fetch: (async () => {
       uploads++
-      await new Promise(resolve => setTimeout(resolve, 5))
+      started.resolve()
+      await release.promise
       return okUpload()
     }) as typeof fetch,
   })
 
-  const [first, second] = await Promise.all([
+  const pending = Promise.all([
     uploader.resolveImageUrl(requestImage(), credentials),
     uploader.resolveImageUrl(requestImage(), credentials),
   ])
+  await started.promise
+  assert.equal(uploads, 1)
+  release.resolve()
+  const [first, second] = await pending
   assert.equal(uploads, 1)
   assert.equal(first, second)
 })
@@ -223,26 +231,30 @@ test('keeps the request alive by degrading to a data URL', async () => {
   }
 })
 
-test('degrades when the upload exceeds its deadline', async () => {
+test('degrades when the upload exceeds its deadline', async t => {
+  const time = mockTime(t)
+  const started = deferred()
+  let signal!: AbortSignal
   const warnings: string[] = []
   const uploader = new QoderImageUploader({
     timeoutMs: 10,
     logger: { warn: (message: string) => warnings.push(message) },
     fetch: ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signal = init!.signal!
+      started.resolve()
       init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
     })) as typeof fetch,
   })
 
-  // AbortSignal.timeout does not hold the event loop open, and the stalled
-  // fetch replacement has no socket to hold it either.
-  const keepAlive = setTimeout(() => {}, 1_000)
-  try {
-    const url = await uploader.resolveImageUrl(requestImage(), credentials)
-    assert.equal(url, 'data:image/png;base64,AQID')
-    assert.equal(warnings.length, 1)
-  } finally {
-    clearTimeout(keepAlive)
-  }
+  const pending = uploader.resolveImageUrl(requestImage(), credentials)
+  await started.promise
+  time.tick(9)
+  assert.equal(signal.aborted, false)
+  assert.deepEqual(warnings, [])
+  time.tick(1)
+  assert.equal(signal.reason.name, 'TimeoutError')
+  assert.equal(await pending, 'data:image/png;base64,AQID')
+  assert.equal(warnings.length, 1)
 })
 
 test('does not remember a degraded data URL', async () => {
@@ -304,36 +316,48 @@ test('propagates caller cancellation as an aborted error', async () => {
     })) as typeof fetch,
   })
 
-  const keepAlive = setTimeout(() => {}, 1_000)
-  try {
-    const pending = uploader.resolveImageUrl(requestImage(), credentials, controller.signal)
-    controller.abort()
-    await assert.rejects(pending, (error: Error) => {
-      assert.ok(error instanceof QoderLlmError)
-      assert.equal((error as QoderLlmError).code, 'ABORTED')
-      return true
-    })
-  } finally {
-    clearTimeout(keepAlive)
-  }
+  const pending = uploader.resolveImageUrl(requestImage(), credentials, controller.signal)
+  controller.abort()
+  await assert.rejects(pending, (error: Error) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal((error as QoderLlmError).code, 'ABORTED')
+    return true
+  })
 })
 
 test('bounds how many publications run at once', async () => {
+  const started = Array.from({ length: 6 }, () => deferred())
+  const releases = Array.from({ length: 6 }, () => deferred())
+  let calls = 0
   let active = 0
   let peak = 0
   const uploader = new QoderImageUploader({
     maxConcurrency: 2,
     fetch: (async () => {
+      const index = calls++
       active++
+      started[index].resolve()
       peak = Math.max(peak, active)
-      await new Promise(resolve => setTimeout(resolve, 5))
+      await releases[index].promise
       active--
       return okUpload()
     }) as typeof fetch,
   })
 
-  await Promise.all(Array.from({ length: 6 }, (_value, index) =>
+  const pending = Promise.all(Array.from({ length: 6 }, (_value, index) =>
     uploader.resolveImageUrl(requestImage({ variantId: `v-${index}` as never }), credentials)))
+  await Promise.all(started.slice(0, 2).map(stage => stage.promise))
+  assert.equal(calls, 2)
+  assert.equal(active, 2)
+  for (let index = 0; index < 4; index++) {
+    releases[index].resolve()
+    await started[index + 2].promise
+    assert.equal(calls, index + 3)
+    assert.equal(active, 2)
+  }
+  releases[4].resolve(); releases[5].resolve()
+  await pending
+  assert.equal(active, 0)
   assert.equal(peak, 2)
 })
 

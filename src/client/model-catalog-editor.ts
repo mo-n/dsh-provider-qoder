@@ -1,5 +1,6 @@
 import { cloneCatalogModel, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
+import { operationNotice, type OperationError } from './operation-result.ts'
 import { reconcileQoderModels, type QoderCredentialOperations } from './credential-operations.ts'
 
 export interface QoderModelCatalogEditSnapshot {
@@ -7,8 +8,9 @@ export interface QoderModelCatalogEditSnapshot {
   catalog: readonly QoderCatalogModel[]
   unavailableIds: ReadonlySet<string>
   pending?: 'discovering' | 'saving'
-  failure?: 'modelsRequired' | 'modelsFetchFailed' | 'saveFailed'
+  failure?: 'modelsRequired' | 'modelsFetchFailed' | 'saveFailed' | 'operationOutcomeUnknown' | 'patSavedSelectionFailed'
   failureMessage?: string
+  operationError?: OperationError
 }
 
 /** One mounted region owns its directory and asynchronous edits. */
@@ -66,7 +68,7 @@ export class QoderModelCatalogEditor {
 
   async discover(): Promise<void> {
     if (!this.active || this.snapshot.pending) return
-    this.publish({ ...this.snapshot, pending: 'discovering', failure: undefined, failureMessage: undefined })
+    this.publish({ ...this.snapshot, pending: 'discovering', failure: undefined, failureMessage: undefined, operationError: undefined })
     try {
       const result = await this.operations.discoverModels()
       // Switching region disposes this editor. Old discovery must never submit a save.
@@ -107,16 +109,19 @@ export class QoderModelCatalogEditor {
     unavailableIds = this.snapshot.unavailableIds,
   ): Promise<void> {
     if (models.length === 0) {
-      this.publish({ ...this.snapshot, pending: undefined, failure: 'modelsRequired', failureMessage: undefined })
+      this.publish({ ...this.snapshot, pending: undefined, failure: 'modelsRequired', failureMessage: undefined, operationError: undefined })
       return
     }
     const submitted = models.map(cloneCatalogModel)
     const confirmedAtSubmission = this.confirmed
-    this.publish({ ...this.snapshot, pending: 'saving', failure: undefined, failureMessage: undefined })
+    this.publish({ ...this.snapshot, pending: 'saving', failure: undefined, failureMessage: undefined, operationError: undefined })
     let saved = false
+    let operationError: OperationError | undefined
     try {
       // Region is immutable: even a disposed editor finishes an already submitted save here.
-      saved = await this.operations.storeModels(this.region, submitted)
+      const result = await this.operations.storeModels(this.region, submitted)
+      saved = result.ok
+      if (!result.ok) operationError = result.error
     } catch {
       // Restore the accepted configuration just as for a refused write.
     }
@@ -131,7 +136,7 @@ export class QoderModelCatalogEditor {
       this.publish({ models: this.confirmed, catalog: [...directory.values()],
         unavailableIds: new Set([...unavailableIds].filter(id => !accepted.has(id))) })
     } else {
-      this.publish({ models: this.confirmed, catalog: this.confirmed, unavailableIds: new Set(), failure: 'saveFailed' })
+      this.publish({ models: this.confirmed, catalog: this.confirmed, unavailableIds: new Set(), failure: operationError ? operationNotice(operationError, 'saveFailed') : 'saveFailed', operationError })
     }
   }
 }

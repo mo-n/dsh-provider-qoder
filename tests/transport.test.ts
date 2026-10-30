@@ -1,3 +1,4 @@
+import { deferred, mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
@@ -8,6 +9,8 @@ import type { QoderImageAttachments } from '../src/qoder/transport/wire/translat
 const catalog = JSON.stringify({ assistant: [{ key: 'cmodel', enable: true, display_name: 'Cantus' }] })
 
 test('QoderTransport shares concurrent model discovery', async () => {
+  const started = deferred()
+  const release = deferred()
   let catalogCalls = 0
   const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
@@ -19,22 +22,29 @@ test('QoderTransport shares concurrent model discovery', async () => {
       if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-shared' }))
       if (url.includes('/model/list')) {
         catalogCalls++
-        await new Promise(resolve => setTimeout(resolve, 5))
+        started.resolve()
+      await release.promise
         return new Response(catalog)
       }
       throw new Error(`unexpected URL: ${url}`)
     }) as typeof fetch,
   })
 
-  const [first, second] = await Promise.all([
+  const pending = Promise.all([
     transport.discoverModels(),
     transport.discoverModels(),
   ])
+  await started.promise
+  assert.equal(catalogCalls, 1)
+  release.resolve()
+  const [first, second] = await pending
   assert.equal(catalogCalls, 1)
   assert.equal(first, second)
 })
 
-test('QoderTransport retries an idempotent model discovery once', async () => {
+test('QoderTransport retries an idempotent model discovery once', async t => {
+  const time = mockTime(t)
+  t.mock.method(Math, 'random', () => 0)
   let catalogCalls = 0
   const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
@@ -52,7 +62,12 @@ test('QoderTransport retries an idempotent model discovery once', async () => {
     }) as typeof fetch,
   })
 
-  const models = await transport.discoverModels()
+  const pending = transport.discoverModels()
+  await nextTurn() // Allow response parsing to schedule retry backoff.
+  time.tick(199)
+  assert.equal(catalogCalls, 1)
+  time.tick(1)
+  const models = await pending
   assert.equal(catalogCalls, 2)
   assert.equal(models[0]?.id, 'cmodel')
 })
@@ -101,7 +116,10 @@ test('QoderTransport aborts a shared discovery only after its last waiter leaves
   assert.equal(upstreamAborted, true)
 })
 
-test('QoderTransport separates response-header timeout from stream idle timeout', async () => {
+test('QoderTransport separates response-header timeout from stream idle timeout', async t => {
+  const time = mockTime(t)
+  const started = deferred()
+  let signal!: AbortSignal
   const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
     resolvePat: () => Promise.resolve('pt-timeout'),
@@ -112,6 +130,8 @@ test('QoderTransport separates response-header timeout from stream idle timeout'
       if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-timeout' }))
       if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-timeout' }))
       if (url.includes('/agent_chat_generation')) {
+        signal = init!.signal!
+        started.resolve()
         return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener('abort', () => reject(new DOMException('timeout', 'AbortError')), { once: true })
         })
@@ -125,13 +145,18 @@ test('QoderTransport separates response-header timeout from stream idle timeout'
     messages: [createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })],
   }
 
-  await assert.rejects(async () => {
+  const rejected = assert.rejects(async () => {
     for await (const _chunk of transport.stream(request)) continue
   }, (error: Error) => (
     error instanceof QoderLlmError
     && error.code === 'TIMEOUT'
     && /response header/u.test(error.message)
   ))
+  await started.promise
+  time.tick(4)
+  assert.equal(signal.aborted, false)
+  time.tick(1)
+  await rejected
 })
 
 const visionModel = {
@@ -497,7 +522,8 @@ for (const bodyFailure of ['oversized', 'interrupted'] as const) {
 }
 
 for (const cancellation of ['caller', 'timeout'] as const) {
-  test(`${cancellation} cancellation while reading authentication diagnostics prevents recovery`, async () => {
+  test(`${cancellation} cancellation while reading authentication diagnostics prevents recovery`, async t => {
+    const time = mockTime(t)
     const caller = new AbortController()
     let exchanges = 0
     let chats = 0
@@ -517,9 +543,17 @@ for (const cancellation of ['caller', 'timeout'] as const) {
         }), { status: 401 })
       }) as typeof fetch,
     })
-    await assert.rejects(async () => {
+    const rejected = assert.rejects(async () => {
       for await (const _chunk of transport.stream({ ...textRequest(), signal: caller.signal })) continue
     }, (error: unknown) => error instanceof QoderLlmError && error.code === (cancellation === 'caller' ? 'ABORTED' : 'TIMEOUT'))
+    if (cancellation === 'timeout') {
+      await nextTurn() // Drain header handling so the idle timer is armed.
+      time.tick(9)
+      assert.equal(chats, 1)
+      assert.equal(exchanges, 1)
+      time.tick(1)
+    }
+    await rejected
     assert.equal(chats, 1)
     assert.equal(exchanges, 1)
   })

@@ -163,7 +163,7 @@ export function normalizeQoderModels(
     const contextOptions = contextOptionsOf(raw.context_config)
     const defaultOptions = Object.values(contextOptions ?? {}).filter(option => option.isDefault && option.tokenCount !== undefined)
     if (defaultOptions.length > 1) onConflict?.('context-defaults')
-    const contextWindow = (defaultOptions.length === 1 ? defaultOptions[0].tokenCount : undefined)
+    const contextWindow = (defaultOptions.length === 1 ? defaultOptions[0]?.tokenCount : undefined)
       ?? positiveNumber(raw.max_input_tokens) ?? 180_000
     const maxContextWindow = Math.max(
       positiveNumber(raw.max_input_tokens) ?? 0,

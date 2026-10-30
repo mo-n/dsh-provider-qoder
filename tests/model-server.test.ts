@@ -1,3 +1,4 @@
+import { deferred, mockTime } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -216,20 +217,27 @@ test('HTTP turn identity is stable within a host run and isolated across runs an
 })
 
 test('concurrent rejected credentials share one recovery exchange', async () => {
+  const started = deferred()
+  const release = deferred()
   let exchanges = 0
   const auth = new QoderAuthService({
     resolveMachineId: () => 'machine-test',
     fetch: (async (input: RequestInfo | URL) => {
       if (String(input).includes('/jobToken/exchange')) {
-        await new Promise(resolve => setTimeout(resolve, 5))
-        return new Response(JSON.stringify({ token: `jt-${++exchanges}`, expires_in: 3600 }))
+        exchanges++
+        if (exchanges === 2) { started.resolve(); await release.promise }
+        return new Response(JSON.stringify({ token: `jt-${exchanges}`, expires_in: 3600 }))
       }
       return new Response(JSON.stringify({ id: 'user-model' }))
     }) as typeof fetch,
   })
   const rejected = await auth.getCredentials('pt-model')
   assert.ok(rejected.expiresAt > Date.now())
-  const results = await Promise.all(Array.from({ length: 5 }, () => auth.refreshCredentials('pt-model', rejected)))
+  const pending = Promise.all(Array.from({ length: 5 }, () => auth.refreshCredentials('pt-model', rejected)))
+  await started.promise
+  assert.equal(exchanges, 2)
+  release.resolve()
+  const results = await pending
   assert.equal(exchanges, 2)
   assert.ok(results.every(result => result === results[0]))
   assert.ok(results[0].version > rejected.version)
@@ -279,7 +287,8 @@ test('model-server stream authentication error is not replayed', async () => {
   assert.equal(modelCalls, 1)
 })
 
-test('preflight refresh keeps a still-valid token after a temporary network error', async () => {
+test('preflight refresh keeps a still-valid token after a temporary network error', async t => {
+  const time = mockTime(t)
   let exchanges = 0
   const auth = new QoderAuthService({
     fetch: (async (input: RequestInfo | URL) => {
@@ -292,7 +301,10 @@ test('preflight refresh keeps a still-valid token after a temporary network erro
     }) as typeof fetch,
   })
   const first = await auth.getCredentials('pt-model')
-  await new Promise(resolve => setTimeout(resolve, 850))
+  time.tick(799)
+  assert.equal(await auth.getCredentials('pt-model'), first)
+  assert.equal(exchanges, 1)
+  time.tick(51)
   const second = await auth.getCredentials('pt-model')
   assert.equal(second, first)
   assert.equal(exchanges, 2)
@@ -637,6 +649,7 @@ test('failed tool-call parsing does not capture model requests or responses', as
 })
 
 test('invalidating credentials prevents an old exchange from repopulating the cache', async () => {
+  const entered = deferred()
   let exchanges = 0
   let releaseFirst: (() => void) | undefined
   const firstStarted = new Promise<void>(resolve => { releaseFirst = resolve })
@@ -644,14 +657,14 @@ test('invalidating credentials prevents an old exchange from repopulating the ca
     fetch: (async (input: RequestInfo | URL) => {
       if (String(input).includes('/jobToken/exchange')) {
         exchanges++
-        if (exchanges === 1) await firstStarted
+        if (exchanges === 1) { entered.resolve(); await firstStarted }
         return new Response(JSON.stringify({ token: `jt-${exchanges}`, expires_in: 3600 }))
       }
       return new Response(JSON.stringify({ id: 'user-model' }))
     }) as typeof fetch,
   })
   const obsolete = auth.getCredentials('pt-model')
-  await new Promise(resolve => setTimeout(resolve, 0))
+  await entered.promise
   auth.clear('pt-model')
   const current = await auth.getCredentials('pt-model')
   releaseFirst?.()

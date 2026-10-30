@@ -146,7 +146,7 @@ async function* streamAttempt(
       model: request.model_config.key,
       region: dependencies.region,
       purpose: options.purpose ?? 'chat',
-      contextTier: markedTiers.length === 1 ? markedTiers[0][0] : null,
+      contextTier: markedTiers.length === 1 ? markedTiers[0]?.[0] ?? null : null,
       context_length: request.parameters.context_length ?? null,
     }))
     const compression = new QoderRequestCompression()

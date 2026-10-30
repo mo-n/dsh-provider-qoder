@@ -1,3 +1,4 @@
+import { success } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -86,7 +87,7 @@ async function mountCard(describe = async (): Promise<QoderCredentialStatus> => 
     base: {}, user: {}, revision: 0, writable: true, mode: 'host' }
   const requests: Array<{ region: QoderRegion; force?: boolean; result: ReturnType<typeof deferred<QoderAccountResult>> }> = []
   const operations = {
-    describe,
+    describe: async () => success(await describe()),
     subscribe: () => () => {},
     subscribeModels: () => () => {},
     getModelSnapshot: () => snapshot,
@@ -122,7 +123,7 @@ async function mountCard(describe = async (): Promise<QoderCredentialStatus> => 
   render()
   await settle()
   return {
-    requests, settle, unmount, text: () => text(output), lateUpdates: () => lateUpdates,
+    requests, settle, unmount, text: () => text(output), nodes: () => nodes(output), lateUpdates: () => lateUpdates,
     setRegion(nextRegion: QoderRegion) {
       region = nextRegion
       snapshot = { ...snapshot, value: { ...snapshot.value, region }, revision: (snapshot.revision ?? 0) + 1 }
@@ -245,6 +246,8 @@ for (const planTotal of [0, 100]) {
     await card.settle()
     assert.match(card.text(), /addOnQuotaTitle/)
     assert.doesNotMatch(card.text(), /noQuota/)
+    const addOnProgress = card.nodes().find(node => node.type === 'progress' && node.props.max === 2600)
+    assert.equal(addOnProgress?.props.value, 688, 'the quota bar displays the used credits')
     assert.equal((card.text().match(/resetsAt/g) ?? []).length, planTotal > 0 ? 1 : 0,
       'only the subscription quota may display its reset date')
     card.unmount()

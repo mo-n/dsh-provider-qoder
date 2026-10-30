@@ -1,4 +1,5 @@
 import type { QoderSessionTierScope, QoderSessionTierSelection } from '../dsh/rpc-channel.ts'
+import type { OperationError } from './operation-result.ts'
 import type { QoderCredentialOperations } from './credential-operations.ts'
 
 type Operations = Pick<QoderCredentialOperations, 'readSessionTier' | 'setSessionTier' | 'subscribeSessionTiers'>
@@ -7,6 +8,7 @@ export interface SessionTierSnapshot {
   loading: boolean
   saving: boolean
   error: boolean
+  operationError?: OperationError
 }
 
 /** A mounted view of the host's accepted selection; it owns no manual tier map. */
@@ -40,11 +42,12 @@ export class SessionTierState {
   async refresh() {
     if (!this.active) return
     const generation = ++this.generation
-    this.publish({ loading: true })
+    this.publish({ loading: true, operationError: undefined })
     try {
-      const selection = await this.operations.readSessionTier?.(this.scope)
+      const result = await this.operations.readSessionTier?.(this.scope)
+      const selection = result?.ok ? result.value : undefined
       if (this.active && generation === this.generation) {
-        this.publish(this.matches(selection) ? { selection, loading: false, error: false } : { loading: false, error: true })
+        this.publish(this.matches(selection) ? { selection, loading: false, error: false, operationError: undefined } : { loading: false, error: true, operationError: result && !result.ok ? result.error : undefined })
       }
     } catch {
       if (this.active && generation === this.generation) this.publish({ loading: false, error: true })
@@ -55,12 +58,13 @@ export class SessionTierState {
     if (tierKey === this.snapshot.selection.tierKey && !this.snapshot.error) return
     const generation = ++this.generation
     const lifetime = this.lifetime
-    this.publish({ saving: true, error: false })
+    this.publish({ saving: true, error: false, operationError: undefined })
     try {
       const { sessionId, modelId, region } = this.scope
-      const selection = await this.operations.setSessionTier?.(sessionId, modelId, tierKey, region)
+      const result = await this.operations.setSessionTier?.(sessionId, modelId, tierKey, region)
+      const selection = result?.ok ? result.value : undefined
       if (this.active && generation === this.generation) {
-        this.publish(this.matches(selection) ? { selection, error: false } : { error: true })
+        this.publish(this.matches(selection) ? { selection, error: false, operationError: undefined } : { error: true, operationError: result && !result.ok ? result.error : undefined })
       }
     } catch {
       if (this.active && generation === this.generation) this.publish({ error: true })

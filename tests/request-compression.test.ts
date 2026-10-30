@@ -1,3 +1,4 @@
+import { deferred } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { zstdDecompressSync } from 'node:zlib'
@@ -140,17 +141,26 @@ test('a failed identity fallback is not replayed or remembered as a working endp
   } })
 })
 
-test('cancellation interrupts a stalled compression-rejection probe without replay', async () => {
+test('cancellation interrupts a stalled compression-rejection probe without replay', async t => {
+  const reading = deferred()
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    assert.equal(ms, 1000, 'the probe creates its own deadline after cloning the response')
+    reading.resolve()
+    return new AbortController().signal
+  })
   const controller = new AbortController()
   let calls = 0
   const operation = new QoderRequestCompression().send({ ...options(), signal: controller.signal,
     dispatch: async () => {
       calls++
-      setTimeout(() => controller.abort(), 10)
       return new Response(new ReadableStream(), { status: 415 })
     },
   })
-  await assert.rejects(operation, { name: 'AbortError' })
+  const rejected = assert.rejects(operation, { name: 'AbortError' })
+  await reading.promise
+  assert.equal(controller.signal.aborted, false)
+  controller.abort()
+  await rejected
   assert.equal(calls, 1)
 })
 

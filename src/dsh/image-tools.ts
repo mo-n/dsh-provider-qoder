@@ -1,10 +1,11 @@
 /** Native DSH image tools; Qoder transport owns every upstream operation. */
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type {} from '@deepseek-ai/dsh-fs'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 import type { QoderHostRun } from '../qoder/turn.ts'
-import { saveImageArtifact, type ImageArtifactFileSystem } from './image-artifacts.ts'
+import { saveImageArtifact } from './image-artifacts.ts'
 import { imageFailureDetails } from '../qoder/images.ts'
 import type { QoderLogger } from '../qoder/transport/logging.ts'
 
@@ -80,7 +81,7 @@ export function bindQoderImageTools(ctx: Context, options: QoderImageToolsOption
   })
   ctx.inject(['tools', 'attachments', 'fs'], imageCtx => {
     let removeGeneration: (() => void) | undefined
-    const fs = imageCtx.get('fs') as ImageArtifactFileSystem | undefined
+    const fs = imageCtx.get('fs')
     const refresh = () => {
       const available = options.getImageGenEnabled() && options.resolveTransport().generateImage
         && typeof fs?.processPathFromHostPath === 'function'
@@ -97,11 +98,16 @@ export function bindQoderImageTools(ctx: Context, options: QoderImageToolsOption
           size: { type: 'string', description: 'Image dimensions; defaults to 1024x1024.' },
         },
         output: {
-          schema: { type: 'json' },
-          render: (_args, value) => {
-            const result = value as unknown as { path: string; requestId: string; attachment: FileAttachmentRef }
-            return [{ type: 'text', text: JSON.stringify({ path: result.path, requestId: result.requestId }) }, { type: 'file', attachment: result.attachment }]
-          },
+          schema: { type: 'object', additionalProperties: false, properties: {
+            path: { type: 'string', required: true }, requestId: { type: 'string', required: true },
+            attachment: { type: 'object', required: true, additionalProperties: false, properties: {
+              attachmentId: { type: 'string', required: true }, name: { type: 'string', required: true }, bytes: { type: 'number', required: true },
+            } },
+          } },
+          render: (_args, result) => [
+            { type: 'text', text: JSON.stringify({ path: result.path, requestId: result.requestId }) },
+            { type: 'file', attachment: { ...result.attachment, attachmentId: AttachmentId(result.attachment.attachmentId) } },
+          ],
         },
         async execute(args, exec) {
           if (!options.getImageGenEnabled()) throw new Error('Qoder image generation is disabled.')
@@ -119,7 +125,8 @@ export function bindQoderImageTools(ctx: Context, options: QoderImageToolsOption
           try {
             const artifact = await saveImageArtifact(imageCtx.attachments, fs, args.name, image, exec.signal)
             options.logger?.debug?.('[Qoder Image] Attachment save completed', { requestId: image.requestId, stage: 'attachment-save', durationMs: Date.now() - started })
-            return { path: artifact.path, requestId: image.requestId, attachment: { ...artifact.attachment } }
+            const { attachmentId, name, bytes } = artifact.attachment
+            return { path: artifact.path, requestId: image.requestId, attachment: { attachmentId, name, bytes } }
           } catch (error) {
             options.logger?.warn?.('[Qoder Image] Failed', { requestId: image.requestId, stage: 'attachment-save', durationMs: Date.now() - started, cancelled: exec.signal.aborted, ...imageFailureDetails(error) })
             throw new QoderImageArtifactDeliveryError(image.requestId, image.imageUrl, error)

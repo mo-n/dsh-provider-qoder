@@ -1,3 +1,4 @@
+import { accepted } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createQoderTransport, type QoderTransport } from '../src/qoder/transport/index.ts'
@@ -54,7 +55,7 @@ test('account waiters share credential recovery, including when the first caller
 test('external accepted models remain visible after local catalog editing', async () => {
   const a = { id: 'a', name: 'A' }, b = { id: 'b', name: 'B' }, c = { id: 'c', name: 'C' }
   const editor = new QoderModelCatalogEditor('global', [a, b], {
-    storeModels: async () => true, discoverModels: async () => ({ ok: true, value: [a, b] }),
+    storeModels: async () => accepted(true), discoverModels: async () => ({ ok: true, value: [a, b] }),
   })
   await editor.toggle('b', false)
   editor.replaceModels([a, c])

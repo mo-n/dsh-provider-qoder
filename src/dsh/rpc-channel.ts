@@ -5,6 +5,10 @@
  * module so the route path cannot drift between the two halves.
  */
 
+import type { QoderAccountInfo } from '../qoder/account.ts'
+import type { QoderAuthorizationView } from '../qoder/authorization.ts'
+import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import type { QoderQueueSnapshot } from '../qoder/queue.ts'
 import type { QoderRegion } from '../qoder/region.ts'
  
 /** Logical channel owning the Qoder settings endpoints. */
@@ -36,6 +40,23 @@ export interface QoderSessionTierPayload extends QoderSessionTierScope {
   tierKey: string
 }
 
+/** Ordinary JSON endpoints; the NDJSON event stream is deliberately separate. */
+export interface QoderRpcContract {
+  account: { input: { force?: boolean }; output: QoderAccountInfo }
+  models: { input: Record<string, never>; output: readonly QoderCatalogModel[] }
+  queue: { input: { sessionId: string }; output: QoderQueueSnapshot[] }
+  sessionTier: { input: QoderSessionTierPayload; output: QoderSessionTierSelection }
+  readSessionTier: { input: QoderSessionTierScope; output: QoderSessionTierSelection }
+  authorization: { input: { region: QoderRegion }; output: QoderAuthorizationView }
+  beginLogin: { input: { region: QoderRegion }; output: QoderAuthorizationView }
+  cancelLogin: { input: { region: QoderRegion }; output: QoderAuthorizationView }
+  selectAuthorization: { input: { region: QoderRegion; method: 'pat' | 'browser' | 'none' }; output: QoderAuthorizationView }
+}
+
+export type QoderJsonRpcEndpoint = keyof QoderRpcContract
+export type QoderRpcInput<E extends QoderJsonRpcEndpoint> = QoderRpcContract[E]['input']
+export type QoderRpcOutput<E extends QoderJsonRpcEndpoint> = QoderRpcContract[E]['output']
+
 /** Absolute Fetch-route path of one endpoint. */
 export function qoderRpcPath(endpoint: QoderRpcEndpoint): string {
   return `${qoderRpcApiPath}/${endpoint}`
@@ -55,6 +76,7 @@ export const qoderRpcErrorCodes = [
   'ABORTED',
   'UNKNOWN_ENDPOINT',
   'INTERNAL',
+  'INVALID_REQUEST',
 ] as const
 
 export type QoderRpcErrorCode = (typeof qoderRpcErrorCodes)[number]

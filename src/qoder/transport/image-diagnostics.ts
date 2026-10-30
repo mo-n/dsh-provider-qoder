@@ -3,7 +3,7 @@ export function inspectImageUrl(raw: string) {
   if (/^data:/iu.test(raw)) {
     const header = /^data:([^;,]+);base64,/iu.exec(raw)
     return { protocol: 'data:', encoding: header ? 'base64' : undefined,
-      rejection: !header ? 'INVALID_DATA_URL' : !/^(?:image\/[^;,]+|application\/octet-stream|binary\/octet-stream)$/iu.test(header[1]) ? 'UNSUPPORTED_CONTENT_TYPE' : undefined }
+      rejection: !header?.[1] ? 'INVALID_DATA_URL' : !/^(?:image\/[^;,]+|application\/octet-stream|binary\/octet-stream)$/iu.test(header[1]) ? 'UNSUPPORTED_CONTENT_TYPE' : undefined }
   }
   let url: URL
   try { url = new URL(raw) } catch { return { rejection: 'INVALID_URL' } }

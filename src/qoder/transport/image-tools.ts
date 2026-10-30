@@ -243,14 +243,14 @@ function abortableImageOperation<T>(operation: Promise<T>, signal: AbortSignal):
 
 function validateImageContentType(raw: string | null): void {
   if (!raw) return
-  const type = raw.split(';', 1)[0].trim().toLowerCase()
+  const type = raw.slice(0, raw.indexOf(';') < 0 ? raw.length : raw.indexOf(';')).trim().toLowerCase()
   if (!type.startsWith('image/') && !['application/octet-stream', 'binary/octet-stream'].includes(type)) throw new Error('Unsupported image content type')
 }
 
 function decodeImageDataUrl(raw: string): Uint8Array {
   if (raw.length > maxDataUrlCharacters) throw new Error('Generated image exceeds 32 MiB limit')
   const header = /^data:([^;,]+);base64,/iu.exec(raw)
-  if (!header) throw new Error('Invalid image data URL')
+  if (!header?.[1]) throw new Error('Invalid image data URL')
   validateImageContentType(header[1])
   const encoded = raw.slice(header[0].length).replace(/\s+/gu, '')
   if (encoded.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) throw new Error('Invalid image base64 data')
@@ -328,7 +328,7 @@ export async function generateImage(request: QoderImageGenerationRequest, deps: 
         begin('download')
         const response = await abortableImageOperation((deps.download ?? pinnedDownload)(target.url, { signal: activeSignal, redirect: 'manual', credentials: 'omit', headers: { Accept: 'image/*', 'Accept-Encoding': 'identity' } }, target.addresses), activeSignal)
         status = response.status
-        const rawType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase()
+        const rawType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
         const contentType = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif', 'text/html', 'application/json', 'application/octet-stream', 'binary/octet-stream'].includes(rawType ?? '') ? rawType : rawType ? 'other' : undefined
         const rawLength = response.headers.get('content-length')
         const contentLength = rawLength !== null && /^\d{1,15}$/.test(rawLength) ? Number(rawLength) : undefined

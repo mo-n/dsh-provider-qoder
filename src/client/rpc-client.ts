@@ -9,7 +9,9 @@
 import {
   isQoderRpcErrorCode,
   qoderRpcPath,
-  type QoderRpcEndpoint,
+  type QoderJsonRpcEndpoint,
+  type QoderRpcInput,
+  type QoderRpcOutput,
   type QoderRpcErrorCode,
   type QoderRpcResult,
 } from '../dsh/rpc-channel.ts'
@@ -26,7 +28,7 @@ export interface QoderRpcTransport {
 }
 
 export interface QoderRpcCaller {
-  call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcResult<T>>
+  call<E extends QoderJsonRpcEndpoint>(endpoint: E, payload: QoderRpcInput<E>, signal?: AbortSignal): Promise<QoderRpcResult<QoderRpcOutput<E>>>
 }
 
 /**
@@ -39,16 +41,20 @@ export interface QoderRpcCaller {
 export function createQoderRpcCaller(transport: QoderRpcTransport = {}): QoderRpcCaller {
   const send = transport.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
   return {
-    async call<T>(endpoint: QoderRpcEndpoint, payload: unknown, signal?: AbortSignal): Promise<QoderRpcResult<T>> {
+    async call<E extends QoderJsonRpcEndpoint>(endpoint: E, payload: QoderRpcInput<E>, signal?: AbortSignal): Promise<QoderRpcResult<QoderRpcOutput<E>>> {
       const path = qoderRpcPath(endpoint)
+      let phase: 'serialize' | 'send' | 'decode' = 'serialize'
       try {
+        const body = JSON.stringify(payload ?? {})
+        phase = 'send'
         const response = await send(path, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify(payload ?? {}),
+          body,
           ...signal === undefined ? {} : { signal },
         })
+        phase = 'decode'
         if (!response.ok) {
           const code: QoderRpcErrorCode = signal?.aborted ? 'ABORTED' : 'UPSTREAM_ERROR'
           return {
@@ -56,11 +62,12 @@ export function createQoderRpcCaller(transport: QoderRpcTransport = {}): QoderRp
             error: {
               code,
               message: `transport failure for ${path}: HTTP ${response.status}`,
+              details: { status: response.status },
             },
           }
         }
         const envelope = await response.json() as QoderRpcEnvelope
-        if (envelope?.ok === true) return { ok: true, value: envelope.value as T }
+        if (envelope?.ok === true) return { ok: true, value: envelope.value as QoderRpcOutput<E> }
 
         const rawError = envelope?.error
         let code: QoderRpcErrorCode = 'INTERNAL'
@@ -86,11 +93,13 @@ export function createQoderRpcCaller(transport: QoderRpcTransport = {}): QoderRp
           },
         }
       } catch (error) {
-        const isAbort = signal?.aborted || (error instanceof Error && error.name === 'AbortError')
+        const name = typeof error === 'object' && error !== null && 'name' in error ? error.name : undefined
+        const isAbort = signal?.aborted || name === 'AbortError'
         return {
           ok: false,
           error: {
-            code: isAbort ? 'ABORTED' : 'INTERNAL',
+            code: isAbort ? 'ABORTED' : name === 'TimeoutError' ? 'TIMEOUT' : 'INTERNAL',
+            ...phase === 'send' && (name === 'TypeError' || name === 'NetworkError') ? { details: { cause: 'connection' } } : {},
             message: error instanceof Error ? error.message : String(error),
           },
         }

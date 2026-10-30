@@ -22,6 +22,7 @@ import type { QoderRegion } from '../qoder/region.ts'
 import { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
 import type { QoderSessionTierScope, QoderSessionTierSelection } from './rpc-channel.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
+import { QoderRequestError } from './request-error.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 
@@ -102,10 +103,10 @@ export class QoderAdapter extends LlmAdapter {
 
   setSessionTier(sessionId: string, modelId: string, tierKey: string, region = this.region()): void {
     const model = this.effectiveModels().find(candidate => candidate.id === modelId)
-    if (region !== this.region() || !sessionId || !model
-      || !contextTiersOf(model).some(tier => tier.key === tierKey)
-      || (this.sessions && !this.sessions.get(sessionId))) {
-      throw new QoderLlmError('Invalid session context tier selection.', 'INVALID_REQUEST')
+    this.validateSessionTierScope(region, sessionId)
+    if (!model) throw new QoderRequestError('Unknown Qoder model reference.')
+    if (!contextTiersOf(model).some(tier => tier.key === tierKey)) {
+      throw new QoderRequestError('Unknown Qoder Context Tier reference.')
     }
     this.sessionTiers.set(JSON.stringify([region, sessionId, modelId]), tierKey)
     for (const listener of this.tierListeners) {
@@ -126,13 +127,19 @@ export class QoderAdapter extends LlmAdapter {
 
   readSessionTier(scope: QoderSessionTierScope): QoderSessionTierSelection {
     const { region, sessionId, modelId } = scope
-    if (region !== this.region() || !sessionId || (this.sessions && !this.sessions.get(sessionId))) {
-      throw new QoderLlmError('Invalid session context tier scope.', 'INVALID_REQUEST')
-    }
+    this.validateSessionTierScope(region, sessionId)
     const model = this.resolveEffectiveModelForSession(modelId, sessionId)
     const tier = model && resolveContextTier(model, model.contextTier)
-    if (!tier) throw new QoderLlmError('Model has no context tiers.', 'INVALID_REQUEST')
+    if (!model) throw new QoderRequestError('Unknown Qoder model reference.')
+    if (!tier) throw new QoderRequestError('Model has no Context Tiers.')
     return { ...scope, tierKey: tier.key, tokenCount: tier.tokenCount }
+  }
+
+  private validateSessionTierScope(region: QoderRegion, sessionId: string): void {
+    if (region !== this.region()) throw new QoderRequestError('The active Qoder service region is required.')
+    if (!sessionId || (this.sessions && !this.sessions.get(sessionId))) {
+      throw new QoderRequestError('Unknown session reference.')
+    }
   }
 
   getSessionTier(sessionId: string, modelId: string): string | undefined {

@@ -1,3 +1,4 @@
+import { deferred, mockTime } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { QoderLlmError } from '../src/qoder/errors.ts'
@@ -324,16 +325,27 @@ test('fetchQoderModels classifies HTTP and network failures', async () => {
   }), (error: Error) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
 })
 
-test('fetchQoderModels applies its own deadline and normalizes body-read cancellation', async () => {
+test('fetchQoderModels applies its own deadline and normalizes body-read cancellation', async t => {
+  const time = mockTime(t)
+  const started = deferred()
+  let signal!: AbortSignal
   const credentials = {
     userID: 'user-1', authToken: 'job-token', name: '', email: '', machineID: 'machine-1',
   }
-  await assert.rejects(() => fetchQoderModels(credentials, {
+  const rejected = assert.rejects(() => fetchQoderModels(credentials, {
     timeoutMs: 5,
     fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signal = init!.signal!
+      started.resolve()
       init?.signal?.addEventListener('abort', () => reject(new DOMException('timeout', 'AbortError')), { once: true })
     })) as typeof fetch,
   }), (error: Error) => error instanceof QoderLlmError && error.code === 'TIMEOUT')
+
+  await started.promise
+  time.tick(4)
+  assert.equal(signal.aborted, false)
+  time.tick(1)
+  await rejected
 
   const caller = new AbortController()
   await assert.rejects(() => fetchQoderModels(credentials, {
