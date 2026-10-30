@@ -160,86 +160,6 @@ test('QoderSearchClient honors cancellation signal with WEB_ABORTED', async () =
   )
 })
 
-test('QoderSearchProvider routes based on initiator agent provider and mode', async () => {
-  const ctx = new Context()
-  let currentAgentProvider: string | undefined = QODER_PROVIDER_ID
-
-  // Mock ctx.agents.currentInitiator()
-  ;(ctx as unknown as Record<string, unknown>).agents = {
-    currentInitiator: () => ({
-      options: {
-        provider: currentAgentProvider,
-      },
-    }),
-  }
-
-  let qoderSearchCalled = false
-  const mockTransport = {
-    searchWeb: async () => {
-      qoderSearchCalled = true
-      return { sources: [{ url: 'https://qoder.sh' }], truncated: false }
-    },
-  } as unknown as QoderTransport
-
-  let fallbackSearchCalled = false
-  const mockFallbackProvider: WebSearchProvider = {
-    id: 'deepseek-official',
-    available: () => true,
-    search: async () => {
-      fallbackSearchCalled = true
-      return { sources: [{ url: 'https://deepseek.com' }], truncated: false }
-    },
-  }
-
-  let mode: 'auto' | 'always' | 'disabled' = 'auto'
-
-  const provider = new QoderSearchProvider({
-    ctx,
-    resolveTransport: () => mockTransport,
-    getWebSearchMode: () => mode,
-    fallbackProvider: mockFallbackProvider,
-  })
-
-  assert.equal(provider.id, QODER_SEARCH_PROVIDER_ID)
-  assert.equal(provider.available(), true)
-
-  // Case 1: mode='auto', agent is dsh-provider-qoder -> routes to Qoder
-  currentAgentProvider = QODER_PROVIDER_ID
-  qoderSearchCalled = false
-  fallbackSearchCalled = false
-  const res1 = await provider.search({ query: 'hello' })
-  assert.equal(qoderSearchCalled, true)
-  assert.equal(fallbackSearchCalled, false)
-  assert.equal(res1.sources[0].url, 'https://qoder.sh')
-
-  // Case 2: mode='auto', agent is deepseek-official -> delegates to fallback
-  currentAgentProvider = 'deepseek-official'
-  qoderSearchCalled = false
-  fallbackSearchCalled = false
-  const res2 = await provider.search({ query: 'hello' })
-  assert.equal(qoderSearchCalled, false)
-  assert.equal(fallbackSearchCalled, true)
-  assert.equal(res2.sources[0].url, 'https://deepseek.com')
-
-  // Case 3: mode='always', agent is deepseek-official -> still forces Qoder
-  mode = 'always'
-  currentAgentProvider = 'deepseek-official'
-  qoderSearchCalled = false
-  fallbackSearchCalled = false
-  const res3 = await provider.search({ query: 'hello' })
-  assert.equal(qoderSearchCalled, true)
-  assert.equal(fallbackSearchCalled, false)
-  assert.equal(res3.sources[0].url, 'https://qoder.sh')
-
-  // Case 4: mode='disabled' -> unavailable and search throws
-  mode = 'disabled'
-  assert.equal(provider.available(), false)
-  await assert.rejects(
-    () => provider.search({ query: 'hello' }),
-    (err: unknown) => err instanceof WebError && err.code === 'WEB_PROVIDER_UNAVAILABLE',
-  )
-})
-
 test('QoderSearchProvider caps direct results to maxResults', async () => {
   const ctx = new Context()
   const sources = [1, 2, 3].map(index => ({ url: `https://result-${index}.example` }))
@@ -262,13 +182,13 @@ test('QoderSearchProvider caps direct results to maxResults', async () => {
 
 test('QoderSearchProvider routes Qoder search through transport', async () => {
   const ctx = new Context()
-  ;(ctx as unknown as Record<string, unknown>).agents = {
+  ctx.provide('agents', {
     currentInitiator: () => ({
       options: {
         provider: QODER_PROVIDER_ID,
       },
     }),
-  }
+  } as any)
 
   let transportSearchCalled = false
   const fakeTransport = {
@@ -291,11 +211,11 @@ test('QoderSearchProvider routes Qoder search through transport', async () => {
 
 test('QoderSearchProvider falls back to agentDefaultModel when currentInitiator is absent', async () => {
   const ctx = new Context()
-  ;(ctx as unknown as Record<string, unknown>).agents = {
+  ctx.provide('agents', {
     currentInitiator: () => undefined,
-  }
+  } as any)
   ctx.provide('agentDefaultModel', {
-    get: () => ({ provider: QODER_PROVIDER_ID, model: 'gfmodel' }),
+    currentSelection: () => ({ provider: QODER_PROVIDER_ID, model: 'gfmodel' }),
   } as any)
 
   let qoderSearchCalled = false
@@ -315,35 +235,4 @@ test('QoderSearchProvider falls back to agentDefaultModel when currentInitiator 
   const result = await provider.search({ query: 'test default model' })
   assert.equal(qoderSearchCalled, true)
   assert.equal(result.sources[0].url, 'https://default-qoder.sh')
-})
-
-test('QoderSearchProvider dynamically resolves fallback from web.searchProviders Map', async () => {
-  const ctx = new Context()
-  ;(ctx as unknown as Record<string, unknown>).agents = {
-    currentInitiator: () => ({ options: { provider: 'deepseek-official' } }),
-  }
-
-  let fallbackCalled = false
-  const deepseekFallback: WebSearchProvider = {
-    id: 'deepseek-official',
-    available: () => true,
-    search: async () => {
-      fallbackCalled = true
-      return { sources: [{ url: 'https://fallback.deepseek.com' }], truncated: false }
-    },
-  }
-
-  const searchProvidersMap = new Map<string, WebSearchProvider>()
-  searchProvidersMap.set('deepseek-official', deepseekFallback)
-  ctx.provide('web', { searchProviders: searchProvidersMap } as any)
-
-  const provider = new QoderSearchProvider({
-    ctx,
-    resolveTransport: () => { throw new Error('Unexpected Qoder search') },
-    getWebSearchMode: () => 'auto',
-  })
-
-  const result = await provider.search({ query: 'test dynamic fallback' })
-  assert.equal(fallbackCalled, true)
-  assert.equal(result.sources[0].url, 'https://fallback.deepseek.com')
 })

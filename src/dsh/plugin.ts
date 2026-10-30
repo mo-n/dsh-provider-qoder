@@ -1,7 +1,8 @@
 /** Register the Qoder subscription provider with DSH. */
 
 import type {} from '@deepseek-ai/dsh-agent'
-import type {} from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-api-session-controller'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { QoderQueueLeases, bindQoderQueueLeases } from './queue-leases.ts'
 import { QoderQueueStatusStore } from './queue-status.ts'
 import { bindQoderImageTools } from './image-tools.ts'
@@ -13,7 +14,7 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderTransportRuntime, transportConfig, type QoderRuntimeConfig } from './transport-runtime.ts'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
-import { initiatingModelProvider, QoderSearchProvider, shouldUseQoderSearch } from './search-provider.ts'
+import { bindQoderSearch } from './search-provider.ts'
 import { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
 import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { resolveManagedQoderPat } from './credential.ts'
@@ -121,8 +122,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     region: () => runtime.config.region,
     providerId: providerQoder,
     providerName: 'Qoder',
-    sessions: ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined,
-    agents: ctx.get('agents') as import('./adapter.ts').QoderAdapterAgentStore | undefined,
+    sessions: ctx.get('sessions'),
+    agents: ctx.get('agents'),
   })
 
   ctx.on('session/disposed', session => adapter.forgetSession(session.id))
@@ -227,13 +228,11 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     adapter,
     readQueue: sessionId => queueStatus.read(sessionId),
     restoreSession: async sessionId => {
-      const sessions = ctx.get('sessions') as import('./adapter.ts').QoderAdapterSessionStore | undefined
-      if (!sessions || sessions.get(sessionId)) return
-      const controller = ctx.get('sessionController') as {
-        resolveAgent(id: string): Promise<{ error?: unknown }>
-      } | undefined
+      const sessions = ctx.get('sessions')
+      if (!sessions || sessions.get(SessionId(sessionId))) return
+      const controller = ctx.get('sessionController')
       if (!controller) return
-      const result = await controller.resolveAgent(sessionId)
+      const result = await controller.resolveAgent(SessionId(sessionId))
       if ('error' in result) throw result.error
     },
     logger,
@@ -247,32 +246,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     logger?.error?.('[Qoder RPC] Failed to register the settings RPC routes', logError(error))
   }
 
-  ctx.inject(['web'], (webCtx) => {
-    const searchProvider = new QoderSearchProvider({
-      ctx,
-      resolveTransport: () => runtime.transport,
-      getWebSearchMode: () => resolveConfig().webSearchMode ?? 'auto',
-    })
-    webCtx.web.registerSearchProvider(searchProvider)
-
-    // Transparent interceptor: ensure that when a Qoder model is active,
-    // ctx.web.search always routes to Qoder even if the host profile configured
-    // a different fixed searchProvider (e.g. deepseek-official).
-    if (typeof webCtx.web.search === 'function') {
-      const originalSearch = webCtx.web.search
-      webCtx.effect(() => {
-        const routedSearch: typeof originalSearch = async (request, signal) => {
-          const mode = resolveConfig().webSearchMode ?? 'auto'
-          if (shouldUseQoderSearch(mode, initiatingModelProvider(ctx))) {
-            return searchProvider.search(request, signal)
-          }
-          return originalSearch.call(webCtx.web, request, signal)
-        }
-        webCtx.web.search = routedSearch
-        return () => {
-          if (webCtx.web.search === routedSearch) webCtx.web.search = originalSearch
-        }
-      }, 'provider-qoder: transparent web search router')
-    }
+  bindQoderSearch(ctx, {
+    resolveTransport: () => runtime.transport,
+    getWebSearchMode: () => resolveConfig().webSearchMode ?? 'auto',
   })
 }

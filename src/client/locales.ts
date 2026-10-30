@@ -285,7 +285,7 @@ function localeMatches(tag: string, requested: string, prefix: boolean): boolean
   const normalized = tag.trim().toLowerCase()
   if (normalized === requested) return true
   if (!prefix) return false
-  const primary = requested.split('-')[0]
+  const primary = requested.slice(0, requested.indexOf('-') < 0 ? requested.length : requested.indexOf('-'))
   return primary.length > 0 && normalized.split('-')[0] === primary
 }
 

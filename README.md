@@ -27,7 +27,7 @@ This project is a community adapter plugin and is not affiliated with Qoder or D
 
 - An active Qoder subscription matching the selected service region.
 - The DSH profile running the plugin must provide a managed credentials service; when configuring via the settings page, the credential storage must also be writable.
-- Requirements: DSH `>=0.1.7-rc.2`.
+- Requirements: DSH `>=0.2.0-rc.2`.
 
 ### Install from npm
 

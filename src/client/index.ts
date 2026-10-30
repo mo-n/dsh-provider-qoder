@@ -3,9 +3,14 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings-models/client'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-api-settings-controller/remote'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { qoderCredentialRef } from '../dsh/credential-contract.ts'
-import { createSettingsOperations, type ModelForm, type QoderCredentialsRemote } from './settings-operations.ts'
+import { createSettingsOperations, type ModelForm } from './settings-operations.ts'
 import { QoderQueueStatus } from './QoderQueueStatus.tsx'
 import { QoderAccountCard } from './QoderAccountCard.tsx'
 import { QoderCredentialCard } from './QoderCredentialCard.tsx'
@@ -27,25 +32,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     'settings.qoderCredential': QoderCredentialCopy
   }
-  interface SlotMap {
-    'settings.models.footer': { kind: 'list'; scope: 'root'; owner: QoderModelsFooterOwnerProps }
-    'conversation.input.dock': { kind: 'list'; scope: 'session' }
-    'conversation.input.right': { kind: 'list'; scope: 'session' }
-  }
-}
-
-export interface SlotService extends SlotCore {
-  inject(name: string, callback: () => unknown): () => void
-}
-
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    slots: SlotService
-  }
-}
-
-interface QoderModelsFooterOwnerProps {
-  children?: never
 }
 
 export const inject = ['slots', 'locale', 'remote', 'remote.credentials', 'configForms']
@@ -65,9 +51,10 @@ export function apply(ctx: ClientContext): void {
 function mount(ctx: ClientContext, modelScope: ModelForm): void {
   ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'provider-qoder: credential copy')
 
-  // The released rc.2 declarations predate this generated Remote namespace;
-  // the current DSH client exposes it through the same runtime assembly.
-  const credentials = (ctx.remote as unknown as { credentials: QoderCredentialsRemote }).credentials
+  const credentials = ctx.remote.credentials
+  if (!credentials || typeof credentials.describe !== 'function' || typeof credentials.set !== 'function' || typeof credentials.unset !== 'function') {
+    throw new Error('Qoder settings require the DSH credentials Remote API.')
+  }
   const rpc = createQoderRpcCaller()
   const tierEvents = createSessionTierEvents()
   ctx.effect(() => () => tierEvents.dispose(), 'provider-qoder: session context tier events')
@@ -98,7 +85,7 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
       return () => { reference(); record() }
     },
   }
-  const rawT = ctx.locale.bind(localeNamespace) as (key: QoderCredentialCopy) => string
+  const rawT = ctx.locale.bind(localeNamespace)
   const t = (key: QoderCredentialCopy, values?: Record<string, string | number>): string => {
     const raw = rawT(key)
     return fill(raw, values)
@@ -137,12 +124,10 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
       id: 'qoder-context-select',
       order: 10,
       inject: (sessionId: string) => {
-        let directory: unknown = undefined
+        let directory: import('./QoderContextSelect.tsx').ModelDirectoryStoreLike | undefined
         try {
-          const modelDirectories = scope.get('modelDirectories') as {
-            directoryFor(id: string): { store: unknown }
-          } | undefined
-          directory = sessionId && modelDirectories ? modelDirectories.directoryFor(sessionId)?.store : undefined
+          const modelDirectories = scope.get('modelDirectories')
+          directory = sessionId && modelDirectories ? modelDirectories.directoryFor(SessionId(sessionId)).store : undefined
         } catch {
           // directoryFor resolution may throw if session scope is not ready yet
         }

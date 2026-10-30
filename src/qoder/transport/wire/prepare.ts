@@ -112,8 +112,9 @@ export async function prepareQoderRequest(
   const contextLength = selectedTier?.tokenCount ?? model?.contextWindow
   let lastUserText = ''
   for (let index = messages.length - 1; index >= 0; index--) {
-    if (messages[index].role === 'user') {
-      lastUserText = wireMessageText(messages[index])
+    const message = messages[index]
+    if (message?.role === 'user') {
+      lastUserText = wireMessageText(message)
       break
     }
   }

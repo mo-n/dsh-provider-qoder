@@ -43,7 +43,7 @@ export function QoderContextSelect(props: QoderContextSelectProps) {
     next: { provider?: string; model?: string } | null
   }>('modelSelection') : undefined
   const pressure = useProjection ? useProjection<{ contextWindow?: number }>('contextPressure') : undefined
-  if (!operations) return null
+  if (!operations || !directoryState) return null
   const projectedCurrent = modelProj?.next ?? modelProj?.lastUsed
 
   const current = directoryState?.current ?? (projectedCurrent?.model ? {

@@ -570,6 +570,7 @@ test('apply registers QoderSearchProvider with ctx.web when web service is provi
 
   let registeredSearchProvider: { id: string } | undefined
   const fakeWeb = {
+    search: async () => ({ sources: [], truncated: false }),
     registerSearchProvider: (provider: { id: string }) => {
       registeredSearchProvider = provider
       return () => {}
@@ -595,7 +596,6 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
   let ambientCalls = 0
   let registeredProvider: WebSearchProvider | undefined
   const fakeWeb = {
-    searchProviders: new Map(),
     registerSearchProvider: (provider: WebSearchProvider) => {
       registeredProvider = provider
       return () => {}
@@ -610,11 +610,11 @@ test('apply transparently routes web.search to Qoder when Qoder model is active'
 
   let currentProvider = QODER_PROVIDER_ID
   let mode: 'auto' | 'always' | 'disabled' = 'auto'
-  ;(ctx as unknown as Record<string, unknown>).agents = {
+  ctx.provide('agents', {
     currentInitiator: () => ({
       options: { provider: currentProvider },
     }),
-  }
+  } as any)
 
   const fiber = ctx.plugin({ name: plugin.name, inject: plugin.inject, apply: plugin.apply }, {
     get: () => ({ webSearchMode: mode }),

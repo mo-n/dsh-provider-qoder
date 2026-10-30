@@ -60,7 +60,7 @@ test('client settings mounts with declared services and reports rejected writes'
     configForms: { get: (id: string) => { namespace = id; return form } },
     effect: (callback: () => unknown) => callback(),
     locale: { register() {}, bind: () => (key: string) => key },
-    remote: { credentials: {} },
+    remote: { credentials: { describe: async () => ({ ok: true, value: {} }), set: async () => ({ ok: true, value: undefined }), unset: async () => ({ ok: true, value: undefined }) } },
     inject: () => {},
     slots: {
       inject: (_name: string, callback: () => void) => callback(),
@@ -84,6 +84,10 @@ test('client settings mounts with declared services and reports rejected writes'
   const missingConfigForms = new Set(declared)
   missingConfigForms.delete('configForms')
   assert.throws(() => plugin.apply(guardedContext(missingConfigForms)), /dynamic ctx does not expose "configForms"/u)
+  const validCredentials = ctx.remote.credentials
+  ctx.remote.credentials = {} as typeof validCredentials
+  assert.throws(() => plugin.apply(guardedContext(declared)), /require the DSH credentials Remote API/)
+  ctx.remote.credentials = validCredentials
   plugin.apply(guardedContext(declared))
   assert.equal(namespace, 'provider-qoder')
   assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
@@ -141,8 +145,8 @@ test('new conversation receives the default model directory before a model selec
       },
     } as any)
     ctx.provide('locale', { register() {}, bind: () => (key: string) => key } as any)
-    ctx.provide('remote', { credentials: {}, session: {} } as any)
-    ctx.provide('remote.credentials', {} as any)
+    ctx.provide('remote', { credentials: { describe: async () => ({ ok: true, value: {} }), set: async () => ({ ok: true, value: undefined }), unset: async () => ({ ok: true, value: undefined }) }, session: {} } as any)
+    ctx.provide('remote.credentials', ctx.remote.credentials)
     ctx.provide('configForms', { get: () => form } as any)
     await ctx.plugin(plugin).await()
     assert.ok(entries.has('settings.section'))
@@ -161,6 +165,7 @@ test('new conversation receives the default model directory before a model selec
     assert.ok(entry)
     assert.equal(entry.inject('new').directory, directory)
     assert.deepEqual(entry.inject('new').directory.getSnapshot().current, current)
+    assert.equal(entry.inject('not-ready').directory, undefined)
   } finally {
     await ctx.fiber.dispose()
   }
@@ -180,7 +185,7 @@ for (const authorizationOk of [false, true]) {
       configForms: { get: () => ({ getSnapshot: () => ({ value: { region: 'global' } }) }) },
       effect: (callback: () => unknown) => callback(),
       locale: { register() {}, bind: () => (key: string) => key },
-      remote: { credentials: { set: async () => ({ ok: true }) } }, inject() {},
+      remote: { credentials: { set: async () => ({ ok: true }), describe: async () => ({ ok: true, value: {} }), unset: async () => ({ ok: true }) } }, inject() {},
       slots: { inject: (_name: string, callback: () => unknown) => callback(),
         register: (spec: { name: string; inject(): { operations: typeof operations } }) => {
           if (spec.name === 'settings.section') operations = spec.inject().operations
