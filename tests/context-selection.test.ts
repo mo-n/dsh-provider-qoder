@@ -1,3 +1,4 @@
+import { success } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -100,7 +101,7 @@ test('model catalog renders context tier select and propagates default tier chan
       storeModels: async (region: string, models: QoderCatalogModel[]) => {
         assert.equal(region, 'global')
         changedModels = models
-        return true
+        return success(undefined)
       },
     },
     models: [tieredModel, singleModel],
@@ -176,7 +177,7 @@ test('composer renders the host-confirmed tier after remount and keys controls b
     sessionId: 's', directory: { getSnapshot: () => ({ current: { provider: QODER_PROVIDER_ID, model: 'a' } }), subscribe: () => () => {} },
     operations: {
       getModelSnapshot: () => settings, subscribeModels: () => () => {},
-      readSessionTier: async (scope: { region: 'global'; sessionId: string; modelId: string }) => adapter.readSessionTier(scope),
+      readSessionTier: async (scope: { region: 'global'; sessionId: string; modelId: string }) => success(adapter.readSessionTier(scope)),
     },
   }
   const unmount = () => { for (const cell of cells) cell.cleanup?.(); for (const off of subscriptions.values()) off(); subscriptions.clear(); cells = [] }

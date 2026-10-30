@@ -1,3 +1,4 @@
+import { accepted } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -38,9 +39,9 @@ async function mountFeatures(write: (field: string, value: unknown) => Promise<b
     : id === '@deepseek-ai/dsh-client-ui-primitives' ? { Button: 'button', Switch: 'input' }
     : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) } : require(id) })
   const operations = {
-    storeWebSearchMode: (value: unknown) => write('webSearchMode', value),
-    storeImageSearchEnabled: (value: unknown) => write('imageSearchEnabled', value),
-    storeImageGenEnabled: (value: unknown) => write('imageGenEnabled', value),
+    storeWebSearchMode: (value: unknown) => write('webSearchMode', value).then(accepted),
+    storeImageSearchEnabled: (value: unknown) => write('imageSearchEnabled', value).then(accepted),
+    storeImageGenEnabled: (value: unknown) => write('imageGenEnabled', value).then(accepted),
   }
   const render = () => {
     cursor = 0; dirty = false

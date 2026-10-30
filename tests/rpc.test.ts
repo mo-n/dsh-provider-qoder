@@ -192,6 +192,7 @@ test('the browser caller reports transport and endpoint failures without throwin
     error: {
       code: 'UPSTREAM_ERROR',
       message: 'transport failure for /api/qoder-subscription/account: HTTP 405',
+      details: { status: 405 },
     },
   })
 

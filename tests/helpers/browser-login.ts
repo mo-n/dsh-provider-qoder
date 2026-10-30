@@ -1,3 +1,5 @@
+import { success, accepted } from './operation-result.ts'
+import type { OperationResult } from '../../src/client/operation-result.ts'
 /** Minimal stateful renderer for the actual sign-in component and its asynchronous effects. */
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -24,7 +26,7 @@ export function text(value: unknown): string {
 
 export async function mountBrowserLogin(operations: QoderAuthorizationOperations, options: {
   popup?: boolean; credentials?: Partial<QoderBrowserLoginProps['credentials']>; onBusyChange?(busy: boolean): void
-  card?: boolean; snapshot?(): QoderModelSettingsSnapshot; storeRegion?(region: QoderRegion): Promise<boolean>
+  card?: boolean; snapshot?(): QoderModelSettingsSnapshot; storeRegion?(region: QoderRegion): Promise<OperationResult<void>>
 } = {}) {
   const file = new URL(options.card ? '../../src/client/QoderCredentialCard.tsx' : '../../src/client/QoderBrowserLogin.tsx', import.meta.url)
   const source = ts.transpileModule(await readFile(file, 'utf8'), { compilerOptions: {
@@ -74,13 +76,13 @@ export async function mountBrowserLogin(operations: QoderAuthorizationOperations
     window: { open: () => { opens++; return options.popup === false ? null : popup }, confirm: () => true }, navigator: {},
   })
   const credentials = {
-    describe: async () => ({ configured: true, writable: true }), store: async () => true, remove: async () => true,
+    describe: async () => success({ configured: true, writable: true }), store: async () => accepted(true), remove: async () => accepted(true),
     getAccount: async () => undefined,
     ...options.credentials,
   }
   const cardOperations = { ...credentials, authorization: operations,
     getModelSnapshot: options.snapshot ?? (() => ({ status: 'ready', writable: true, value: { region: 'global' } })),
-    subscribeModels: () => () => {}, storeRegion: options.storeRegion ?? (async () => true),
+    subscribeModels: () => () => {}, storeRegion: options.storeRegion ?? (async () => accepted(true)),
   }
   const render = () => {
     dirty = false; cursor = 0; effects = []

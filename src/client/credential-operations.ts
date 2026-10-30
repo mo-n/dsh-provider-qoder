@@ -1,3 +1,4 @@
+import type { OperationResult } from './operation-result.ts'
 import type { QoderAccountInfo } from '../qoder/account.ts'
 import { cloneCatalogModel, defaultModels, mergeAdvertisedContext, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
@@ -15,21 +16,21 @@ export interface QoderAuthorizationOperations {
 
 export interface QoderCredentialOperations {
   authorization?: QoderAuthorizationOperations
-  describePat?(): Promise<QoderCredentialStatus | undefined>
-  describe(): Promise<QoderCredentialStatus | undefined>
-  store(value: string): Promise<boolean>
-  remove(): Promise<boolean>
+  describePat?(): Promise<OperationResult<QoderCredentialStatus>>
+  describe(): Promise<OperationResult<QoderCredentialStatus>>
+  store(value: string): Promise<OperationResult<void>>
+  remove(): Promise<OperationResult<void>>
   getAccount(force?: boolean): Promise<QoderAccountResult | undefined>
   getModelSnapshot(): QoderModelSettingsSnapshot
   subscribeModels(listener: () => void): () => void
-  storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<boolean>
-  storeRegion(region: QoderRegion): Promise<boolean>
-  storeWebSearchMode(mode: QoderWebSearchMode): Promise<boolean>
-  storeImageSearchEnabled(enabled: boolean): Promise<boolean>
-  storeImageGenEnabled(enabled: boolean): Promise<boolean>
+  storeModels(region: QoderRegion, models: QoderCatalogModel[]): Promise<OperationResult<void>>
+  storeRegion(region: QoderRegion): Promise<OperationResult<void>>
+  storeWebSearchMode(mode: QoderWebSearchMode): Promise<OperationResult<void>>
+  storeImageSearchEnabled(enabled: boolean): Promise<OperationResult<void>>
+  storeImageGenEnabled(enabled: boolean): Promise<OperationResult<void>>
   discoverModels(): Promise<QoderModelDiscoveryResult>
-  setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<QoderSessionTierSelection | undefined>
-  readSessionTier?(scope: QoderSessionTierScope): Promise<QoderSessionTierSelection | undefined>
+  setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<OperationResult<QoderSessionTierSelection>>
+  readSessionTier?(scope: QoderSessionTierScope): Promise<OperationResult<QoderSessionTierSelection>>
   subscribeSessionTiers?(scope: QoderSessionTierScope, listener: () => void): () => void
   subscribe(listener: () => void): () => void
 }

@@ -2,6 +2,8 @@ import { useRef, useState, useSyncExternalStore } from 'react'
 import type { QoderRegion } from '../qoder/region.ts'
 import { regionOf, type QoderCredentialInjected } from './credential-operations.ts'
 import { QoderBrowserLogin } from './QoderBrowserLogin.tsx'
+import { operationNotice } from './operation-result.ts'
+import type { QoderCredentialCopy } from './locales.ts'
 import css from './QoderCredentialCard.module.css'
 
 export type QoderCredentialCardProps = QoderCredentialInjected
@@ -12,7 +14,7 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
   const region = regionOf(snapshot.value)
   const [changing, setChanging] = useState(false)
   const [accountBusy, setAccountBusy] = useState(false)
-  const [notice, setNotice] = useState<'regionChangeFailed' | 'regionChanged' | undefined>()
+  const [notice, setNotice] = useState<QoderCredentialCopy>()
   const mutating = useRef(false)
   const canChange = snapshot.status === 'ready' && snapshot.writable && !changing && !accountBusy
 
@@ -21,7 +23,7 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
     mutating.current = true
     setChanging(true)
     setNotice(undefined)
-    try { setNotice(await operations.storeRegion(next) ? 'regionChanged' : 'regionChangeFailed') }
+    try { const result = await operations.storeRegion(next); setNotice(result.ok ? 'regionChanged' : operationNotice(result.error, 'regionChangeFailed')) }
     catch { setNotice('regionChangeFailed') }
     finally { mutating.current = false; setChanging(false) }
   }
@@ -36,7 +38,7 @@ export function QoderCredentialCard({ operations, t }: QoderCredentialCardProps)
           onClick={() => { void changeRegion(value) }}>{t(value === 'china' ? 'regionChina' : 'regionGlobal')}</button>)}
       </div>
     </div>
-    {notice ? <p role="status" className={notice === 'regionChangeFailed' ? css.error : css.label}>{t(notice)}</p> : null}
+    {notice ? <p role="status" className={notice !== 'regionChanged' ? css.error : css.label}>{t(notice)}</p> : null}
     <QoderBrowserLogin key={region} region={region} operations={operations.authorization} credentials={operations} onBusyChange={setAccountBusy} t={t} />
     <p className={css.sharedNote}>{t('sharedAuthorization')}</p>
   </section>

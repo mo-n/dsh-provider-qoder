@@ -141,7 +141,7 @@ function SessionContextSelect({ operations, sessionId, region, activeModel, t, h
         </span>
       </button>
 
-      {snapshot.error && <span role="alert" className={css.error}>{t ? t('contextSelectFailed') : 'contextSelectFailed'} <button type="button" disabled={pending} onClick={() => { void state.refresh() }}>{t ? t('refresh') : 'refresh'}</button></span>}
+      {snapshot.error && <span role="alert" className={css.error}>{t ? t(snapshot.operationError?.outcome === 'unknown' ? 'operationOutcomeUnknown' : 'contextSelectFailed') : 'contextSelectFailed'} <button type="button" disabled={pending} onClick={() => { void state.refresh() }}>{t ? t('refresh') : 'refresh'}</button></span>}
       {open && (
         <div className={css.menu} role="menu" aria-label={selectTitle}>
           <div className={css.menuHeader}>{menuHeader}</div>

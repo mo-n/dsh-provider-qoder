@@ -1,6 +1,8 @@
 import type { QoderLocalizedText } from '../qoder/account.ts'
 
 export const zh = {
+  patSavedSelectionFailed: 'PAT 已保存，但无法确认授权选择。可选择使用已保存的 PAT 重试。',
+  operationOutcomeUnknown: '无法确认更改结果，请先核对当前状态再重试。',
   accountConnectionTitle: 'Qoder 账号',
   signInDescription: '登录 Qoder，使用当前区域的订阅和模型。',
   manageAccount: '管理账号',
@@ -135,6 +137,8 @@ export const zh = {
 }
 
 export const en: typeof zh = {
+  patSavedSelectionFailed: 'PAT saved. Authorization selection could not be confirmed. Use the saved PAT to retry.',
+  operationOutcomeUnknown: 'Could not confirm the change. Check the current state before retrying.',
   accountConnectionTitle: 'Qoder account',
   signInDescription: 'Sign in to use your subscription and models for this region.',
   manageAccount: 'Manage account',

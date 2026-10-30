@@ -1,11 +1,11 @@
 /** Browser contributions for the Qoder account and managed credential. */
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { qoderCredentialRef } from '../dsh/credential-contract.ts'
+import { createSettingsOperations, type ModelForm, type QoderCredentialsRemote } from './settings-operations.ts'
 import type { QoderAccountInfo } from '../qoder/account.ts'
 import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { QoderQueueStatus } from './QoderQueueStatus.tsx'
@@ -16,13 +16,10 @@ import { regionOf } from './credential-operations.ts'
 import type { QoderAuthorizationView } from '../qoder/authorization.ts'
 import type {
   QoderCredentialOperations,
-  QoderCredentialStatus,
   QoderModelSettingsSection,
-  QoderModelSettingsSnapshot,
 } from './credential-operations.ts'
 import { en, zh, type QoderCredentialCopy } from './locales.ts'
 import { createSessionTierEvents } from './session-tier-events.ts'
-import type { QoderSessionTierSelection } from '../dsh/rpc-channel.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
 import { installQoderSettingsNavIcon } from './settings-nav-icon.ts'
 
@@ -56,23 +53,6 @@ interface QoderModelsFooterOwnerProps {
 
 export const inject = ['slots', 'locale', 'remote', 'remote.credentials', 'configForms']
 
-interface ModelForm {
-  getSnapshot(): QoderModelSettingsSnapshot
-  subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<boolean | void>
-  mutate(ops: readonly SettingsPathOpView[]): Promise<boolean | void>
-}
-
-type CredentialRemoteResponse<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: { message: string } }
-
-interface QoderCredentialsRemote {
-  describe(refs: string[]): Promise<CredentialRemoteResponse<Record<string, QoderCredentialStatus>>>
-  set(ref: string, value: string): Promise<CredentialRemoteResponse<unknown>>
-  unset(ref: string): Promise<CredentialRemoteResponse<unknown>>
-}
-
 const fill = (text: string, values?: Record<string, string | number>): string => {
   if (!values) return text
   return Object.entries(values).reduce(
@@ -104,101 +84,11 @@ function mount(ctx: ClientContext, modelScope: ModelForm): void {
   }
   const operations: QoderCredentialOperations = {
     authorization: authorizationOperations,
-    describe: async () => {
-      const result = await authorizationOperations.read(regionOf(readModelSnapshot().value))
-      return result.ok ? { configured: result.value.configured && !result.value.expired,
-        source: result.value.method, writable: result.value.writable } : undefined
-    },
-    describePat: async () => {
-      try {
-        const response = await credentials.describe([qoderCredentialRef])
-        return response.ok ? response.value[qoderCredentialRef] : undefined
-      } catch {
-        return undefined
-      }
-    },
-    store: async (value) => {
-      try {
-        const response = await credentials.set(qoderCredentialRef, value.trim())
-        if (response.ok) {
-          const region = regionOf(readModelSnapshot().value)
-          const current = await authorizationOperations.read(region)
-          if (!current.ok) return false
-          if (current.value.method !== 'pat') return (await authorizationOperations.select(region, 'pat')).ok
-        }
-        return response.ok
-      } catch {
-        return false
-      }
-    },
-    remove: async () => {
-      try {
-        const response = await credentials.unset(qoderCredentialRef)
-        return response.ok
-      } catch {
-        return false
-      }
-    },
+    ...createSettingsOperations(credentials, modelScope, authorizationOperations, rpc),
     getAccount: async (force) => await rpc.call<QoderAccountInfo>('account', { force }),
     getModelSnapshot: readModelSnapshot,
     subscribeModels: listener => modelScope.subscribe(listener),
-    storeModels: async (region, models) => {
-      try {
-        // Persist only this region, using the JSON-shaped settings mutation contract.
-        const clonedModels = JSON.parse(JSON.stringify(models))
-        const res = await modelScope.mutate([{
-          op: 'set', path: ['modelsByRegion', region], value: clonedModels,
-        }])
-        return res !== false
-      } catch {
-        return false
-      }
-    },
-    storeRegion: async (region) => {
-      try {
-        return await modelScope.set('region', region) !== false
-      } catch {
-        return false
-      }
-    },
-    storeWebSearchMode: async (mode) => {
-      try {
-        return await modelScope.set('webSearchMode', mode) !== false
-      } catch {
-        return false
-      }
-    },
-    storeImageSearchEnabled: async (enabled) => {
-      try { return await modelScope.set('imageSearchEnabled', enabled) !== false }
-      catch { return false }
-    },
-    storeImageGenEnabled: async (enabled) => {
-      try { return await modelScope.set('imageGenEnabled', enabled) !== false }
-      catch { return false }
-    },
     discoverModels: async () => await rpc.call<QoderCatalogModel[]>('models', {}),
-    setSessionTier: async (sessionId: string, modelId: string, tierKey: string, region) => {
-      const scope = { sessionId, modelId, tierKey, region }
-      try {
-        const res = await rpc.call<QoderSessionTierSelection>('sessionTier', scope)
-        if (!res.ok) console.error('[Qoder context tier] Failed to save selection', { ...scope, error: res.error })
-        return res.ok ? res.value : undefined
-      } catch (error) {
-        console.error('[Qoder context tier] Failed to save selection', { ...scope, error })
-        return undefined
-      }
-    },
-
-    readSessionTier: async scope => {
-      try {
-        const result = await rpc.call<QoderSessionTierSelection>('readSessionTier', scope)
-        if (!result.ok) console.error('[Qoder context tier] Failed to read selection', { ...scope, error: result.error })
-        return result.ok ? result.value : undefined
-      } catch (error) {
-        console.error('[Qoder context tier] Failed to read selection', { ...scope, error })
-        return undefined
-      }
-    },
     subscribeSessionTiers: (scope, listener) => tierEvents.subscribe(scope, listener),
 
     subscribe: listener => {

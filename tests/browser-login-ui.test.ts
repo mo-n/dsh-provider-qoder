@@ -1,3 +1,4 @@
+import { success as operationSuccess, accepted } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mountBrowserLogin, nodes } from './helpers/browser-login.ts'
@@ -96,8 +97,8 @@ test('PAT editing is revealed on demand and saving uses the trimmed token withou
   const stored: string[] = []
   const busy: boolean[] = []
   const credentials: Partial<QoderBrowserLoginProps['credentials']> = {
-    describe: async () => ({ configured: false, writable: true }),
-    store: async value => { stored.push(value); await f.operations.select('global', 'pat'); f.set({ ...view(), method: 'pat', configured: true, profile: { id: 'browser-user', name: 'Browser subscriber', email: 'browser@example.test' } }); return true },
+    describe: async () => operationSuccess({ configured: false, writable: true }),
+    store: async value => { stored.push(value); await f.operations.select('global', 'pat'); f.set({ ...view(), method: 'pat', configured: true, profile: { id: 'browser-user', name: 'Browser subscriber', email: 'browser@example.test' } }); return accepted(true) },
     getAccount: async () => ({ ok: true, value: { profile: { id: 'pat-user', name: 'PAT subscriber', email: 'pat@example.test' }, updatedAt: new Date().toISOString() } }),
   }
   const ui = await mountBrowserLogin(f.operations, { credentials, onBusyChange: value => busy.push(value) })
@@ -119,8 +120,8 @@ test('PAT editing is revealed on demand and saving uses the trimmed token withou
 test('PAT save failures retain the draft and display a specific retry message', async () => {
   const f = fixture()
   const ui = await mountBrowserLogin(f.operations, { credentials: {
-    describe: async () => ({ configured: false, writable: true }),
-    store: async () => false,
+    describe: async () => operationSuccess({ configured: false, writable: true }),
+    store: async () => accepted(false),
   } })
   ui.click('Use PAT'); await ui.settle()
   ui.input('test-draft'); await ui.settle()
@@ -161,7 +162,7 @@ test('the unified card exposes regions immediately, saves on selection and keys 
   const changes: string[] = []
   const ui = await mountBrowserLogin(f.operations, { card: true,
     snapshot: () => ({ status: 'ready', writable: true, value: { region }, base: {}, user: {}, revision: 0 }),
-    storeRegion: async next => { changes.push(next); region = next; return true },
+    storeRegion: async next => { changes.push(next); region = next; return accepted(true) },
   })
   assert.equal(nodes(ui.tree()).filter(node => node.props.role === 'radio').length, 2)
   assert.equal(nodes(ui.tree()).filter(node => node.type === 'input').length, 0)
@@ -177,7 +178,7 @@ test('the unified card exposes regions immediately, saves on selection and keys 
 
 test('failed region writes retain the previous region and show a retry message', async () => {
   const f = fixture()
-  const ui = await mountBrowserLogin(f.operations, { card: true, storeRegion: async () => false })
+  const ui = await mountBrowserLogin(f.operations, { card: true, storeRegion: async () => accepted(false) })
   ui.click('China (CN)'); await ui.settle()
   assert.ok(nodes(ui.tree()).some(node => node.props.region === 'global'))
   assert.match(ui.text(), /Could not change region/)
@@ -195,5 +196,69 @@ test('browser authorization removal failures identify credential storage instead
   assert.match(ui.text(), /credential storage is writable/)
   assert.doesNotMatch(ui.text(), /Could not connect or read sign-in status/)
   assert.match(ui.text(), /subscriber@example.test/)
+  ui.unmount()
+})
+
+
+test('partial PAT save clears the draft and retries only selection of the saved PAT', async () => {
+  const f = fixture()
+  let configured = false
+  let saves = 0
+  const partial = { ok: false as const, error: { cause: 'connection' as const, outcome: 'partial' as const,
+    stage: 'select-authorization', completedStages: ['persist-pat'],
+    diagnostic: { operation: 'storePat', stage: 'select-authorization', cause: 'connection' as const, outcome: 'partial' as const, completedStages: ['persist-pat'] } } }
+  const ui = await mountBrowserLogin(f.operations, { credentials: {
+    describe: async () => operationSuccess({ configured, writable: true }),
+    store: async () => { saves++; configured = true; return partial },
+  } })
+  ui.click('Use PAT'); await ui.settle()
+  ui.input('synthetic-pat'); await ui.settle()
+  ui.click('Save and use PAT'); await ui.settle()
+  assert.match(ui.text(), /PAT saved.*could not be confirmed/)
+  assert.equal(nodes(ui.tree()).find(node => node.type === 'input')!.props.value, '')
+  assert.equal(ui.click('Use saved PAT'), true)
+  await ui.settle()
+  assert.equal(saves, 1)
+  assert.deepEqual(f.calls, ['pat'])
+  ui.unmount()
+})
+
+test('unknown PAT completion uses a concise state-check message without diagnostics', async () => {
+  const f = fixture()
+  const unknown = { ok: false as const, error: { cause: 'connection' as const, outcome: 'unknown' as const,
+    stage: 'persist-pat', completedStages: [],
+    diagnostic: { operation: 'storePat', stage: 'persist-pat', cause: 'connection' as const, outcome: 'unknown' as const, completedStages: [] } } }
+  const ui = await mountBrowserLogin(f.operations, { credentials: {
+    describe: async () => operationSuccess({ configured: false, writable: true }), store: async () => unknown,
+  } })
+  ui.click('Use PAT'); await ui.settle()
+  ui.input('synthetic-secret'); await ui.settle()
+  ui.click('Save and use PAT'); await ui.settle()
+  assert.match(ui.text(), /Could not confirm the change.*Check the current state/)
+  assert.doesNotMatch(ui.text(), /synthetic-secret|persist-pat|connection/)
+  ui.unmount()
+})
+
+
+test('saved PAT retry rereads authorization and avoids selecting an already active method', async () => {
+  const f = fixture()
+  f.set({ ...view(), method: 'pat', configured: true })
+  const ui = await mountBrowserLogin(f.operations)
+  ui.click('Manage credentials'); await ui.settle()
+  ui.click('Edit PAT'); await ui.settle()
+  ui.click('Use saved PAT'); await ui.settle()
+  assert.deepEqual(f.calls, [])
+  ui.unmount()
+})
+
+test('saved PAT retry does not write when authorization cannot be reconciled', async () => {
+  const f = fixture()
+  const ui = await mountBrowserLogin(f.operations)
+  ui.click('Use PAT'); await ui.settle()
+  f.operations.read = async () => ({ ok: false, error: { code: 'TIMEOUT', message: 'synthetic-private-detail' } })
+  ui.click('Use saved PAT'); await ui.settle()
+  assert.match(ui.text(), /Could not confirm the change/)
+  assert.doesNotMatch(ui.text(), /synthetic-private-detail/)
+  assert.deepEqual(f.calls, [])
   ui.unmount()
 })

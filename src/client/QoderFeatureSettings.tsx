@@ -2,13 +2,15 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
 import type { QoderCredentialInjected, QoderModelSettingsSnapshot } from './credential-operations.ts'
+import { operationNotice, type OperationResult } from './operation-result.ts'
+import type { QoderCredentialCopy } from './locales.ts'
 import css from './QoderCredentialCard.module.css'
 
 export function QoderFeatureSettings({ operations, snapshot, t }: Pick<QoderCredentialInjected, 'operations' | 't'> & {
   snapshot: QoderModelSettingsSnapshot
 }) {
   const [saving, setSaving] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [failed, setFailed] = useState<QoderCredentialCopy>()
   const pending = useRef(false)
   const mounted = useRef(true)
   useLayoutEffect(() => {
@@ -17,16 +19,16 @@ export function QoderFeatureSettings({ operations, snapshot, t }: Pick<QoderCred
   }, [])
   const writable = snapshot.status === 'ready' && snapshot.writable && !saving
   const mode = snapshot.value?.webSearchMode ?? 'auto'
-  const save = async (write: () => Promise<boolean>) => {
+  const save = async (write: () => Promise<OperationResult<void>>) => {
     if (!writable || pending.current) return
     pending.current = true
     setSaving(true)
-    setFailed(false)
+    setFailed(undefined)
     try {
       const accepted = await write()
-      if (mounted.current) setFailed(!accepted)
+      if (mounted.current) setFailed(accepted.ok ? undefined : operationNotice(accepted.error, 'featureSaveFailed'))
     } catch {
-      if (mounted.current) setFailed(true)
+      if (mounted.current) setFailed('featureSaveFailed')
     } finally {
       pending.current = false
       if (mounted.current) setSaving(false)
@@ -65,6 +67,6 @@ export function QoderFeatureSettings({ operations, snapshot, t }: Pick<QoderCred
         checked={snapshot.value?.imageGenEnabled ?? true} disabled={!writable}
         onChange={enabled => { void save(() => operations.storeImageGenEnabled(enabled)) }} />
     </div>
-    {failed ? <p className={css.error} role="alert">{t('featureSaveFailed')}</p> : null}
+    {failed ? <p className={css.error} role="alert">{t(failed)}</p> : null}
   </section>
 }

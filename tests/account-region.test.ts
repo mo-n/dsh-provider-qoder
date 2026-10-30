@@ -1,3 +1,4 @@
+import { success } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -86,7 +87,7 @@ async function mountCard(describe = async (): Promise<QoderCredentialStatus> => 
     base: {}, user: {}, revision: 0, writable: true, mode: 'host' }
   const requests: Array<{ region: QoderRegion; force?: boolean; result: ReturnType<typeof deferred<QoderAccountResult>> }> = []
   const operations = {
-    describe,
+    describe: async () => success(await describe()),
     subscribe: () => () => {},
     subscribeModels: () => () => {},
     getModelSnapshot: () => snapshot,

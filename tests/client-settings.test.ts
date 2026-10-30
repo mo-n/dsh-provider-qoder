@@ -1,3 +1,4 @@
+import type { OperationResult } from '../src/client/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -34,11 +35,11 @@ test('client settings mounts with declared services and reports rejected writes'
   const plugin = await loadClientPlugin()
   let namespace: string | undefined
   let operations!: {
-    storeRegion(region: string): Promise<boolean>
-    storeModels(region: string, models: unknown[]): Promise<boolean>
-    storeWebSearchMode(mode: string): Promise<boolean>
-    storeImageSearchEnabled(enabled: boolean): Promise<boolean>
-    storeImageGenEnabled(enabled: boolean): Promise<boolean>
+    storeRegion(region: string): Promise<OperationResult<void>>
+    storeModels(region: string, models: unknown[]): Promise<OperationResult<void>>
+    storeWebSearchMode(mode: string): Promise<OperationResult<void>>
+    storeImageSearchEnabled(enabled: boolean): Promise<OperationResult<void>>
+    storeImageGenEnabled(enabled: boolean): Promise<OperationResult<void>>
   }
   let accepted: boolean | undefined
   const writes: unknown[] = []
@@ -86,16 +87,16 @@ test('client settings mounts with declared services and reports rejected writes'
   plugin.apply(guardedContext(declared))
   assert.equal(namespace, 'provider-qoder')
   assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
-  assert.equal(await operations.storeRegion('china'), true)
+  assert.equal((await operations.storeRegion('china')).ok, true)
   accepted = false
-  assert.equal(await operations.storeRegion('global'), false)
-  assert.equal(await operations.storeModels('china', []), false)
-  assert.equal(await operations.storeWebSearchMode('disabled'), false)
-  assert.equal(await operations.storeImageSearchEnabled(false), false)
-  assert.equal(await operations.storeImageGenEnabled(false), false)
+  assert.equal((await operations.storeRegion('global')).ok, false)
+  assert.equal((await operations.storeModels('china', [])).ok, false)
+  assert.equal((await operations.storeWebSearchMode('disabled')).ok, false)
+  assert.equal((await operations.storeImageSearchEnabled(false)).ok, false)
+  assert.equal((await operations.storeImageGenEnabled(false)).ok, false)
   accepted = true
-  assert.equal(await operations.storeImageSearchEnabled(true), true)
-  assert.equal(await operations.storeImageGenEnabled(true), true)
+  assert.equal((await operations.storeImageSearchEnabled(true)).ok, true)
+  assert.equal((await operations.storeImageGenEnabled(true)).ok, true)
   assert.deepEqual(JSON.parse(JSON.stringify(writes.slice(4))), [
     ['imageSearchEnabled', false], ['imageGenEnabled', false],
     ['imageSearchEnabled', true], ['imageGenEnabled', true],
@@ -174,7 +175,7 @@ for (const authorizationOk of [false, true]) {
         ? authorizationOk ? { ok: true, value: { method: 'browser' } } : { ok: false, error: { code: 'INTERNAL' } }
         : { ok: true, value: { method: 'pat' } })
     }) as typeof fetch)
-    let operations!: { store(value: string): Promise<boolean> }
+    let operations!: { store(value: string): Promise<OperationResult<void>> }
     plugin.apply({
       configForms: { get: () => ({ getSnapshot: () => ({ value: { region: 'global' } }) }) },
       effect: (callback: () => unknown) => callback(),
@@ -185,7 +186,7 @@ for (const authorizationOk of [false, true]) {
           if (spec.name === 'settings.section') operations = spec.inject().operations
         } },
     })
-    assert.equal(await operations.store('synthetic-pat'), authorizationOk)
+    assert.equal((await operations.store('synthetic-pat')).ok, authorizationOk)
     assert.equal(paths.some(path => path.endsWith('/selectAuthorization')), authorizationOk)
   })
 }
