@@ -12,7 +12,7 @@ import type {
   ResolvedCredential,
 } from '@deepseek-ai/dsh-credentials'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
-import type { WebSearchProvider, WebSearchRequest } from '@deepseek-ai/dsh-web'
+import { WebRuntime, type WebSearchProvider, type WebSearchRequest } from '@deepseek-ai/dsh-web'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
 import { Config, type LiveConfig } from '../src/dsh/config.ts'
@@ -1007,4 +1007,27 @@ test('settings RPC validates defined fields before business work and distinguish
       assert.equal((await call('account', {})).error.code, code)
     }
   } finally { await fiber.dispose() }
+})
+
+test('Qoder intercepts searches with a real host configured for another search provider', async t => {
+  const result = { sources: [{ url: 'https://qoder.example' }], truncated: false }
+  const searchWeb = t.mock.method(DefaultQoderTransport.prototype, 'searchWeb', async () => result)
+  const ctx = new Context()
+  try {
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(TestCredentials)
+    await ctx.plugin(MemorySettings).await()
+    await ctx.plugin(WebRuntime, { searchProvider: 'ambient', fetchProvider: 'http' }).await()
+    ctx.provide('connection', { fetch: { register: () => () => {} } } as any)
+    ctx.provide('attachments', {} as any)
+    ctx.provide('agents', { currentInitiator: () => ({ options: { provider: QODER_PROVIDER_ID } }) } as any)
+    ctx.web.registerSearchProvider({
+      id: 'ambient', available: () => true,
+      search: async () => { throw new Error('Qoder search unexpectedly reached the ambient provider') },
+    })
+    applyWithSettings(ctx, { webSearchMode: 'auto' })
+    await ctx.fiber.await()
+    assert.deepEqual(await ctx.web.search({ query: 'offline regression' }), result)
+    assert.equal(searchWeb.mock.callCount(), 1)
+  } finally { await ctx.fiber.dispose() }
 })

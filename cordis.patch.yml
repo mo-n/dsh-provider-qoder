@@ -1,9 +1,5 @@
 # Adds only the Qoder provider plugin. Model selection remains user-owned.
+# Web provider configuration remains host-owned; Qoder routes eligible searches at runtime.
 - insert:
     - id: provider-qoder
       name: 'dsh-provider-qoder'
-
-- id: web
-  config:
-    searchProvider: qoder
-
