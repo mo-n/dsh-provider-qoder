@@ -12,6 +12,8 @@ Add options under the existing Qoder entry's `config`, preserving other fields:
   config:
     modelTransport: legacy
     requestCompression: false
+    requestCompressionMinChars: 4096
+    requestCompressionLevel: 1
     modelQueueMaxWaitMs: 3600000
     responseHeaderTimeoutMs: 60000
     streamIdleTimeoutMs: 300000
@@ -22,27 +24,26 @@ These options are configured through YAML and have no editor in the plugin setti
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `modelTransport` | `legacy` | COSY model transport; select `http` explicitly to use Bearer model-server requests |
-| `requestCompression` | `false` | Opt in to Zstd request-body compression with `true` |
+| `modelTransport` | `legacy` | Model transport channel, supports `legacy` and `http` |
+| `requestCompression` | `false` | Set to `true` to enable Zstd request-body compression |
+| `requestCompressionMinChars` | `4096` | Character threshold for attempting request-body compression |
+| `requestCompressionLevel` | `1` | Zstd compression level, integer from `1` to `22` |
 | `modelQueueMaxWaitMs` | `3600000` (60 minutes) | Cumulative queue wait per logical model call, shared across repeated queue entries; excludes normal generation time |
 | `responseHeaderTimeoutMs` | `60000` (1 minute) | Time limit for receiving model request HTTP response headers |
-| `streamIdleTimeoutMs` | `300000` (5 minutes) | Time limit for receiving the next stream chunk; resets when data arrives |
-| `preserveThinking` | `true` | Includes historical Qoder reasoning content in subsequent requests; does not control reasoning mode or effort, or delete chat history |
+| `streamIdleTimeoutMs` | `300000` (5 minutes) | SSE data idle timeout |
+| `preserveThinking` | `true` | Whether requests include historical reasoning content |
+
+- Time values are positive integers in milliseconds; the queue wait limit must not exceed `2147483647`. `0` does not mean unlimited waiting.
+- Use unquoted booleans `true` / `false` for `preserveThinking` and `requestCompression`.
 
 ## Model transport
 
-`modelTransport` accepts `legacy` or `http`:
+`modelTransport` supports `legacy` and `http`:
 
 - `legacy` (default): sends model requests through the COSY channel.
-- `http`: sends model requests through the Bearer model-server channel.
+- `http` (experimental): sends model requests through the `/v1/chat/completions` (OpenAI-compatible) endpoint.
 
-Select the channel in YAML; there is no channel selector in the settings UI. The
-provider does not automatically switch channels after a failure. This setting
-affects model requests; account reads, model discovery, image publication and web
-search retain their own transport routes.
-
-For example, to select HTTP while keeping compression disabled, edit the existing
-plugin entry:
+For example, to select the HTTP channel while keeping compression disabled, set in the existing plugin entry:
 
 ```yaml
   config:
@@ -52,26 +53,6 @@ plugin entry:
 
 ## Request-body compression
 
-`requestCompression` is a boolean, defaults to `false`, and applies to both model
-channels. Set it to `true` in YAML to enable Zstd request-body compression. Channel
-selection and compression are independent; enabling one does not change the other.
+`requestCompression` is a boolean, defaults to `false`, and applies to both model channels. Set it to `true` in YAML to enable Zstd request-body compression. Channel selection and compression are independent; modifying one does not change the other.
 
-Compression is attempted for eligible request bodies of at least 4096 characters.
-Smaller bodies, unavailable native Zstd support, or compression failures are sent
-without compression. The YAML value controls whether compression is enabled.
-
-The remaining optional environment variables tune compression after it is enabled:
-
-| Variable | Default | Valid values |
-| --- | --- | --- |
-| `QODER_ZSTD_REQUEST_BODY_MIN_CHARS` | `4096` | Positive integer character threshold |
-| `QODER_ZSTD_REQUEST_BODY_LEVEL` | `1` | Integer from `1` to `22` |
-
-Invalid tuning values use their defaults. Neither variable enables compression.
-
-## Applying configuration
-
-- Time values are positive integers in milliseconds; the queue wait limit must not exceed `2147483647`. `0` does not mean unlimited waiting.
-- Use unquoted booleans `true` / `false` for `preserveThinking` and `requestCompression`.
-- Remove a field to restore its default. Queue limits previously saved through the UI remain valid.
-- Loaded changes apply to new calls; existing calls retain their configuration. Reload the profile or restart DSH if changes are not loaded automatically.
+When enabled, eligible request bodies with characters reaching `requestCompressionMinChars` will attempt compression, with the compression level specified by `requestCompressionLevel`.

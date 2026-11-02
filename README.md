@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="./assets/icon-full.png" alt="dsh-provider-qoder" width="650" />
+  <img src="./assets/icon-full.png" alt="dsh-provider-qoder" width="160" />
 
   <h1>dsh-provider-qoder</h1>
 
@@ -24,14 +24,15 @@ Use your Qoder subscription in DeepSeek Harness (DSH).
 - Multimodal input, image generation, and image search.
 - Switch between the model's available context tiers during a conversation.
 
-Daily check-ins and multi-account management are not supported.
+> [!NOTE]
+> Daily check-ins and multi-account management are not supported.
 
 ## Installation
 
 ### Prerequisites
 
 - An active Qoder subscription matching the selected service region.
-- Requirements: DSH `>=0.1.7-rc.2`.
+- Requirements: DSH `>=0.2.0-rc.2`.
 
 ### Install from npm
 
@@ -49,7 +50,9 @@ In DSH Web, open **Settings → Models → Qoder account** and select your servi
 
 Click **Sign in with Qoder** and complete authorization on the website. Return to DSH to select a model available to your account.
 
-Alternatively, choose **Use PAT**, enter a token and click **Save and use PAT**, or use a saved PAT. **Manage account** or **Manage credentials** lets you change accounts, switch authentication methods or remove authorization.
+<p align="center">
+  <img src="./assets/login.png" alt="Qoder 账号额度与模型设置" width="650" />
+</p>
 
 ### 2. View Account & Manage Models
 
@@ -73,11 +76,10 @@ Please report issues via [GitHub Issues](https://github.com/mo-n/dsh-provider-qo
 
 ## Disclaimer
 
-This is a community adapter plugin and is not affiliated with Qoder or DeepSeek.
-
-Using this project may result in account or feature restrictions, account bans, or service suspension or termination. Successful requests and normal billing do not imply official authorization or eliminate account risks.
-
-Use of Qoder services is subject to the applicable terms of service, subscription limits, and account policies. This project's MIT License applies only to the project code and grants no rights to use Qoder services.
+> [!WARNING]
+> - This is a community adapter plugin and is not affiliated with Qoder or DeepSeek.
+> - Using this project may result in account or feature restrictions, account bans, or service suspension or termination. Successful requests and normal billing do not imply official authorization or eliminate account risks.
+> - Use of Qoder services is subject to the applicable terms of service, subscription limits, and account policies. This project's MIT License applies only to the project code and grants no rights to use Qoder services.
 
 ## License
 

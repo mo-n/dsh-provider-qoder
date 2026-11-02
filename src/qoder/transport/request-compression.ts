@@ -28,11 +28,8 @@ function vpcEndpoint(url: string): boolean {
   return host === 'vpc.qoder.com.cn' || host.endsWith('.vpc.qoder.com.cn')
 }
 
-function envInteger(value: string | undefined, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
-  if (value === undefined || !value.trim()) return fallback
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= max ? parsed : fallback
-}
+export const defaultRequestCompressionMinChars = 4096
+export const defaultRequestCompressionLevel = 1
 
 export function compressionRejection(status: number, text: string, protocol: Protocol): Rejection | undefined {
   if (status === 415 && /zstd|content[- ]encoding|compressed (?:request|body)/iu.test(text)) return 'unsupported_encoding'
@@ -96,6 +93,7 @@ export class QoderRequestCompression {
 
   async send(options: {
     url: string; protocol: Protocol; body: string; headers: Record<string, string>
+    minChars?: number; level?: number
     enabled?: boolean; signal: AbortSignal; logger?: QoderLogger; requestId: string
     onRejection?: (rejection: QoderCompressionRejection) => Promise<void>
     dispatch: (body: string | Uint8Array<ArrayBuffer>, headers: Record<string, string>) => Promise<Response>
@@ -115,8 +113,8 @@ export class QoderRequestCompression {
     signal.throwIfAborted()
     const enabled = options.enabled ?? false
     const key = endpointKey(protocol, url)
-    const minChars = envInteger(process.env.QODER_ZSTD_REQUEST_BODY_MIN_CHARS, 4096)
-    const level = envInteger(process.env.QODER_ZSTD_REQUEST_BODY_LEVEL, 1, 22)
+    const minChars = options.minChars ?? defaultRequestCompressionMinChars
+    const level = options.level ?? defaultRequestCompressionLevel
     const existingEncoding = new Headers(headers).get('content-encoding')
     identityReason = !enabled ? 'disabled'
       : this.fallbackAttempted ? 'fallback_already_attempted'

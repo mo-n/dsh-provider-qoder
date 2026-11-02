@@ -4,7 +4,7 @@ import { defaultModelQueueMaxWaitMs } from '../qoder/queue.ts'
 import z from '@deepseek-ai/schemastery'
 import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
-import { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs, type QoderModelTransport } from '../qoder/transport/index.ts'
+import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel, defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs, type QoderModelTransport } from '../qoder/transport/index.ts'
 
 export interface QoderModelsByRegion {
   global?: QoderCatalogModel[]
@@ -25,6 +25,8 @@ export interface Config {
   imageSearchEnabled?: boolean
   imageGenEnabled?: boolean
   requestCompression?: boolean
+  requestCompressionMinChars?: number
+  requestCompressionLevel?: number
   modelTransport?: QoderModelTransport
 }
 
@@ -69,6 +71,8 @@ export const Config: z<Config> = z.object({
   imageSearchEnabled: z.boolean().default(true),
   imageGenEnabled: z.boolean().default(true),
   requestCompression: z.boolean().default(false),
+  requestCompressionMinChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(defaultRequestCompressionMinChars),
+  requestCompressionLevel: z.number().step(1).min(1).max(22).default(defaultRequestCompressionLevel),
   modelTransport: z.union(['http', 'legacy'] as const).default('legacy'),
 })
 

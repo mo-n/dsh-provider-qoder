@@ -9,6 +9,8 @@ import { streamModelServerChat } from '../src/qoder/transport/model-server.ts'
 import { streamQoderChat } from '../src/qoder/transport/chat.ts'
 import { qoderEncodeBodyBytes } from '../src/qoder/transport/wire/encoding.ts'
 import { Config } from '../src/dsh/config.ts'
+import { createQoderTransport } from '../src/qoder/transport/index.ts'
+import { transportConfig } from '../src/dsh/transport-runtime.ts'
 
 const body = JSON.stringify({ messages: [{ role: 'user', content: '历史 history '.repeat(2000) }] })
 let endpoint = 0
@@ -199,28 +201,82 @@ test('already cancelled requests never dispatch', async () => {
   }), { name: 'AbortError' })
 })
 
-test('CLI threshold and level tuning preserves the provider compression switch', async () => {
+test('compression tuning uses configuration and ignores former environment variables', async () => {
   const keys = ['QODER_ZSTD_REQUEST_BODY_MIN_CHARS', 'QODER_ZSTD_REQUEST_BODY_LEVEL']
   const saved = keys.map(key => process.env[key])
   try {
-    await new QoderRequestCompression().send({ ...options(), enabled: false, dispatch: async wire => {
-      assert.equal(wire, body)
-      return new Response('ok')
-    } })
     process.env.QODER_ZSTD_REQUEST_BODY_MIN_CHARS = '1'
-    process.env.QODER_ZSTD_REQUEST_BODY_LEVEL = '999'
-    await new QoderRequestCompression().send({ ...options(), enabled: true, body: 'a'.repeat(1000), dispatch: async wire => {
-      assert.ok(wire instanceof Uint8Array)
-      assert.equal(zstdDecompressSync(wire).toString(), 'a'.repeat(1000))
+    process.env.QODER_ZSTD_REQUEST_BODY_LEVEL = '22'
+    const shortBody = 'a'.repeat(1000)
+    await new QoderRequestCompression().send({ ...options(), body: shortBody, dispatch: async wire => {
+      assert.equal(wire, shortBody)
       return new Response('ok')
     } })
-    assert.equal(Config({}).requestCompression, false)
-    assert.equal(Config({ requestCompression: true }).requestCompression, true)
+    for (const enabled of [false, true]) {
+      const logs: unknown[][] = []
+      await new QoderRequestCompression().send({ ...options(), enabled, body: shortBody, minChars: 1000, level: 3,
+        logger: { debug: (...details) => logs.push(details) },
+        dispatch: async wire => {
+          if (enabled) {
+            assert.ok(wire instanceof Uint8Array)
+            assert.equal(zstdDecompressSync(wire).toString(), shortBody)
+          } else assert.equal(wire, shortBody)
+          return new Response('ok')
+        },
+      })
+      if (enabled) assert.equal((logs.find(entry => entry[0] === '[Qoder Request] Sending zstd')?.[1] as { level: number }).level, 3)
+    }
   } finally {
     keys.forEach((key, index) => {
       if (saved[index] === undefined) delete process.env[key]
       else process.env[key] = saved[index]
     })
+  }
+})
+
+test('compression configuration supplies defaults and rejects invalid tuning', () => {
+  const defaults = Config({})
+  assert.equal(defaults.requestCompression, false)
+  assert.equal(defaults.requestCompressionMinChars, 4096)
+  assert.equal(defaults.requestCompressionLevel, 1)
+  assert.equal(Config({ requestCompression: true }).requestCompression, true)
+  for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => Config({ requestCompressionMinChars: value }))
+  }
+  for (const value of [0, -1, 1.5, 23]) {
+    assert.throws(() => Config({ requestCompressionLevel: value }))
+  }
+  assert.equal(Config({ requestCompressionLevel: 22 }).requestCompressionLevel, 22)
+})
+
+test('profile compression tuning reaches both model protocols', async () => {
+  for (const modelTransport of ['http', 'legacy'] as const) {
+    for (const requestCompressionMinChars of [1, Number.MAX_SAFE_INTEGER]) {
+      const logs: unknown[][] = []
+      let encoding: string | null | undefined
+      const transport = createQoderTransport({
+        ...transportConfig(Config({ modelTransport, requestCompression: true,
+          requestCompressionMinChars, requestCompressionLevel: 3 })),
+        resolvePat: async () => { throw new Error('unexpected PAT resolution') },
+        resolveCredential: async () => ({ key: 'offline-compression', resolve: async () => ({
+          userID: 'offline-compression', authToken: 'offline-token', name: '', email: '',
+        }) }),
+        logger: { debug: (...details) => logs.push(details) },
+        fetch: (async (_url, init) => {
+          encoding = new Headers(init?.headers).get('content-encoding')
+          return new Response('{}', { status: 500 })
+        }) as typeof fetch,
+      })
+      await assert.rejects(async () => {
+        for await (const _chunk of transport.stream({ provider: 'dsh-provider-qoder', model: 'cmodel',
+          messages: [createUserMessage({ content: [{ type: 'text', text: 'history '.repeat(1000) }], source: { kind: 'user' } })],
+        })) continue
+      }, (error: unknown) => error instanceof QoderLlmError && error.code === 'SERVER')
+      assert.equal(encoding, requestCompressionMinChars === 1 ? 'zstd' : null)
+      if (requestCompressionMinChars === 1) {
+        assert.equal((logs.find(entry => entry[0] === '[Qoder Request] Sending zstd')?.[1] as { level: number }).level, 3)
+      }
+    }
   }
 })
 

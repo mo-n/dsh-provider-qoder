@@ -17,7 +17,7 @@
 
 ## 功能
 
-- 支持浏览器登录与个人访问令牌（PAT）授权。
+- 支持浏览器授权（网页登录）与个人访问令牌（PAT）鉴权。
 - 支持国际版和中国区服务切换。
 - 支持 Qoder 模型排队与进度显示。
 - 集成 Qoder 联网搜索服务。
@@ -51,9 +51,11 @@ dsh plugin --profile web add dsh-provider-qoder
 支持两种授权方式：
 
 - **网页授权（推荐）**：点击 **通过 Qoder 登录**，在官网完成授权。返回 DSH 后即可选择账号支持的模型。
-- **PAT 令牌**：选择 **使用 PAT**，填写令牌后点击 **保存并使用 PAT**，或直接使用已保存的 PAT。
+- **PAT 鉴权**：选择 **使用 PAT**，填写令牌后点击 **保存并使用 PAT**，或直接使用已保存的 PAT。
 
-后续可通过 **管理账号** 或 **管理凭据** 更换账号、切换鉴权方式或移除授权。
+<p align="center">
+  <img src="./assets/login_CN.png" alt="Qoder 账号额度与模型设置" width="650" />
+</p>
 
 ### 2. 查看账号与设置模型
 
@@ -67,10 +69,10 @@ dsh plugin --profile web add dsh-provider-qoder
 
 插件支持通过 profile 的 YAML 配置文件（`cordis.patch.yml`）进行高级参数定制，包括：
 
-- **模型传输渠道**（`modelTransport`）：支持 COSY 默认渠道或 Bearer model-server HTTP 渠道。
-- **请求体压缩**（`requestCompression`）：支持启用 Zstd 请求体压缩以节省带宽。
-- **排队与超时限制**（`modelQueueMaxWaitMs` / `streamIdleTimeoutMs` 等）：自定义单次调用累计排队等待上限及响应超时。
-- **历史推理内容保留**（`preserveThinking`）：多轮对话中保留并携带历史 Qoder 推理内容。
+- **模型传输渠道**（`modelTransport`）。
+- **请求体压缩**（`requestCompression`）。
+- **排队与超时限制**（`modelQueueMaxWaitMs` / `streamIdleTimeoutMs` 等）。
+- **历史推理内容保留**（`preserveThinking`）。
 
 完整配置字段、默认值与环境变量说明见 [配置说明](./docs/wiki/configuration_CN.md)。
 

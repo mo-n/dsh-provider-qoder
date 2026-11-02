@@ -15,6 +15,7 @@ import type { QoderAuthorizationTransport, QoderCredentialLease } from '../autho
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 
 export { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs }
+export { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
 export type QoderModelTransport = 'http' | 'legacy'
 
 export interface QoderTransport {
@@ -36,6 +37,8 @@ export interface QoderTransportOptions {
   captureQueueLeaseOwner?: (sessionId: string) => QoderQueueOwner | undefined
 
   requestCompression?: boolean
+  requestCompressionMinChars?: number
+  requestCompressionLevel?: number
   modelTransport?: QoderModelTransport
   resolvePat: () => Promise<string>
   /** Resolve an instance-managed browser authorization; undefined retains legacy PAT behavior. */

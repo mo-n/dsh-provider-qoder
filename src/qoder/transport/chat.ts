@@ -31,6 +31,8 @@ export interface QoderChatDependencies {
   logger?: QoderLogger
   region: QoderRegion
   requestCompression?: boolean
+  requestCompressionMinChars?: number
+  requestCompressionLevel?: number
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   modelQueueMaxWaitMs?: number
@@ -156,7 +158,8 @@ async function* streamAttempt(
       if (options.signal?.aborted) throw aborted('Request was aborted.')
       response = await compression.send({
         url: chatUrl, protocol: 'legacy', body: encodedBytes.toString('latin1'),
-        enabled: dependencies.requestCompression, signal: requestController.signal,
+        enabled: dependencies.requestCompression,
+        minChars: dependencies.requestCompressionMinChars, level: dependencies.requestCompressionLevel, signal: requestController.signal,
         logger: dependencies.logger, requestId: request.request_id,
         dispatch: async (wireBody, headers) => {
           headerTimer = setTimeout(() => {

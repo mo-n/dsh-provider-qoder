@@ -1,6 +1,6 @@
 {
   "name": "dsh-provider-qoder",
-  "description": "Global Qoder subscription adapter for the DeepSeek Harness LLM seam",
+  "description": "Use your Qoder subscription in DeepSeek Harness (DSH)",
   "version": "0.5.1",
   "publishConfig": {
     "access": "public"

@@ -223,7 +223,7 @@ test('every transport configuration field replaces the instance, and failed crea
   const changes = [
     { region: 'china' as const }, { streamIdleTimeoutMs: 1234 }, { responseHeaderTimeoutMs: 1234 },
     { modelQueueMaxWaitMs: 1234 }, { preserveThinking: false }, { requestCompression: true },
-    { modelTransport: 'http' as const },
+    { modelTransport: 'http' as const }, { requestCompressionMinChars: 100 }, { requestCompressionLevel: 3 },
   ]
   for (const change of changes) {
     const runtime = new QoderTransportRuntime({}, () => ({}) as QoderTransport)
