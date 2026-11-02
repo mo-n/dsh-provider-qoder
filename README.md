@@ -50,6 +50,8 @@ In DSH Web, open **Settings → Models → Qoder account** and select your servi
 
 Click **Sign in with Qoder** and complete authorization on the website. Return to DSH to select a model available to your account.
 
+Alternatively, select **Use PAT**, enter your token, and click **Save and use PAT**, or use a saved PAT.
+
 <p align="center">
   <img src="./assets/login.png" alt="Qoder sign-in and service region selection" width="650" />
 </p>
