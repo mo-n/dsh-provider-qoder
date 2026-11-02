@@ -18,6 +18,7 @@ Refer to `package.json` for dependencies and available scripts. Key verification
 
 ## Workflow & Safety Guardrails
 
+- **Contribution Guidelines**: Before creating a commit or opening a pull request, read and follow [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Branching & Releases**: Follow GitHub Flow with `main` as the sole release branch; merge PRs exclusively via **Squash and Merge**. Releases are triggered by semantic `v*` tags on `main` (e.g., `pnpm run release:patch`).
 - **Commit Conventions**: Follow Conventional Commits. PRs must explain Qoder upstream behavior, reference relevant ADRs/issues, and include screenshots for UI changes along with compatibility notes.
 - **Security Red Lines**: Never commit tokens, secrets, or local credential stores. Maintain lockfile integrity; never weaken TLS verification or introduce unauthorized paid-provider fallbacks.

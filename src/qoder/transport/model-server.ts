@@ -20,6 +20,8 @@ export interface QoderModelServerDependencies {
   logger?: QoderLogger
   region: QoderRegion
   requestCompression?: boolean
+  requestCompressionMinChars?: number
+  requestCompressionLevel?: number
   /** Immutable host turn boundary captured before provider I/O. */
   hostRun?: QoderHostRun
   responseHeaderTimeoutMs: number
@@ -94,7 +96,8 @@ export async function* streamModelServerChat(
       try {
         response = await compression.send({
           url: getQoderModelServerUrl(dependencies.region), protocol: 'http', body,
-          enabled: dependencies.requestCompression, signal: controller.signal,
+          enabled: dependencies.requestCompression,
+          minChars: dependencies.requestCompressionMinChars, level: dependencies.requestCompressionLevel, signal: controller.signal,
           logger: dependencies.logger, requestId: request.requestId,
           onRejection: async rejection => {
             dependencies.logger?.warn?.('[Qoder Stream] Compression rejected', {

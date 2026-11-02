@@ -28,6 +28,7 @@ import { QoderBrowserAuthorization } from './browser-authorization.ts'
 import type { QoderCredentialLease } from '../authorization.ts'
 import type { CosyCredentials } from './wire/cosy.ts'
 import { streamModelServerChat } from './model-server.ts'
+import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
 
 export const defaultStreamIdleTimeoutMs = 5 * 60 * 1000
 
@@ -40,6 +41,8 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly resolveCredential: QoderTransportOptions['resolveCredential']
   private readonly region: QoderRegion
   private readonly requestCompression: boolean
+  private readonly requestCompressionMinChars: number
+  private readonly requestCompressionLevel: number
   private readonly modelTransport: QoderModelTransport
   private readonly resolvePat: () => Promise<string>
   private readonly fetchImpl: typeof fetch
@@ -64,6 +67,8 @@ export class DefaultQoderTransport implements QoderTransport {
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
     this.requestCompression = options.requestCompression ?? false
+    this.requestCompressionMinChars = options.requestCompressionMinChars ?? defaultRequestCompressionMinChars
+    this.requestCompressionLevel = options.requestCompressionLevel ?? defaultRequestCompressionLevel
     this.modelTransport = options.modelTransport ?? 'legacy'
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
@@ -73,6 +78,8 @@ export class DefaultQoderTransport implements QoderTransport {
     this.logger?.debug?.('[Qoder Transport] Request compression configuration', {
       implementation: 'zstd-v1', node: process.version,
       requestCompression: this.requestCompression,
+      requestCompressionMinChars: this.requestCompressionMinChars,
+      requestCompressionLevel: this.requestCompressionLevel,
     })
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? defaultStreamIdleTimeoutMs
     this.responseHeaderTimeoutMs = options.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs
@@ -231,6 +238,8 @@ export class DefaultQoderTransport implements QoderTransport {
       logger: this.logger,
       region: this.region,
       requestCompression: this.requestCompression,
+      requestCompressionMinChars: this.requestCompressionMinChars,
+      requestCompressionLevel: this.requestCompressionLevel,
       responseHeaderTimeoutMs: this.responseHeaderTimeoutMs,
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
       modelQueueMaxWaitMs: this.modelQueueMaxWaitMs,

@@ -1,7 +1,7 @@
 /** Own the active region-bound transport and the configuration that created it. */
 import type { Config } from './config.ts'
 import { defaultModelQueueMaxWaitMs } from '../qoder/queue.ts'
-import { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs, type QoderTransport } from '../qoder/transport/index.ts'
+import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel, defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs, type QoderTransport } from '../qoder/transport/index.ts'
 
 export function transportConfig(value: Config) {
   return {
@@ -11,6 +11,8 @@ export function transportConfig(value: Config) {
     modelQueueMaxWaitMs: value.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
     preserveThinking: value.preserveThinking ?? true,
     requestCompression: value.requestCompression ?? false,
+    requestCompressionMinChars: value.requestCompressionMinChars ?? defaultRequestCompressionMinChars,
+    requestCompressionLevel: value.requestCompressionLevel ?? defaultRequestCompressionLevel,
     modelTransport: value.modelTransport ?? 'legacy',
   }
 }
