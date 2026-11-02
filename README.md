@@ -51,7 +51,7 @@ In DSH Web, open **Settings → Models → Qoder account** and select your servi
 Click **Sign in with Qoder** and complete authorization on the website. Return to DSH to select a model available to your account.
 
 <p align="center">
-  <img src="./assets/login.png" alt="Qoder 账号额度与模型设置" width="650" />
+  <img src="./assets/login.png" alt="Qoder sign-in and service region selection" width="650" />
 </p>
 
 ### 2. View Account & Manage Models

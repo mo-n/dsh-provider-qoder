@@ -54,7 +54,7 @@ dsh plugin --profile web add dsh-provider-qoder
 - **PAT 鉴权**：选择 **使用 PAT**，填写令牌后点击 **保存并使用 PAT**，或直接使用已保存的 PAT。
 
 <p align="center">
-  <img src="./assets/login_CN.png" alt="Qoder 账号额度与模型设置" width="650" />
+  <img src="./assets/login_CN.png" alt="Qoder 登录与服务区域选择" width="650" />
 </p>
 
 ### 2. 查看账号与设置模型
