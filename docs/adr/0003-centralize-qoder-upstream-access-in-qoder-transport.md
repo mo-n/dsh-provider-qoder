@@ -54,4 +54,12 @@ refresh timer.
 Zstd request-body compression is disabled by default. Subscribers can opt in
 through the YAML setting `requestCompression: true`; the provider does not consume
 the CLI's remote compression feature gate. Model transport is also configured only
-through YAML.
+through YAML. When an endpoint explicitly rejects a compressed request, transport
+falls back to identity and remembers the endpoint by protocol, origin, and path
+for a process-local 30-minute TTL. HTTP endpoints enter that state only after the
+identity fallback produces confirmed model output; legacy endpoints enter it on
+the pre-output encoding rejection and let DSH retry with a new request identity.
+After the TTL expires, the next eligible request probes compression again. The
+state contains no subscriber or credential data, and changing the YAML toggle
+does not clear it; disabling compression already prevents a probe while the TTL
+provides bounded recovery when compression is enabled again.

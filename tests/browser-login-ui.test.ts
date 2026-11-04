@@ -67,6 +67,29 @@ test('polling restores shared progress, displays completion and exposes explicit
   ui.unmount()
 })
 
+test('browser login announces phase changes without live-announcing every countdown tick', async () => {
+  const f = fixture()
+  const ui = await mountBrowserLogin(f.operations)
+  ui.click('Sign in with Qoder')
+  await ui.settle()
+
+  let phase = nodes(ui.tree()).find(node => node.props.role === 'status')
+  let timer = nodes(ui.tree()).find(node => node.props.role === 'timer')
+  assert.ok(phase)
+  assert.equal(phase!.type, 'strong')
+  assert.equal(timer?.props['aria-live'], 'off')
+  assert.equal(nodes(ui.tree()).filter(node => node.props.role === 'status').length, 1)
+
+  f.set({ ...view(), attempt: { id: 'test-attempt', phase: 'saving', expiresAt: Date.now() + 300_000 } })
+  ui.poll(); await ui.settle()
+  phase = nodes(ui.tree()).find(node => node.props.role === 'status')
+  timer = nodes(ui.tree()).find(node => node.props.role === 'timer')
+  assert.equal(phase?.props.children, 'Saving authorization…')
+  assert.equal(timer?.props['aria-live'], 'off')
+  assert.equal(nodes(ui.tree()).some(node => node.type === 'div' && node.props.role === 'status'), false)
+  ui.unmount()
+})
+
 test('a late polling response cannot overwrite a successful login mutation', async () => {
   const f = fixture()
   const ui = await mountBrowserLogin(f.operations)

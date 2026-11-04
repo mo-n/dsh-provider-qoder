@@ -206,3 +206,154 @@ test('composer renders the host-confirmed tier after remount and keys controls b
     assert.equal(exports.QoderContextSelect(props)!.key, JSON.stringify(['china', 'other', 'a']))
   } finally { unmount() }
 })
+
+test('context tier menu supports keyboard navigation and preserves focus across an asynchronous save', async () => {
+  const filename = new URL('../src/client/QoderContextSelect.tsx', import.meta.url)
+  const require = createRequire(filename)
+  const source = ts.transpileModule(await readFile(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+  }).outputText
+  interface Cell { value?: unknown; deps?: readonly unknown[]; cleanup?: () => void }
+  interface VNode { type: unknown; key?: string; ref?: unknown; props: { children?: unknown; [key: string]: unknown } }
+  let cells: Cell[] = [], cursor = 0
+  const effects: Array<{ cell: Cell; create: () => void | (() => void) }> = []
+  const subscriptions = new Map<unknown, () => void>()
+  const next = () => cells[cursor++] ?? (cells[cursor - 1] = {})
+  const same = (a: readonly unknown[] | undefined, b: readonly unknown[]) => a?.length === b.length && b.every((v, i) => Object.is(v, a[i]))
+  const effect = (create: () => void | (() => void), deps: readonly unknown[]) => {
+    const cell = next()
+    if (!same(cell.deps, deps)) { cell.deps = deps; effects.push({ cell, create }) }
+  }
+  const exports: Record<string, (props: object) => VNode | null> = {}
+  const nodes = (value: unknown): VNode[] => Array.isArray(value) ? value.flatMap(nodes)
+    : value && typeof value === 'object' && 'props' in value ? [value as VNode, ...nodes((value as VNode).props.children)] : []
+  const focusLog: string[] = []
+  runInNewContext(source, {
+    exports,
+    document: { addEventListener() {}, removeEventListener() {} },
+    require: (id: string) => id === 'react' ? {
+      useState(initial: unknown) { const cell = next(); if (!('value' in cell)) cell.value = initial; return [cell.value, (value: unknown) => { cell.value = typeof value === 'function' ? value(cell.value) : value }] },
+      useRef(initial: unknown) { const cell = next(); return cell.value ?? (cell.value = { current: initial }) },
+      useMemo(create: () => unknown, deps: readonly unknown[]) { const cell = next(); if (!same(cell.deps, deps)) { cell.deps = deps; cell.value = create() }; return cell.value },
+      useEffect: effect, useLayoutEffect: effect,
+      useSyncExternalStore(subscribe: (fn: () => void) => () => void, read: () => unknown) {
+        if (!subscriptions.has(subscribe)) subscriptions.set(subscribe, subscribe(() => {}))
+        return read()
+      },
+    } : id.endsWith('.css') ? { __esModule: true, default: {} } : require(id),
+  })
+  const selection = (tierKey: 'small' | 'large') => ({ region: 'global' as const, sessionId: 's', modelId: 'a', tierKey, tokenCount: tierKey === 'small' ? 200_000 : 1_000_000 })
+  let saveResolve: ((value: unknown) => void) | undefined
+  let saveResult: unknown = success(selection('large'))
+  const props = {
+    sessionId: 's',
+    directory: { getSnapshot: () => ({ current: { provider: QODER_PROVIDER_ID, model: 'a' } }), subscribe: () => () => {} },
+    operations: {
+      getModelSnapshot: () => ({ value: { modelsByRegion: { global: [model] } } }), subscribeModels: () => () => {},
+      readSessionTier: async () => success(selection('small')),
+      setSessionTier: async () => new Promise(resolve => { saveResolve = resolve }),
+    },
+  }
+  const attachRefs = (tree: VNode) => {
+    for (const node of nodes(tree)) {
+      if (typeof node.ref !== 'function') continue
+      const label = node.props.role === 'menuitemradio' ? String(node.key) : node.props['aria-expanded'] !== undefined ? 'trigger' : 'other'
+      ;(node.ref as (element: unknown) => void)({ focus: () => { focusLog.push(label) } })
+    }
+  }
+  const unmount = () => { for (const cell of cells) cell.cleanup?.(); for (const off of subscriptions.values()) off(); subscriptions.clear(); cells = [] }
+  let tree!: VNode
+  const render = () => {
+    cursor = 0
+    const outer = exports.QoderContextSelect(props)!
+    tree = (outer.type as (props: object) => VNode)(outer.props)
+    attachRefs(tree)
+    for (const { cell, create } of effects.splice(0)) { cell.cleanup?.(); cell.cleanup = create() || undefined }
+    return tree
+  }
+  const nodeWithRole = (role: string) => nodes(tree).find(node => node.props.role === role)
+  const root = () => nodes(tree).find(node => typeof node.props.onBlurCapture === 'function')!
+  const trigger = () => nodes(tree).find(node => node.props['aria-expanded'] !== undefined)!
+  const menu = () => nodeWithRole('menu')
+  try {
+    render()
+    await new Promise(resolve => setImmediate(resolve))
+    render()
+    assert.equal(trigger().props.disabled, false)
+    assert.equal(trigger().props['aria-disabled'], false)
+    assert.equal(trigger().props['aria-haspopup'], 'menu')
+
+    ;(trigger().props.onClick as () => void)()
+    render()
+    assert.equal(menu()?.props.role, 'menu')
+    assert.equal(focusLog.at(-1), 'small', 'opening focuses the selected tier')
+
+    let prevented = false
+    ;(menu()!.props.onKeyDown as (event: { key: string; preventDefault(): void }) => void)({ key: 'ArrowDown', preventDefault: () => { prevented = true } })
+    render()
+    assert.equal(prevented, true)
+    assert.equal(focusLog.at(-1), 'large')
+    assert.equal(nodes(menu()!).find(node => node.key === 'large')?.props.tabIndex, 0)
+
+    ;(menu()!.props.onKeyDown as (event: { key: string; preventDefault(): void }) => void)({ key: 'ArrowUp', preventDefault: () => {} })
+    assert.equal(focusLog.at(-1), 'small')
+    ;(menu()!.props.onKeyDown as (event: { key: string; preventDefault(): void }) => void)({ key: 'Home', preventDefault: () => {} })
+    assert.equal(focusLog.at(-1), 'small')
+    ;(menu()!.props.onKeyDown as (event: { key: string; preventDefault(): void }) => void)({ key: 'End', preventDefault: () => {} })
+    assert.equal(focusLog.at(-1), 'large')
+    ;(menu()!.props.onKeyDown as (event: { key: string; preventDefault(): void }) => void)({ key: 'Escape', preventDefault: () => {} })
+    render()
+    assert.equal(menu(), undefined)
+    assert.equal(focusLog.at(-1), 'trigger')
+
+    ;(trigger().props.onClick as () => void)()
+    render()
+    let tabPrevented = false
+    ;(menu()!.props.onKeyDown as (event: { key: string; preventDefault(): void }) => void)({ key: 'Tab', preventDefault: () => { tabPrevented = true } })
+    assert.equal(tabPrevented, false)
+    ;(root().props.onBlurCapture as (event: { currentTarget: { contains(value: unknown): boolean }; relatedTarget: unknown }) => void)({ currentTarget: { contains: () => false }, relatedTarget: {} })
+    render()
+    assert.equal(menu(), undefined)
+
+    // A tier change disables the trigger while the host write is unresolved.
+    ;(trigger().props.onClick as () => void)()
+    render()
+    const large = nodes(menu()!).find(node => node.key === 'large')!
+    ;(large.props.onFocus as () => void)()
+    ;(large.props.onClick as () => void)()
+    render()
+    assert.equal(trigger().props.disabled, false)
+    assert.equal(trigger().props['aria-disabled'], true)
+    assert.equal(menu(), undefined)
+    assert.equal(focusLog.at(-1), 'trigger', 'selection keeps focus on the still-focusable trigger')
+    ;(trigger().props.onClick as () => void)()
+    render()
+    assert.equal(menu(), undefined, 'aria-disabled trigger does not reopen while saving')
+    saveResolve!(saveResult)
+    await new Promise(resolve => setImmediate(resolve))
+    render()
+    assert.equal(trigger().props.disabled, false)
+    assert.equal(trigger().props['aria-disabled'], false)
+    assert.equal(focusLog.at(-1), 'trigger', 'saving completion preserves the current focus')
+
+    // If focus has left the component during the write, completion must not steal it back.
+    saveResult = { ok: false, error: { cause: 'connection', outcome: 'unknown', stage: 'set-session-tier', completedStages: [] } }
+    ;(trigger().props.onClick as () => void)()
+    render()
+    const small = nodes(menu()!).find(node => node.key === 'small')!
+    ;(small.props.onFocus as () => void)()
+    ;(small.props.onClick as () => void)()
+    render()
+    ;(root().props.onBlurCapture as (event: { currentTarget: { contains(value: unknown): boolean }; relatedTarget: unknown }) => void)({ currentTarget: { contains: () => false }, relatedTarget: {} })
+    const focusCountBeforeCompletion = focusLog.length
+    saveResolve!(saveResult)
+    await new Promise(resolve => setImmediate(resolve))
+    render()
+    assert.equal(focusLog.length, focusCountBeforeCompletion, 'completion does not reclaim focus after the user leaves')
+
+    const alert = nodeWithRole('alert')
+    assert.ok(alert)
+    assert.equal(nodes(alert).some(node => node.type === 'button'), false)
+    assert.ok(nodes(tree).some(node => node.type === 'button' && node.props.children === 'refresh'))
+  } finally { unmount() }
+})

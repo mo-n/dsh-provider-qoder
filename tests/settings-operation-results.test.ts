@@ -8,7 +8,7 @@ import { operationCause, type OperationResult } from '../src/client/operation-re
 import { createQoderRpcCaller, type QoderRpcCaller } from '../src/client/rpc-client.ts'
 import type { QoderAuthorizationOperations } from '../src/client/credential-operations.ts'
 
-const view = (method: 'pat' | 'browser' = 'browser'): QoderAuthorizationView => ({ region: 'global', method, configured: true, writable: true })
+const view = (method: 'pat' | 'browser' | 'none' = 'browser', overrides: Partial<QoderAuthorizationView> = {}): QoderAuthorizationView => ({ region: 'global', method, configured: true, writable: true, ...overrides })
 const scope = { region: 'global' as const, sessionId: 'session', modelId: 'model' }
 const selection: QoderSessionTierSelection = { ...scope, tierKey: 'large', tokenCount: 1_000_000 }
 const secret = 'synthetic-secret-never-log'
@@ -143,6 +143,77 @@ test('credential retrieval failures carry a cause without mutation completion', 
   assert.equal(error.cause, 'permission-denied')
   assert.equal(error.outcome, undefined)
   assert.deepEqual(error.completedStages, [])
+})
+
+test('credential description keeps PAT source and PAT writability independent from authorization view', async () => {
+  const f = fixture()
+  f.authorization.read = async () => ({ ok: true, value: view('pat', { writable: false }) })
+  f.credentials.describe = async () => ({ ok: true, value: {
+    [qoderCredentialRef]: { configured: true, source: 'stored', writable: true },
+  } })
+  assert.deepEqual(await f.operations().describe(), {
+    ok: true,
+    value: { configured: true, source: 'stored', writable: true },
+  })
+})
+
+test('environment PAT source is retained but not reported as configured', async () => {
+  const f = fixture()
+  f.authorization.read = async () => ({ ok: true, value: view('pat') })
+  f.credentials.describe = async () => ({ ok: true, value: {
+    [qoderCredentialRef]: { configured: true, source: 'env', writable: true },
+  } })
+  assert.deepEqual(await f.operations().describe(), {
+    ok: true,
+    value: { configured: false, source: 'env', writable: true },
+  })
+})
+
+test('PAT configuration also requires a non-expired configured authorization view', async () => {
+  for (const overrides of [{ configured: false }, { expired: true }]) {
+    const f = fixture()
+    f.authorization.read = async () => ({ ok: true, value: view('pat', overrides) })
+    f.credentials.describe = async () => ({ ok: true, value: {
+      [qoderCredentialRef]: { configured: true, source: 'stored', writable: true },
+    } })
+    assert.deepEqual(await f.operations().describe(), {
+      ok: true,
+      value: { configured: false, source: 'stored', writable: true },
+    })
+  }
+})
+
+for (const method of ['browser', 'none'] as const) test(`${method} description does not probe PAT storage`, async () => {
+  const f = fixture()
+  f.authorization.read = async () => ({ ok: true, value: view(method, { writable: false }) })
+  let described = 0
+  f.credentials.describe = async () => { described++; throw new Error('PAT should not be read') }
+  assert.deepEqual(await f.operations().describe(), {
+    ok: true,
+    value: { configured: true, writable: false },
+  })
+  assert.equal(described, 0)
+})
+
+test('missing PAT mapping is a normal unconfigured result without an error diagnostic', async t => {
+  const log = t.mock.method(console, 'error', () => {})
+  const f = fixture()
+  f.credentials.describe = async () => ({ ok: true, value: {} })
+  const result = await f.operations().describePat()
+  assert.deepEqual(result, { ok: true, value: { configured: false, writable: false } })
+  assert.equal(log.mock.callCount(), 0)
+})
+
+test('PAT read failures remain failures and are diagnosed once through describe', async t => {
+  const log = t.mock.method(console, 'error', () => {})
+  const f = fixture()
+  f.authorization.read = async () => ({ ok: true, value: view('pat') })
+  f.credentials.describe = async () => ({ ok: false, error: { code: 'PERMISSION_DENIED', message: secret } })
+  const error = errorOf(await f.operations().describe())
+  assert.equal(error.cause, 'permission-denied')
+  assert.equal(error.stage, 'read-pat')
+  assert.equal(log.mock.callCount(), 1)
+  assert.doesNotMatch(JSON.stringify(log.mock.calls), new RegExp(secret))
 })
 
 for (const kind of ['permission', 'connection', 'timeout', 'cancelled', 'parse'] as const) test(`RPC evidence reaches Context Tier results safely: ${kind}`, async t => {

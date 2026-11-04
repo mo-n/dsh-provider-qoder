@@ -14,7 +14,7 @@ interface Capture {
 }
 
 /** Capture every route the host half registers, standing in for Connection. */
-function captureConnection(): Capture {
+function captureConnection(registerOverride?: (route: ConnectionFetchRoute) => () => unknown): Capture {
   const routes: ConnectionFetchRoute[] = []
   const removed: string[] = []
   const context = {
@@ -22,6 +22,7 @@ function captureConnection(): Capture {
       fetch: {
         register: (route: ConnectionFetchRoute) => {
           routes.push(route)
+          if (registerOverride) return registerOverride(route)
           return () => { removed.push(route.path) }
         },
       },
@@ -38,7 +39,7 @@ function rpcRequest(path: string, body?: string): Request {
   })
 }
 
-test('the settings RPC mounts all endpoints as POST routes below the shared API channel', () => {
+test('the settings RPC mounts all endpoints as POST routes below the shared API channel', async () => {
   const { context, routes, removed } = captureConnection()
   const handler: QoderRpcHandler = async () => ({ ok: true, value: {} })
 
@@ -62,8 +63,83 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
   assert.deepEqual(routes.map(route => route.requestBody), expectedPaths.map(() => 'buffered'))
   assert.ok(routes.every(route => typeof route.fetch === 'function'))
 
-  dispose()
+  await dispose()
   assert.deepEqual(removed, expectedPaths)
+})
+
+test('the RPC disposer awaits every route, continues after failure, and is idempotent', async () => {
+  const calls: string[] = []
+  const routeFailure = new Error('route cleanup failed')
+  let release!: () => void
+  const deferred = new Promise<void>(resolve => { release = resolve })
+  const { context, routes } = captureConnection(route => () => {
+    calls.push(route.path)
+    if (route.path.endsWith('/account')) return deferred
+    if (route.path.endsWith('/models')) return Promise.reject(routeFailure)
+  })
+  const dispose = registerQoderRpc(context, async () => ({ ok: true, value: {} }))
+  const pending = dispose()
+  const repeated = dispose()
+  assert.strictEqual(repeated, pending)
+  let settled = false
+  const observed = pending.then(() => { settled = true }, () => { settled = true })
+
+  await Promise.resolve()
+  assert.equal(settled, false)
+  release()
+  await assert.rejects(pending, error => {
+    assert.ok(error instanceof AggregateError)
+    assert.deepEqual((error as AggregateError).errors, [routeFailure])
+    return true
+  })
+  await observed
+  assert.deepEqual(calls, routes.map(route => route.path))
+  assert.equal(settled, true)
+  assert.strictEqual(dispose(), pending)
+})
+
+test('the RPC disposer closes active streams before unregistering routes', async () => {
+  const order: string[] = []
+  const streamFailure = new Error('stream cleanup failed')
+  const { context, routes } = captureConnection(route => () => {
+    assert.equal(order[0], 'stream')
+    order.push(`route:${route.path}`)
+  })
+  const dispose = registerQoderRpc(context, async () => ({ ok: true, value: {} }), () => () => {
+    order.push('stream')
+    throw streamFailure
+  })
+  const streamRoute = routes.find(route => route.path.endsWith('/sessionTierEvents'))
+  assert.ok(streamRoute)
+  const response = await streamRoute.fetch(rpcRequest('/api/qoder-subscription/sessionTierEvents'))
+  const reader = response.body!.getReader()
+  await reader.read()
+  await assert.rejects(dispose(), error => {
+    assert.ok(error instanceof AggregateError)
+    assert.deepEqual((error as AggregateError).errors, [streamFailure])
+    return true
+  })
+  assert.equal(order[0], 'stream')
+  assert.equal((await reader.read()).done, true)
+})
+
+test('registration rollback preserves its original error and catches cleanup rejection', async () => {
+  const registrationError = new Error('route registration failed')
+  const cleanupError = new Error('rollback cleanup failed')
+  const cleaned: string[] = []
+  const { context } = captureConnection(route => () => {
+    cleaned.push(route.path)
+    return Promise.reject(cleanupError)
+  })
+  const fetchRegistry = (context.connection as any).fetch
+  const register = fetchRegistry.register
+  fetchRegistry.register = (route: ConnectionFetchRoute) => {
+    if (route.path.endsWith('/models')) throw registrationError
+    return register(route)
+  }
+  assert.throws(() => registerQoderRpc(context, async () => ({ ok: true, value: {} })), error => error === registrationError)
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.deepEqual(cleaned, ['/api/qoder-subscription/account'])
 })
 
 test('a registered route decodes the request payload and encodes the handler result', async () => {

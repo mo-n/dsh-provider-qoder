@@ -194,9 +194,9 @@ export function QoderBrowserLogin({ region, operations, credentials, onBusyChang
           onClick={() => setMenu(!menu)}>{t(view.method === 'pat' ? 'manageCredential' : 'manageAccount')}</button> : null}
       </div> : !pending && !editing ? <p className={css.label}>{t('signInDescription')}</p> : null}
 
-      {pending ? <div className={css.loginProgress} role="status">
-        <strong>{t(attempt.phase === 'saving' ? 'browserSaving' : 'browserWaiting')}</strong>
-        <span className={css.label}>{t('loginTimeRemaining', { seconds: remaining })}</span>
+      {pending ? <div className={css.loginProgress}>
+        <strong role="status" aria-live="polite">{t(attempt.phase === 'saving' ? 'browserSaving' : 'browserWaiting')}</strong>
+        <span className={css.label} role="timer" aria-live="off">{t('loginTimeRemaining', { seconds: remaining })}</span>
         <div className={css.connectionActions}>
           {attempt.url ? <a className={css.primaryLink} href={attempt.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">{t('reopenLogin')}</a> : null}
           <button type="button" className={css.secondary} disabled={busy || !view.writable} onClick={() => { void mutate('cancel') }}>{t('cancelLogin')}</button>
