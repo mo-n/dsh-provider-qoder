@@ -20,6 +20,47 @@ function options(): Parameters<typeof createQoderRpcHandler>[0] {
   }
 }
 
+test('bootstrap returns the default namespace and a host-provided namespace', async () => {
+  const deps = options()
+  const handler = createQoderRpcHandler(deps)
+  assert.deepEqual(await handler('bootstrap', {}, signal()), {
+    ok: true, value: { settingsNamespace: 'provider-qoder' },
+  })
+
+  deps.settingsNamespace = () => 'custom-qoder-entry'
+  const customHandler = createQoderRpcHandler(deps)
+  assert.deepEqual(await customHandler('bootstrap', {}, signal()), {
+    ok: true, value: { settingsNamespace: 'custom-qoder-entry' },
+  })
+})
+
+test('bootstrap rejects a blank host namespace', async () => {
+  const deps = options()
+  let called = false
+  deps.settingsNamespace = () => {
+    called = true
+    return '   '
+  }
+  const result = await createQoderRpcHandler(deps)('bootstrap', {}, signal())
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: 'INTERNAL', message: 'Qoder settings namespace is unavailable', details: { issues: [] } },
+  })
+  assert.equal(called, true)
+})
+
+test('an aborted bootstrap request does not resolve the namespace or other dependencies', async () => {
+  const deps = options()
+  deps.settingsNamespace = () => { throw new Error('namespace dependency should not run') }
+  const controller = new AbortController()
+  controller.abort()
+  const result = await createQoderRpcHandler(deps)('bootstrap', {}, controller.signal)
+  assert.deepEqual(result, {
+    ok: false,
+    error: { code: 'ABORTED', message: 'Request aborted', details: { issues: [] } },
+  })
+})
+
 test('a retained RPC handler uses the current region and replacement transport', async () => {
   let region: QoderRegion = 'global'
   const reads: string[] = []

@@ -21,7 +21,7 @@ export const qoderRpcChannel = '/qoder-subscription'
 export const qoderRpcApiPath = `/api${qoderRpcChannel}`
 
 /** Endpoints the account card, the model catalog, and the composer context select call. */
-export const qoderRpcEndpoints = ['account', 'models', 'queue', 'sessionTier', 'readSessionTier', 'sessionTierEvents', 'authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization'] as const
+export const qoderRpcEndpoints = ['account', 'models', 'queue', 'sessionTier', 'readSessionTier', 'sessionTierEvents', 'authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization', 'bootstrap'] as const
 
 export type QoderRpcEndpoint = (typeof qoderRpcEndpoints)[number]
 
@@ -42,6 +42,7 @@ export interface QoderSessionTierPayload extends QoderSessionTierScope {
 
 /** Ordinary JSON endpoints; the NDJSON event stream is deliberately separate. */
 export interface QoderRpcContract {
+  bootstrap: { input: Record<string, never>; output: { settingsNamespace: string } }
   account: { input: { force?: boolean }; output: QoderAccountInfo }
   models: { input: Record<string, never>; output: readonly QoderCatalogModel[] }
   queue: { input: { sessionId: string }; output: QoderQueueSnapshot[] }

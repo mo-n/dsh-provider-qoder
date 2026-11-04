@@ -4,6 +4,11 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { Config, readConfig, type LiveConfig } from './config.ts'
 
+/** Resolve the settings namespace from the owning Loader entry. */
+export function qoderSettingsNamespace(owner: Context): SettingsNamespace {
+  return (owner.fiber.entry?.options.id ?? 'provider-qoder') as SettingsNamespace
+}
+
 export function bindQoderSettings(
   owner: Context,
   ctx: Context,
@@ -14,7 +19,7 @@ export function bindQoderSettings(
   update(patch: object): Promise<void>
   watch(listener: () => void | Promise<void>): () => void
 } } {
-  const namespace = (owner.fiber.entry?.options.id ?? 'provider-qoder') as SettingsNamespace
+  const namespace = qoderSettingsNamespace(owner)
   const get = () => readConfig(input)
   options.validate?.(get())
   // Validate candidates before Loader commits new references.

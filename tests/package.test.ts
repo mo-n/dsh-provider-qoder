@@ -54,9 +54,9 @@ class MemorySettings extends Service {
     this.setConfig({})
   }
 
-  setConfig(config: plugin.Config, owner?: Context): void {
+  setConfig(config: plugin.Config, owner?: Context, namespace: SettingsNamespace = 'provider-qoder' as SettingsNamespace): void {
     this.ownerContext = owner
-    this.sections.set('provider-qoder' as SettingsNamespace, { value: Config(config), revision: 0 })
+    this.sections.set(namespace, { value: Config(config), revision: 0 })
   }
 
   get(ns: SettingsNamespace): plugin.Config | undefined {
@@ -96,10 +96,10 @@ function memorySettings(ctx: Context): MemorySettings {
   return ctx.settings as unknown as MemorySettings
 }
 
-function applyWithSettings(ctx: Context, config: plugin.Config = {}): void {
+function applyWithSettings(ctx: Context, config: plugin.Config = {}, namespace: SettingsNamespace = 'provider-qoder' as SettingsNamespace): void {
   const settings = memorySettings(ctx)
-  settings.setConfig(config, ctx)
-  plugin.apply(ctx, { get: () => settings.get('provider-qoder' as SettingsNamespace) } as LiveConfig)
+  settings.setConfig(config, ctx, namespace)
+  plugin.apply(ctx, { get: () => settings.get(namespace) } as LiveConfig)
 }
 
 class RecordingSettings extends MemorySettings {
@@ -213,6 +213,28 @@ test('apply registers a valid adapter with the real DSH runtime', async () => {
   assert.equal(prepared.config.model, 'cmodel')
   assert.deepEqual(ctx.llm.listProviders().map(provider => provider.id), [QODER_PROVIDER_ID])
 
+})
+
+test('custom loader entry ids share one settings namespace across discovery and catalog persistence', async t => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(TestCredentials)
+  await ctx.plugin(MemorySettings).await()
+  const namespace = 'custom-qoder-entry' as SettingsNamespace
+  ctx.fiber.entry = { options: { id: namespace } } as never
+  t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Remote chosen', priceFactor: 4 },
+  ])
+  applyWithSettings(ctx, { modelsByRegion: { global: [{ id: 'chosen', name: 'User chosen', priceFactor: 1 }] } }, namespace)
+
+  const discovered = await ctx.llm.discoverModels(namespace, { provider: QODER_PROVIDER_ID })
+  assert.deepEqual(discovered.map(model => model.id), ['chosen'])
+  await drain()
+
+  const stored = memorySettings(ctx).get(namespace)
+  assert.equal(stored?.modelsByRegion?.global?.[0].priceFactor, 4)
+  assert.equal(stored?.modelsByRegion?.global?.[0].name, 'User chosen')
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), ['chosen'])
 })
 
 test('settings reject an invalid live catalog before committing it', async () => {

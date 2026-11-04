@@ -22,6 +22,7 @@ interface QoderRpcHandlerOptions {
   readQueue: QoderQueueStatusStore['read']
   /** Join host restoration when needed; the host owns session publication. */
   restoreSession(sessionId: string): Promise<void>
+  settingsNamespace?(): string
   logger?: QoderLogger
 }
 
@@ -87,12 +88,19 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
 /** Create a handler without registering routes or taking ownership of dependencies. */
 export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpcHandler {
   const { resolveTransport, discoverModels, authorization, adapter, readQueue, restoreSession, logger } = options
+  const settingsNamespace = options.settingsNamespace ?? (() => 'provider-qoder')
   return async (endpoint, payload, signal) => {
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
     if (endpoint === 'sessionTierEvents') return publicError('UNKNOWN_ENDPOINT', 'This endpoint requires the event stream handler')
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return publicError('INVALID_REQUEST', 'An object payload is required')
     const data = payload as Record<string, unknown>
+
+    if (endpoint === 'bootstrap') {
+      const namespace = settingsNamespace()
+      if (!namespace.trim()) return publicError('INTERNAL', 'Qoder settings namespace is unavailable')
+      return { ok: true, value: { settingsNamespace: namespace } }
+    }
 
     if (endpoint === 'authorization' || endpoint === 'beginLogin' || endpoint === 'cancelLogin' || endpoint === 'selectAuthorization') {
       const region = data?.region

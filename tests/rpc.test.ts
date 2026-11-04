@@ -55,6 +55,7 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
     '/api/qoder-subscription/beginLogin',
     '/api/qoder-subscription/cancelLogin',
     '/api/qoder-subscription/selectAuthorization',
+    '/api/qoder-subscription/bootstrap',
   ]
   assert.deepEqual(routes.map(route => route.path), expectedPaths)
   assert.deepEqual(routes.map(route => [...route.methods]), expectedPaths.map(() => ['POST']))

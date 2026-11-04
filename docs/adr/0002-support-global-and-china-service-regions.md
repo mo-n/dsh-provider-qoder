@@ -5,3 +5,5 @@ We support both Global (`qoder.com`) and China (`qoder.com.cn`) Qoder service re
 While both regions share the same underlying COSY authentication algorithm and request payload formats, they operate on separate network endpoints and host distinct model catalogs.
 
 Storing `region` in DSH settings preserves a single Managed Qoder PAT credential while allowing subscribers to switch environments, flush in-memory job tokens, and dynamically discover the model catalog corresponding to their active region.
+
+The effective settings namespace is the owning Loader entry's `options.id`, so an embedding application can mount the provider under a custom entry id without splitting host persistence from the client form. The historical `provider-qoder` id remains the compatibility default only when no entry id is available. The client obtains the effective namespace through the host bootstrap RPC before resolving its config form; credential references and region identities remain unchanged.

@@ -10,7 +10,6 @@ import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-web'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderTransportRuntime, transportConfig, type QoderRuntimeConfig } from './transport-runtime.ts'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
@@ -26,7 +25,7 @@ import {
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
 import { modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } from './config.ts'
-import { bindQoderSettings } from './settings.ts'
+import { bindQoderSettings, qoderSettingsNamespace } from './settings.ts'
 import { createQoderRpcHandler } from './rpc-handler.ts'
 import { registerQoderRpc } from './rpc.ts'
 import { QoderBrowserAuthorizationManager, browserAuthorizationKey } from './browser-authorization.ts'
@@ -36,7 +35,6 @@ export const name = 'provider-qoder'
 export const inject = ['llm', 'credentials', 'connection', 'attachments']
 
 const providerQoder = QODER_PROVIDER_ID
-const settingsNamespace = 'provider-qoder' as SettingsNamespace
 const fiberDisposed: FiberState = 4
 const fiberUnloading: FiberState = 5
 
@@ -57,6 +55,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   ctx.effect(() => async () => { queueStatus.dispose(); await leases.dispose() }, 'provider-qoder: queue lifecycle')
   bindQoderQueueLeases(ctx, leases)
   const config = readConfig(input)
+  const settingsNamespace = qoderSettingsNamespace(ctx)
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
   const initialRegion = config.region ?? 'global'
   const baseConfig: QoderConfig = {
@@ -235,6 +234,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       const result = await controller.resolveAgent(SessionId(sessionId))
       if ('error' in result) throw result.error
     },
+    settingsNamespace: () => settingsNamespace,
     logger,
   })
 

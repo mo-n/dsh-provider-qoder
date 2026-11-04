@@ -108,3 +108,80 @@ test('client decodes split records and reconnects with a fresh readiness notific
   assert.equal(notifications, 2)
   off(); events.dispose()
 })
+
+test('client skips malformed, null, array and oversized records without reconnecting', async t => {
+  const time = mockTime(t)
+  const encoder = new TextEncoder()
+  let calls = 0
+  const events = createSessionTierEvents(async (_input, init) => {
+    calls++
+    const body = new ReadableStream<Uint8Array>({
+      start(stream) {
+        stream.enqueue(encoder.encode([
+          'null',
+          '[]',
+          '{"broken"',
+          'x'.repeat(64 * 1024 + 1),
+          JSON.stringify({ ready: true }),
+          JSON.stringify(scope),
+        ].join('\n') + '\n'))
+        init?.signal?.addEventListener('abort', () => { try { stream.close() } catch {} }, { once: true })
+      },
+    })
+    return new Response(body)
+  })
+  let notifications = 0
+  const off = events.subscribe(scope, () => notifications++)
+  await settle()
+  assert.equal(calls, 1)
+  assert.equal(notifications, 2)
+  time.tick(999)
+  assert.equal(calls, 1)
+  off(); events.dispose()
+  await settle()
+})
+
+test('client bounds partial lines without rejecting a large chunk of valid records', async () => {
+  const encoder = new TextEncoder()
+  let calls = 0
+  const count = 2000
+  const events = createSessionTierEvents(async () => {
+    calls++
+    return new Response(new ReadableStream<Uint8Array>({
+      start(stream) {
+        stream.enqueue(encoder.encode(Array.from({ length: count }, () => JSON.stringify(scope)).join('\n') + '\n'))
+      },
+    }))
+  })
+  let notifications = 0
+  const off = events.subscribe(scope, () => notifications++)
+  await settle()
+  assert.equal(calls, 1)
+  assert.equal(notifications, count)
+  off(); events.dispose()
+  await settle()
+})
+
+test('client limits a split multibyte line by UTF-8 bytes and resumes after its newline', async () => {
+  const encoder = new TextEncoder()
+  let stream!: ReadableStreamDefaultController<Uint8Array>
+  let calls = 0
+  const events = createSessionTierEvents(async () => {
+    calls++
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller } }))
+  })
+  let notifications = 0
+  const off = events.subscribe(scope, () => notifications++)
+  await settle()
+  stream.enqueue(encoder.encode('{"ready":true,"padding":"' + '界'.repeat(11000)))
+  await settle()
+  assert.equal(notifications, 0)
+  // The complete record is valid JSON and shorter than 64 Ki characters, but
+  // exceeds 64 KiB in UTF-8. Only the following scoped event may be delivered.
+  stream.enqueue(encoder.encode('界'.repeat(11000) + '"}\n' + JSON.stringify(scope) + '\n'))
+  await settle()
+  assert.equal(notifications, 1)
+  assert.equal(calls, 1)
+  off(); events.dispose()
+  await settle()
+})
