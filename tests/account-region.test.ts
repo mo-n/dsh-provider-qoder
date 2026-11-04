@@ -230,6 +230,15 @@ test('unmount invalidates pending credential reads before they can start an acco
   assert.equal(card.lateUpdates(), 0)
 })
 
+test('account failures show safe localized copy without upstream error text', async () => {
+  const card = await mountCard()
+  card.requests[0].result.resolve({ ok: false, error: { code: 'UPSTREAM_ERROR', message: 'signed upstream diagnostic' } })
+  await card.settle()
+  assert.match(card.text(), /accountFailed/u)
+  assert.doesNotMatch(card.text(), /signed upstream diagnostic/u)
+  card.unmount()
+})
+
 
 for (const planTotal of [0, 100]) {
   test(`add-on credits render without a subscription reset date when plan quota is ${planTotal}`, async () => {

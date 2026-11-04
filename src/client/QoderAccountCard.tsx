@@ -25,7 +25,7 @@ type AccountViewState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'ready'; account: QoderAccountInfo }
-  | { status: 'failed'; error?: string }
+  | { status: 'failed' }
 
 function formatResetDate(dateStr?: string): string | undefined {
   if (!dateStr) return undefined
@@ -84,10 +84,10 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
       const result = await operations.getAccount(force)
       if (requestId !== latestAccountRequest.current) return
       if (result && result.ok) setAccountState({ status: 'ready', account: result.value })
-      else setAccountState({ status: 'failed', error: result?.error?.message })
-    } catch (error) {
+      else setAccountState({ status: 'failed' })
+    } catch {
       if (requestId !== latestAccountRequest.current) return
-      setAccountState({ status: 'failed', error: error instanceof Error ? error.message : String(error) })
+      setAccountState({ status: 'failed' })
     } finally {
       if (requestId === latestAccountRequest.current) setRefreshing(false)
     }
@@ -185,11 +185,10 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
       return <div className={css.accountSection}><p className={css.accountLoadingText}>{t('accountLoading')}</p></div>
     }
     if (accountState.status === 'failed') {
-      const detail = accountState.error ? ` (${accountState.error})` : ''
       return (
         <div className={css.accountSection}>
           <div className={css.accountHead}>
-            <span className={css.error}>{t('accountFailed')}{detail}</span>
+            <span className={css.error}>{t('accountFailed')}</span>
             <button type="button" className={css.refreshBtn} onClick={() => { void loadAccount(true) }}>
               {t('retry')}
             </button>

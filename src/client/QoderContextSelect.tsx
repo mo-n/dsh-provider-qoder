@@ -86,7 +86,7 @@ function SessionContextSelect({ operations, sessionId, region, activeModel, t, h
   useLayoutEffect(() => { state.activate(); return () => state.dispose() }, [state])
   // Settings and request history can change the host's fallback without a manual selection event.
   const catalogSignature = JSON.stringify(activeModel)
-  useEffect(() => { void state.refresh() }, [state, catalogSignature, historicalWindow, lastUsed?.provider, lastUsed?.model])
+  useEffect(() => { void state.revalidate() }, [state, catalogSignature, historicalWindow, lastUsed?.provider, lastUsed?.model])
   useEffect(() => {
     if (!open) return
     const handleClickOutside = (e: MouseEvent) => {

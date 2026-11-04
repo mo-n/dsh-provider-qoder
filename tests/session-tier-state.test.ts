@@ -1,6 +1,7 @@
 import { success, refused } from './helpers/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import type { OperationResult } from '../src/client/operation-result.ts'
 import { SessionTierState } from '../src/client/session-tier-state.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
@@ -96,6 +97,53 @@ test('late reads cannot replace newer host change results', async () => {
   requests[1].resolve(selection('small')); await settle()
   requests[0].resolve(selection('large')); await settle()
   assert.equal(state.getSnapshot().selection?.tierKey, 'small')
+  state.dispose()
+})
+
+test('automatic revalidation keeps an available tier usable while the read is pending', async () => {
+  const pending = deferred<QoderSessionTierSelection>()
+  let readSessionTier: (scope: QoderSessionTierScope) => Promise<OperationResult<QoderSessionTierSelection>> = async () => success(selection('large'))
+  const state = new SessionTierState(scope, { readSessionTier: owner => readSessionTier(owner) })
+  state.activate(); await settle()
+  assert.equal(state.getSnapshot().loading, false)
+  const original = state.getSnapshot().selection
+  readSessionTier = async () => pending.promise.then(value => success(value))
+  const revalidation = state.revalidate()
+  assert.equal(state.getSnapshot().loading, false)
+  assert.equal(state.getSnapshot().selection, original)
+  pending.resolve(selection('small'))
+  await revalidation
+  assert.equal(state.getSnapshot().loading, false)
+  assert.equal(state.getSnapshot().selection?.tierKey, 'small')
+  state.dispose()
+})
+
+test('automatic revalidation during a save waits for the accepted write before rereading', async () => {
+  const write = deferred<QoderSessionTierSelection>()
+  const reread = deferred<QoderSessionTierSelection>()
+  let reads = 0
+  let changed = () => {}
+  const state = new SessionTierState(scope, {
+    readSessionTier: async () => {
+      reads++
+      return reads === 1 ? success(selection('large')) : reread.promise.then(value => success(value))
+    },
+    setSessionTier: () => write.promise.then(success),
+    subscribeSessionTiers: (_scope, listener) => { changed = listener; return () => {} },
+  })
+  state.activate(); await settle()
+  const saving = state.select('small')
+  changed()
+  await settle()
+  assert.equal(state.getSnapshot().saving, true)
+  assert.equal(reads, 1)
+  write.resolve(selection('small'))
+  await saving
+  assert.equal(state.getSnapshot().selection?.tierKey, 'small')
+  assert.equal(state.getSnapshot().saving, false)
+  reread.resolve(selection('large'))
+  await settle()
+  assert.equal(state.getSnapshot().selection?.tierKey, 'large')
   state.dispose()
 })
 

@@ -169,6 +169,74 @@ test('uncertain generation failures never replay', async () => {
     await assert.rejects(generateImage({ prompt: 'cat' }, deps)); assert.equal(calls, 1)
   }
 })
+
+test('generation cancellation stays aborted and explicit HTTP rejection keeps diagnostics', async () => {
+  const controller = new AbortController()
+  const cancelled = new DOMException('cancelled', 'AbortError')
+  const cancelledDeps = dependencies((async () => {
+    controller.abort(cancelled)
+    throw cancelled
+  }) as typeof fetch)
+  await assert.rejects(generateImage({ prompt: 'cat' }, cancelledDeps, controller.signal), (error: unknown) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.code, 'ABORTED')
+    assert.doesNotMatch(error.message, /did not confirm an outcome/u)
+    return true
+  })
+
+  let calls = 0
+  const rejected = dependencies((async () => {
+    calls++
+    return new Response(JSON.stringify({ error: { code: 112 }, message: 'secret' }), { status: 429 })
+  }) as typeof fetch)
+  await assert.rejects(generateImage({ prompt: 'cat' }, rejected), (error: unknown) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.code, 'PROVIDER_ERROR')
+    assert.equal(error.httpStatus, 429)
+    assert.equal(error.upstreamCode, '112')
+    assert.equal(error.source, 'http')
+    assert.doesNotMatch(error.message, /did not confirm an outcome/u)
+    return true
+  })
+  assert.equal(calls, 1)
+})
+
+test('explicit HTTP rejection survives a stalled error body deadline', async t => {
+  const time = mockTime(t)
+  let cancelled = false
+  const body = new ReadableStream<Uint8Array>({ cancel() { cancelled = true } })
+  const deps = dependencies((async () => new Response(body, { status: 400 })) as typeof fetch)
+  deps.timeoutMs = 15
+  const rejected = assert.rejects(generateImage({ prompt: 'cat' }, deps), (error: unknown) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.httpStatus, 400)
+    assert.equal(error.source, 'http')
+    assert.doesNotMatch(error.message, /did not confirm an outcome/u)
+    return true
+  })
+  await nextTurn()
+  time.tick(15)
+  await rejected
+  assert.equal(cancelled, true)
+})
+
+test('failed ImageGen credential refresh retains the explicit initial 401', async () => {
+  let calls = 0
+  const deps = dependencies((async () => {
+    calls++
+    return new Response(JSON.stringify({ error: { code: 105 } }), { status: 401 })
+  }) as typeof fetch)
+  deps.refreshCredentials = async () => { throw Object.assign(new Error('refresh unavailable'), { code: 'ECONNRESET' }) }
+  await assert.rejects(generateImage({ prompt: 'cat' }, deps), (error: unknown) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.httpStatus, 401)
+    assert.equal(error.upstreamCode, '105')
+    assert.equal(error.source, 'http')
+    assert.doesNotMatch(error.message, /did not confirm an outcome/u)
+    return true
+  })
+  assert.equal(calls, 1)
+})
 test('image search 401 rejection refreshes once and reuses request identity and body', async () => {
   for (const status of [401]) {
     const bodies: unknown[] = []; let refreshed = 0
@@ -366,6 +434,58 @@ test('native image download pins public DNS without changing TLS hostname or car
   }) as unknown as typeof httpsRequest
   const result = await pinnedDownload('https://images.example.com/a.png', {}, ['93.184.216.34'], fake)
   assert.deepEqual(Buffer.from(await result.arrayBuffer()), png)
+})
+
+test('native image download tries the next validated public address after a pre-response failure', async () => {
+  const addresses = ['93.184.216.34', '1.1.1.1']
+  const seen: string[] = []
+  let attempts = 0
+  const fake = ((_url: string, options: RequestOptions, callback: (response: IncomingMessage) => void) => {
+    const address = addresses[attempts++]!
+    const lookup = options.lookup!
+    lookup('images.example.com', { all: true }, ((error: unknown, resolved: unknown) => {
+      assert.equal(error, null)
+      assert.deepEqual(resolved, [{ address, family: 4 }])
+      seen.push(address)
+    }) as never)
+    const request = new EventEmitter() as EventEmitter & { end: () => void }
+    request.end = () => queueMicrotask(() => {
+      if (attempts === 1) request.emit('error', Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }))
+      else callback(Object.assign(Readable.from([png]), { headers: {}, statusCode: 200 }) as IncomingMessage)
+    })
+    return request
+  }) as unknown as typeof httpsRequest
+  const result = await pinnedDownload('https://images.example.com/a.png', {}, addresses, fake)
+  assert.deepEqual(seen, addresses)
+  assert.deepEqual(Buffer.from(await result.arrayBuffer()), png)
+})
+
+test('native image download does not retry after an HTTP response or caller cancellation', async () => {
+  let attempts = 0
+  const httpRejected = ((_url: string, _options: RequestOptions, callback: (response: IncomingMessage) => void) => {
+    attempts++
+    const request = new EventEmitter() as EventEmitter & { end: () => void }
+    request.end = () => queueMicrotask(() => callback(Object.assign(Readable.from([]), { headers: {}, statusCode: 503 }) as IncomingMessage))
+    return request
+  }) as unknown as typeof httpsRequest
+  const response = await pinnedDownload('https://images.example.com/a.png', {}, ['93.184.216.34', '1.1.1.1'], httpRejected)
+  assert.equal(response.status, 503)
+  assert.equal(attempts, 1)
+
+  const controller = new AbortController()
+  const cancelled = new DOMException('cancelled', 'AbortError')
+  attempts = 0
+  const cancelledRequest = ((_url: string, _options: RequestOptions, _callback: (response: IncomingMessage) => void) => {
+    attempts++
+    const request = new EventEmitter() as EventEmitter & { end: () => void }
+    request.end = () => queueMicrotask(() => {
+      controller.abort(cancelled)
+      request.emit('error', Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }))
+    })
+    return request
+  }) as unknown as typeof httpsRequest
+  await assert.rejects(pinnedDownload('https://images.example.com/a.png', { signal: controller.signal }, ['93.184.216.34', '1.1.1.1'], cancelledRequest), error => error === cancelled)
+  assert.equal(attempts, 1)
 })
 
 test('download enforces streamed byte budget even without content-length and cancels the body', async () => {

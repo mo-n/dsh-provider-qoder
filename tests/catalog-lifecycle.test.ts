@@ -20,7 +20,7 @@ function transport(discoverModels: () => Promise<readonly QoderCatalogModel[]>):
 async function drain() {
   for (let turn = 0; turn < 8; turn++) await new Promise<void>(resolve => setImmediate(resolve))
 }
-function runtime() {
+function runtime(options: { defaultBackoff?: boolean } = {}) {
   let active = transport(async () => advertised(1))
   let region: QoderRegion = 'global'
   let selected: readonly QoderCatalogModel[] = modelsFor(Config({ modelsByRegion: { global: [{ id: 'chosen', name: 'User name' }] } }), 'global')
@@ -28,6 +28,7 @@ function runtime() {
   const catalog = new QoderCatalogLifecycle({
     resolveTransport: () => active, region: () => region, configuredModels: () => selected,
     onPersistenceError: error => { errors.push(error) },
+    persistenceConflictBackoffMs: options.defaultBackoff ? undefined : [0, 0, 0],
   })
   return { catalog, errors, setTransport(value: QoderTransport) { active = value; catalog.observeTransport() },
     setRegion(value: QoderRegion) { region = value; catalog.observeTransport() },
@@ -161,6 +162,111 @@ test('revision conflict retries against current selection and latest accepted di
   assert.equal(stored[0].contextWindow, 50_000)
   assert.equal(stored[0].maxTokens, 2048)
   assert.equal(stored[0].priceFactor, 4)
+})
+
+test('revision conflicts stop after a bounded retry budget and await explicit retry', async () => {
+  const { catalog, errors } = runtime()
+  let stored: readonly QoderCatalogModel[] = [{ id: 'chosen', name: 'Chosen' }]
+  let conflicting = true
+  let writes = 0
+  const started = deferred<void>()
+  catalog.bindSettings({
+    read: () => ({ models: stored, revision: 0 }),
+    write: async (_region, models, expected) => {
+      writes++
+      if (writes === 1) started.resolve()
+      if (conflicting) throw new SettingsConflictError('provider-qoder' as SettingsNamespace, expected, expected + 1)
+      stored = models
+    },
+  })
+
+  await catalog.discover()
+  await started.promise
+  // A watcher notification during a conflict must not restart another
+  // unbounded conflict cycle after the retry budget is exhausted.
+  catalog.retryPersistence()
+  await drain()
+  assert.equal(writes, 4, 'one initial write plus three bounded conflict retries')
+  assert.equal(errors.length, 1)
+  assert.ok(errors[0] instanceof SettingsConflictError)
+
+  // Exhaustion leaves metadata dirty but does not start another write by itself.
+  await drain()
+  assert.equal(writes, 4)
+
+  conflicting = false
+  catalog.retryPersistence()
+  await drain()
+  assert.equal(writes, 5)
+  assert.equal(stored[0].priceFactor, 1)
+})
+
+test('revision conflicts use the default 50, 100 and 200ms backoff', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  const { catalog, errors } = runtime({ defaultBackoff: true })
+  let writes = 0
+  const started = deferred<void>()
+  catalog.bindSettings({
+    read: () => ({ models: [{ id: 'chosen', name: 'Chosen' }], revision: 0 }),
+    write: async (_region, _models, expected) => {
+      writes++
+      if (writes === 1) started.resolve()
+      throw new SettingsConflictError('provider-qoder' as SettingsNamespace, expected, expected + 1)
+    },
+  })
+
+  await catalog.discover()
+  await started.promise
+  await Promise.resolve()
+  time.tick(49)
+  await drain()
+  assert.equal(writes, 1)
+  time.tick(1)
+  await drain()
+  assert.equal(writes, 2)
+  time.tick(99)
+  await drain()
+  assert.equal(writes, 2)
+  time.tick(1)
+  await drain()
+  assert.equal(writes, 3)
+  time.tick(199)
+  await drain()
+  assert.equal(writes, 3)
+  time.tick(1)
+  await drain()
+  assert.equal(writes, 4)
+  assert.equal(errors.length, 1)
+})
+
+test('replacing settings during conflict backoff does not write the old binding again', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  const { catalog } = runtime({ defaultBackoff: true })
+  let oldWrites = 0
+  let newWrites = 0
+  const started = deferred<void>()
+  catalog.bindSettings({
+    read: () => ({ models: [{ id: 'chosen', name: 'Chosen' }], revision: 0 }),
+    write: async (_region, _models, expected) => {
+      oldWrites++
+      started.resolve()
+      throw new SettingsConflictError('provider-qoder' as SettingsNamespace, expected, expected + 1)
+    },
+  })
+  await catalog.discover()
+  await started.promise
+  await Promise.resolve()
+
+  catalog.bindSettings({
+    read: () => ({ models: [{ id: 'chosen', name: 'Replacement' }], revision: 0 }),
+    write: async () => { newWrites++ },
+  })
+  time.tick(50)
+  await drain()
+  assert.equal(oldWrites, 1)
+  assert.equal(newWrites, 1)
 })
 
 for (const trigger of ['settings change', 'reattachment', 'successful discovery'] as const) {

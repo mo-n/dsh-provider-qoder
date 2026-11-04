@@ -15,6 +15,11 @@ DSH owns attachment persistence and execution-environment path mapping; Qoder tr
 
 Generation submissions are not replayed after uncertain failures: a timeout, connection failure, or unusable response does not establish that Qoder rejected the operation. Repeating it could create another image and consume subscriber quota again. The narrow authentication-recovery exception is an explicit HTTP 401 rejection: transport may refresh credentials once and resubmit the same request body and request ID. HTTP 403 and uncertain failures do not trigger that recovery; model-generation retry rules do not apply to image tools.
 
+Caller cancellation retains its cancellation classification; it does not prove
+that an already-submitted image was never generated. Explicit HTTP failures
+retain the response status and safe numeric upstream code without exposing the
+upstream response text. Uncertain failures retain the no-regeneration warning.
+
 Once Qoder has returned an image URL, download, validation, storage, or path-mapping failures are reported as delivery failures, with a request ID and instructions against automatic regeneration. No automatic delivery-recovery operation is currently exposed; retaining a request ID is diagnostic correlation, not a guarantee that the image can be recovered. Signed image URLs must not appear in ordinary diagnostics.
 
 ## Consequences
@@ -24,5 +29,9 @@ Once Qoder has returned an image URL, download, validation, storage, or path-map
 - Disabling a capability removes its tool definition and rejects retained calls at execution entry. It does not cancel calls already in progress; DSH remains responsible for caller cancellation and tool policy.
 - Generating an image does not require the calling language model to accept image input. Inspecting the resulting image is a separate capability, provided by DSH's existing `read_image` tool when available. This decision adds neither an image-reading implementation nor video tools.
 - Downloading upstream image URLs adds transport security responsibilities: bound resource use, validate download destinations and redirects, preserve TLS verification, and keep subscriber credentials out of download requests. Protocol details and limits remain in transport and its tests.
+- A download may try another already-validated public DNS address after a
+  connection failure before any HTTP response. All attempts share the hop's
+  deadline and caller cancellation, preserve the URL hostname for TLS, and never
+  regenerate the image. A received HTTP response or body failure is not replayed.
 
 The feature specification records configuration and acceptance details. Automated tests mock upstream interactions and consume no subscriber quota; offline protocol fixtures and mocks do not establish live availability for every Qoder service region or subscriber entitlement.

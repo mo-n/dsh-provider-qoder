@@ -459,6 +459,9 @@ test('automatic discovery and settings persistence failures remain advisory', as
 })
 
 test('automatic discovery cannot overwrite a settings save already awaiting persistence', async (t) => {
+  // Catalog persistence backs off 50ms after the stale-revision conflict.
+  // Drive that timer explicitly instead of relying on a wall-clock drain.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   let completeDiscovery!: (models: QoderCatalogModel[]) => void
   let discoveryStarted!: () => void
   const started = new Promise<void>(resolve => { discoveryStarted = resolve })
@@ -497,6 +500,8 @@ test('automatic discovery cannot overwrite a settings save already awaiting pers
   await Promise.all([save, reading])
   // The queued metadata write reconciles under a stale revision, so let its
   // conflict retry settle before reading the committed catalog.
+  await drain()
+  t.mock.timers.tick(50)
   await drain()
 
   const stored = memorySettings(ctx).get(ns) as plugin.Config
