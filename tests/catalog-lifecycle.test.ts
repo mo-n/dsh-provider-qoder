@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { deferred } from './helpers/timing.ts'
 import assert from 'node:assert/strict'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderCatalogLifecycle, type QoderCatalogSettings } from '../src/dsh/catalog-lifecycle.ts'
@@ -7,12 +8,6 @@ import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import type { QoderRegion } from '../src/qoder/region.ts'
 import type { QoderTransport } from '../src/qoder/transport/index.ts'
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (error: Error) => void
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
-  return { promise, resolve, reject }
-}
 const advertised = (priceFactor: number): QoderCatalogModel[] => [{ id: 'chosen', name: 'Upstream', priceFactor }, { id: 'disabled', name: 'Disabled' }]
 function transport(discoverModels: () => Promise<readonly QoderCatalogModel[]>): QoderTransport {
   return { discoverModels } as QoderTransport

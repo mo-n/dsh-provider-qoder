@@ -2,8 +2,9 @@ import type { TestContext } from 'node:test'
 
 export function deferred<T = void>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(yes => { resolve = yes })
-  return { promise, resolve }
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
 }
 
 /** Drain runnable I/O/stream continuations once, without advancing elapsed time. */

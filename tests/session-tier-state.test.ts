@@ -1,4 +1,5 @@
 import { success, refused } from './helpers/operation-result.ts'
+import { deferred } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { OperationResult } from '../src/client/operation-result.ts'
@@ -13,12 +14,6 @@ const scope: QoderSessionTierScope = { region: 'global', sessionId: 's', modelId
 const model = { id: 'a', name: 'A', contextTier: 'large', contextWindow: 1_000_000,
   contextOptions: { small: { tokenCount: 200_000 }, large: { tokenCount: 1_000_000 } } }
 const selection = (tierKey = 'large', owner = scope): QoderSessionTierSelection => ({ ...owner, tierKey, tokenCount: tierKey === 'small' ? 200_000 : 1_000_000 })
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (reason: Error) => void
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
-  return { promise, resolve, reject }
-}
 async function settle() { for (let i = 0; i < 12; i++) await Promise.resolve() }
 function host() {
   let region: QoderRegion = 'global'

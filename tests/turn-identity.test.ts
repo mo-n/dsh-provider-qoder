@@ -160,11 +160,16 @@ test('requests without a session identity stay independent records', () => {
   assert.equal(tracker.resolveTurnRecordId('', [wireUser('Ping')]), null)
 })
 
-test('the request envelope keeps run identity across steps and renews it for the next prompt', async () => {
+test('the request envelope keeps run identity and its injected timestamp across steps and renews them for the next prompt', async () => {
+  let clock = 1000
+  const tracker = new QoderTurnTracker({ now: () => clock })
+  const session = 'identity-session-envelope'
   const prompt = user('Continue')
-  const first = await buildQoderRequestBody(options([prompt], 'identity-session-envelope'), 'user-42')
-  const second = await buildQoderRequestBody(options([prompt], 'identity-session-envelope'), 'user-42')
-  const nextTurn = await buildQoderRequestBody(options([prompt, user('Next')], 'identity-session-envelope'), 'user-42')
+  const first = await buildQoderRequestBody(options([prompt], session), 'user-42', undefined, undefined, undefined, tracker)
+  clock = 2000
+  const second = await buildQoderRequestBody(options([prompt], session), 'user-42', undefined, undefined, undefined, tracker)
+  clock = 3000
+  const nextTurn = await buildQoderRequestBody(options([prompt, user('Next')], session), 'user-42', undefined, undefined, undefined, tracker)
 
   // The official client renews request_set_id once per agent run and sets
   // chat_record_id to the request's own id, so one run keeps one set id while
@@ -179,31 +184,10 @@ test('the request envelope keeps run identity across steps and renews it for the
   }
   assert.equal(first.business.id, second.business.id)
   assert.notEqual(nextTurn.business.id, first.business.id)
-  assert.equal(first.business.begin_at, second.business.begin_at)
-  assert.ok(nextTurn.business.begin_at >= first.business.begin_at)
-  assert.match(first.session_id, /^[a-f0-9]{16}-identity-session-envelope$/)
-})
-
-test('buildQoderRequestBody uses the injected tracker clock for each agent run', async () => {
-  let clock = 1000
-  const tracker = new QoderTurnTracker({ now: () => clock })
-  const session = 'identity-session-injected'
-  const prompt = user('Continue')
-
-  const first = await buildQoderRequestBody(options([prompt], session), 'user-42', undefined, undefined, undefined, tracker)
-  clock = 2000
-  const second = await buildQoderRequestBody(options([prompt], session), 'user-42', undefined, undefined, undefined, tracker)
-  clock = 3000
-  const nextTurn = await buildQoderRequestBody(options([prompt, user('Next')], session), 'user-42', undefined, undefined, undefined, tracker)
-
   assert.equal(first.business.begin_at, 1000)
   assert.equal(second.business.begin_at, 1000)
   assert.equal(nextTurn.business.begin_at, 3000)
-  assert.equal(first.request_set_id, second.request_set_id)
-  assert.equal(first.business.id, second.business.id)
-  assert.notEqual(first.chat_record_id, second.chat_record_id)
-  assert.notEqual(nextTurn.request_set_id, first.request_set_id)
-  assert.notEqual(nextTurn.business.id, first.business.id)
+  assert.match(first.session_id, /^[a-f0-9]{16}-identity-session-envelope$/)
 })
 
 test('an auxiliary host call never moves the open turn', async () => {

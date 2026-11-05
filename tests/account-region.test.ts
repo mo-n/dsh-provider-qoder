@@ -1,4 +1,5 @@
 import { success } from './helpers/operation-result.ts'
+import { deferred } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -9,12 +10,6 @@ import type { QoderAccountInfo } from '../src/qoder/account.ts'
 import type { QoderAccountResult, QoderCredentialStatus, QoderModelSettingsSnapshot } from '../src/client/credential-operations.ts'
 import type { QoderRegion } from '../src/qoder/region.ts'
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (error: Error) => void
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
-  return { promise, resolve, reject }
-}
 function account(name: string): QoderAccountResult {
   return { ok: true, value: { profile: { id: name, name, email: `${name}@example.test` } } as QoderAccountInfo }
 }
