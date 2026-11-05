@@ -6,7 +6,7 @@ Each transport instance binds one immutable Qoder service region. Model catalogs
 
 The original capabilities were model streaming, model discovery, and account reading. [ADR-0004](0004-publish-qoder-multimodal-input-through-the-center-service.md) adds image publication inside model-request preparation, and [ADR-0006](0006-route-web-search-by-initiating-model.md) adds web search. Both preserve the same ownership boundary; authentication refresh and retry behavior for those operations are defined separately from model-generation retries.
 
-Connection pools, background refresh, circuit breakers, dynamic rate limiting, and full tracing remain outside scope until demonstrated needs justify them.
+Connection pools, timer-driven background refresh, circuit breakers, dynamic rate limiting, and full tracing remain outside scope until demonstrated needs justify them. Request-driven stale-cache revalidation is allowed: when a model catalog has an accepted discovery, a caller may use that catalog immediately after expiry while one bounded discovery runs in the background; the first read without an accepted discovery still waits for discovery, and a failed revalidation retains the last accepted catalog without blocking model selection or creating an unhandled rejection. This is not a refresh timer or an independent background loop.
 
 ## Authentication recovery before model generation
 

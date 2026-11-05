@@ -88,7 +88,11 @@ export class QoderCatalogLifecycle {
     }
   }
 
-  /** Automatic reads join the newest discovery and never wait for settings writes. */
+  /**
+   * Automatic reads use accepted regional metadata while refreshing expired
+   * entries. Without an accepted discovery they await upstream metadata;
+   * explicit discover calls still await fresh metadata.
+   */
   async refresh(): Promise<void> {
     while (!this.disposed) {
       this.observeTransport()
@@ -96,6 +100,16 @@ export class QoderCatalogLifecycle {
       const state = this.catalogs[region]
       const transport = this.activeTransport!
       const pending = state.inflight ?? (Date.now() >= state.expiresAt ? this.discover() : undefined)
+
+      // Once at least one discovery has been accepted, the effective catalog
+      // can be used immediately. This is the model-selection hot path: stale
+      // metadata is preferable to blocking a Session model switch. Keep the
+      // in-flight promise observed so an upstream failure is still contained.
+      if (state.models.length > 0) {
+        void pending?.catch(() => {})
+        return
+      }
+
       await pending?.catch(() => {})
       this.observeTransport()
       if (this.activeTransport !== transport || this.activeRegion !== region) continue
