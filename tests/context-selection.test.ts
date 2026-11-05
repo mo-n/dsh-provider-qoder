@@ -245,12 +245,16 @@ test('context tier menu supports keyboard navigation and preserves focus across 
   const selection = (tierKey: 'small' | 'large') => ({ region: 'global' as const, sessionId: 's', modelId: 'a', tierKey, tokenCount: tierKey === 'small' ? 200_000 : 1_000_000 })
   let saveResolve: ((value: unknown) => void) | undefined
   let saveResult: unknown = success(selection('large'))
+  let refreshPending = false
+  let refreshResolve: ((value: unknown) => void) | undefined
   const props = {
     sessionId: 's',
     directory: { getSnapshot: () => ({ current: { provider: QODER_PROVIDER_ID, model: 'a' } }), subscribe: () => () => {} },
     operations: {
       getModelSnapshot: () => ({ value: { modelsByRegion: { global: [model] } } }), subscribeModels: () => () => {},
-      readSessionTier: async () => success(selection('small')),
+      readSessionTier: async () => refreshPending
+        ? new Promise(resolve => { refreshResolve = resolve })
+        : success(selection('small')),
       setSessionTier: async () => new Promise(resolve => { saveResolve = resolve }),
     },
   }
@@ -354,6 +358,29 @@ test('context tier menu supports keyboard navigation and preserves focus across 
     const alert = nodeWithRole('alert')
     assert.ok(alert)
     assert.equal(nodes(alert).some(node => node.type === 'button'), false)
-    assert.ok(nodes(tree).some(node => node.type === 'button' && node.props.children === 'refresh'))
+    const refresh = nodes(tree).find(node => node.type === 'button' && node.props.children === 'refresh')!
+    assert.ok(refresh)
+
+    // A manual refresh may start while the menu is still open. Menu items must
+    // become inert, and arrow keys must not move the roving tab stop while the
+    // host read is pending.
+    ;(trigger().props.onClick as () => void)()
+    render()
+    refreshPending = true
+    ;(refresh.props.onClick as () => void)()
+    render()
+    const pendingItems = nodes(menu()!).filter(node => node.props.role === 'menuitemradio')
+    assert.ok(pendingItems.length > 0)
+    assert.ok(pendingItems.every(node => node.props.disabled === true))
+    const focusedDuringRefresh = pendingItems.find(node => node.props.tabIndex === 0)?.key
+    let arrowPrevented = false
+    ;(menu()!.props.onKeyDown as (event: { key: string; preventDefault(): void }) => void)({ key: 'ArrowDown', preventDefault: () => { arrowPrevented = true } })
+    render()
+    assert.equal(arrowPrevented, false)
+    assert.equal(nodes(menu()!).find(node => node.props.tabIndex === 0)?.key, focusedDuringRefresh)
+    refreshResolve!(success(selection('large')))
+    await new Promise(resolve => setImmediate(resolve))
+    render()
+    assert.ok(nodes(menu()!).filter(node => node.props.role === 'menuitemradio').every(node => node.props.disabled === false))
   } finally { unmount() }
 })

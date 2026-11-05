@@ -20,6 +20,11 @@ that an already-submitted image was never generated. Explicit HTTP failures
 retain the response status and safe numeric upstream code without exposing the
 upstream response text. Uncertain failures retain the no-regeneration warning.
 
+An explicit HTTP 401 starts credential recovery without waiting for the error
+body. Diagnostic reads have a separate short deadline within the original
+generation budget and are cancelled when recovery succeeds. Recovery failure
+retains the initial HTTP rejection and any safely available numeric code.
+
 Once Qoder has returned an image URL, download, validation, storage, or path-mapping failures are reported as delivery failures, with a request ID and instructions against automatic regeneration. No automatic delivery-recovery operation is currently exposed; retaining a request ID is diagnostic correlation, not a guarantee that the image can be recovered. Signed image URLs must not appear in ordinary diagnostics.
 
 ## Consequences

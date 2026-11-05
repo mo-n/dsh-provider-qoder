@@ -24,6 +24,7 @@ import { en, zh, type QoderCredentialCopy } from './locales.ts'
 import { createSessionTierEvents } from './session-tier-events.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
 import { installQoderSettingsNavIcon } from './settings-nav-icon.ts'
+import { readQoderSettingsNamespace } from './settings-bootstrap.ts'
 
 const localeNamespace = 'settings.qoderCredential'
 
@@ -58,16 +59,9 @@ export function apply(ctx: ClientContext): Promise<void> {
   }, 'provider-qoder: settings namespace bootstrap')
 
   const rpc = createQoderRpcCaller()
-  return rpc.call('bootstrap', {}, controller.signal).then(result => {
+  return readQoderSettingsNamespace(rpc, controller.signal).then(settingsNamespace => {
     if (disposed || controller.signal.aborted) return
-    if (!result.ok) {
-      throw new Error(`Qoder settings namespace bootstrap failed (${result.error.code}): ${result.error.message}`)
-    }
-    const settingsNamespace = result.value?.settingsNamespace
-    if (typeof settingsNamespace !== 'string' || !settingsNamespace.trim()) {
-      throw new Error('Qoder settings namespace bootstrap returned no namespace.')
-    }
-    if (disposed || controller.signal.aborted) return
+    if (settingsNamespace === undefined) return
     mount(ctx, ctx.configForms.get<QoderModelSettingsSection>(settingsNamespace), rpc)
   })
 }

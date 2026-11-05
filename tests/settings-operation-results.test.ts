@@ -8,7 +8,7 @@ import { operationCause, type OperationResult } from '../src/client/operation-re
 import { createQoderRpcCaller, type QoderRpcCaller } from '../src/client/rpc-client.ts'
 import type { QoderAuthorizationOperations } from '../src/client/credential-operations.ts'
 
-const view = (method: 'pat' | 'browser' | 'none' = 'browser', overrides: Partial<QoderAuthorizationView> = {}): QoderAuthorizationView => ({ region: 'global', method, configured: true, writable: true, ...overrides })
+const view = (method: 'pat' | 'browser' | 'none' = 'browser', overrides: Partial<QoderAuthorizationView> = {}): QoderAuthorizationView => ({ region: 'global', method, configured: method !== 'none', writable: true, ...overrides })
 const scope = { region: 'global' as const, sessionId: 'session', modelId: 'model' }
 const selection: QoderSessionTierSelection = { ...scope, tierKey: 'large', tokenCount: 1_000_000 }
 const secret = 'synthetic-secret-never-log'
@@ -190,7 +190,7 @@ for (const method of ['browser', 'none'] as const) test(`${method} description d
   f.credentials.describe = async () => { described++; throw new Error('PAT should not be read') }
   assert.deepEqual(await f.operations().describe(), {
     ok: true,
-    value: { configured: true, writable: false },
+    value: { configured: method === 'browser', writable: false },
   })
   assert.equal(described, 0)
 })

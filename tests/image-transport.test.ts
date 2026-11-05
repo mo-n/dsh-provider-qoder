@@ -1,4 +1,4 @@
-import { mockTime, nextTurn } from './helpers/timing.ts'
+import { deferred, mockTime, nextTurn } from './helpers/timing.ts'
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
@@ -237,6 +237,115 @@ test('failed ImageGen credential refresh retains the explicit initial 401', asyn
   })
   assert.equal(calls, 1)
 })
+
+test('ImageGen refreshes a 401 before a stalled body consumes the generation deadline', async t => {
+  const time = mockTime(t)
+  const bodies: unknown[] = []
+  const requestIds: string[] = []
+  let calls = 0
+  let cancelled = false
+  let refreshSignal: AbortSignal | undefined
+  const stalled = new ReadableStream<Uint8Array>({ cancel() { cancelled = true } })
+  const deps = dependencies((async (_url, init) => {
+    bodies.push(init?.body)
+    const body = decode(String(init?.body))
+    requestIds.push(String(body.requestId))
+    calls++
+    if (calls === 1) return new Response(stalled, { status: 401 })
+    return json({ data: [{ url: `data:image/png;base64,${png.toString('base64')}` }] })
+  }) as typeof fetch)
+  deps.timeoutMs = 15
+  deps.refreshCredentials = async (rejected, signal) => {
+    assert.equal(rejected, creds)
+    refreshSignal = signal
+    return { ...creds, authToken: 'renewed' }
+  }
+  const result = generateImage({ prompt: 'cat' }, deps)
+  await nextTurn()
+  assert.equal(calls, 2)
+  assert.equal(refreshSignal?.aborted, false)
+  time.tick(15)
+  await assert.doesNotReject(result)
+  await nextTurn()
+  assert.equal(cancelled, true)
+  assert.equal(bodies[0], bodies[1])
+  assert.equal(requestIds[0], requestIds[1])
+})
+
+test('ImageGen keeps the overall generation deadline while 401 refresh and diagnostics run', async t => {
+  const time = mockTime(t)
+  let calls = 0
+  let refreshSignal: AbortSignal | undefined
+  const stalled = new ReadableStream<Uint8Array>()
+  const deps = dependencies((async () => {
+    calls++
+    return new Response(stalled, { status: 401 })
+  }) as typeof fetch)
+  deps.timeoutMs = 100
+  deps.refreshCredentials = async (_rejected, signal) => {
+    refreshSignal = signal
+    await new Promise<never>((_resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason); return }
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+    throw new Error('unreachable')
+  }
+  const observed = assert.rejects(generateImage({ prompt: 'cat' }, deps), (error: unknown) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.httpStatus, 401)
+    return true
+  })
+  await nextTurn()
+  assert.equal(calls, 1)
+  time.tick(100)
+  await nextTurn()
+  await observed
+  assert.equal(refreshSignal?.aborted, true)
+})
+
+test('caller cancellation during parallel 401 diagnostics and refresh stays aborted', async () => {
+  const controller = new AbortController()
+  const started = deferred<void>()
+  let refreshSignal: AbortSignal | undefined
+  const stalled = new ReadableStream<Uint8Array>()
+  const deps = dependencies((async () => new Response(stalled, { status: 401 })) as typeof fetch)
+  deps.refreshCredentials = async (_rejected, signal) => {
+    refreshSignal = signal
+    started.resolve()
+    await new Promise<never>((_resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason); return }
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+    throw new Error('unreachable')
+  }
+  const observed = assert.rejects(generateImage({ prompt: 'cat' }, deps, controller.signal), (error: unknown) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.code, 'ABORTED')
+    return true
+  })
+  await started.promise
+  controller.abort(new DOMException('cancelled', 'AbortError'))
+  await observed
+  assert.equal(refreshSignal?.aborted, true)
+})
+
+test('generation diagnostics ignore all-zero upstream codes but retain nonzero numeric codes', async () => {
+  for (const code of ['000', '-0', '-000', 0, -0]) {
+    const deps = dependencies((async () => json({ error: { code } }, 400)) as typeof fetch)
+    await assert.rejects(generateImage({ prompt: 'cat' }, deps), (error: unknown) => {
+      assert.ok(error instanceof QoderLlmError)
+      assert.equal(error.upstreamCode, undefined)
+      return true
+    })
+  }
+  const nonzero = dependencies((async () => json({ error: { code: 105 } }, 400)) as typeof fetch)
+  await assert.rejects(generateImage({ prompt: 'cat' }, nonzero), (error: unknown) => {
+    assert.ok(error instanceof QoderLlmError)
+    assert.equal(error.upstreamCode, '105')
+    return true
+  })
+})
+
 test('image search 401 rejection refreshes once and reuses request identity and body', async () => {
   for (const status of [401]) {
     const bodies: unknown[] = []; let refreshed = 0

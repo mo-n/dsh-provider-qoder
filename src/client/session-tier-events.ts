@@ -38,6 +38,11 @@ export function createSessionTierEvents(send: typeof fetch = (...args) => global
         let line = ''
         let lineBytes = 0
         let droppingOversizedLine = false
+        const resetLine = () => {
+          line = ''
+          lineBytes = 0
+          droppingOversizedLine = false
+        }
         const consume = (text: string) => {
           let offset = 0
           while (offset < text.length) {
@@ -47,8 +52,13 @@ export function createSessionTierEvents(send: typeof fetch = (...args) => global
             if (!droppingOversizedLine) {
               const segmentBytes = encoder.encode(segment).byteLength
               if (lineBytes + segmentBytes > maxEventLineBytes) {
-                // Drop only this oversized logical line. Continue scanning the
-                // same chunk so a following valid record is still delivered.
+                // A model id has no provider-side length cap. Drop only this
+                // logical line, but invalidate every mounted view once so a
+                // legal oversized scope is recovered through a bounded host
+                // reread rather than silently lost. Continue scanning the
+                // same chunk for following records.
+                delay = 1000
+                notify()
                 line = ''
                 lineBytes = 0
                 droppingOversizedLine = true
@@ -58,9 +68,7 @@ export function createSessionTierEvents(send: typeof fetch = (...args) => global
               }
             }
             if (newline < 0) return
-            if (droppingOversizedLine) {
-              droppingOversizedLine = false
-            } else if (line.length > 0) {
+            if (!droppingOversizedLine && line.length > 0) {
               try {
                 const item: unknown = JSON.parse(line)
                 if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
@@ -76,8 +84,7 @@ export function createSessionTierEvents(send: typeof fetch = (...args) => global
                 // One malformed record must not tear down the shared stream.
               }
             }
-            line = ''
-            lineBytes = 0
+            resetLine()
             offset = newline + 1
           }
         }

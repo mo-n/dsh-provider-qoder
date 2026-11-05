@@ -147,6 +147,82 @@ test('automatic revalidation during a save waits for the accepted write before r
   state.dispose()
 })
 
+test('interrupted revalidation is reread after a rejected save without hiding the write error', async () => {
+  const oldRead = deferred<QoderSessionTierSelection>()
+  const hostRead = deferred<QoderSessionTierSelection>()
+  let reads = 0
+  const state = new SessionTierState(scope, {
+    readSessionTier: async () => {
+      reads++
+      if (reads === 1) return success(selection('large'))
+      if (reads === 2) return oldRead.promise.then(value => success(value))
+      return hostRead.promise.then(value => success(value))
+    },
+    setSessionTier: async () => refused,
+  })
+  state.activate(); await settle()
+  const pendingRevalidation = state.revalidate()
+  await settle()
+  assert.equal(reads, 2)
+
+  await state.select('small')
+  assert.equal(state.getSnapshot().saving, false)
+  assert.equal(state.getSnapshot().error, true)
+  assert.equal(reads, 3, 'only the interrupted read schedules a post-save reread')
+
+  oldRead.resolve(selection('large'))
+  await pendingRevalidation
+  await settle()
+  assert.equal(state.getSnapshot().selection?.tierKey, 'large')
+  assert.equal(state.getSnapshot().error, true)
+
+  hostRead.resolve(selection('small'))
+  await settle()
+  assert.equal(state.getSnapshot().selection?.tierKey, 'small')
+  assert.equal(state.getSnapshot().error, true, 'a successful supplemental read does not clear the rejected-save prompt')
+  assert.equal(state.getSnapshot().operationError?.stage, 'test-write')
+  state.dispose()
+})
+
+test('a failed supplemental read retains the rejected write diagnostic', async () => {
+  const oldRead = deferred<QoderSessionTierSelection>()
+  const hostRead = deferred<QoderSessionTierSelection>()
+  let reads = 0
+  const state = new SessionTierState(scope, {
+    readSessionTier: async () => {
+      reads++
+      if (reads === 1) return success(selection('large'))
+      if (reads === 2) return oldRead.promise.then(value => success(value))
+      return hostRead.promise.then(value => success(value))
+    },
+    setSessionTier: async () => refused,
+  })
+  state.activate(); await settle()
+  const pendingRevalidation = state.revalidate()
+  await settle()
+  await state.select('small')
+  oldRead.resolve(selection('large'))
+  await pendingRevalidation
+  await settle()
+  hostRead.reject(new Error('read unavailable'))
+  await settle()
+  assert.equal(state.getSnapshot().error, true)
+  assert.equal(state.getSnapshot().operationError?.stage, 'test-write')
+  state.dispose()
+})
+
+test('an accepted write does not perform an unconditional post-save reread', async () => {
+  let reads = 0
+  const state = new SessionTierState(scope, {
+    readSessionTier: async () => { reads++; return success(selection('large')) },
+    setSessionTier: async () => success(selection('small')),
+  })
+  state.activate(); await settle()
+  await state.select('small')
+  assert.equal(reads, 1)
+  state.dispose()
+})
+
 test('a delayed write response cannot override another window newer selection', async () => {
   const write = deferred<QoderSessionTierSelection>()
   const current = selection()

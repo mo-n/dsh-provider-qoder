@@ -24,6 +24,7 @@ const maxDataUrlCharacters = 4 * Math.ceil(maxImageBytes / 3) + 1024
 const maxGenerationJsonBytes = maxDataUrlCharacters + defaultMaxJsonBytes
 const maxImageRedirects = 5
 const imageDownloadTimeoutMs = 600_000
+const imageErrorDiagnosticTimeoutMs = 1_000
 function string(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value.trim() : undefined }
 function safeUpstreamCode(raw: string): string | undefined {
   let value: unknown
@@ -35,7 +36,7 @@ function safeUpstreamCode(raw: string): string | undefined {
       const field = object[key]
       const normalized = typeof field === 'number' && Number.isFinite(field) ? String(field)
         : typeof field === 'string' ? field.trim() : undefined
-      if (normalized && /^-?\d{1,16}$/u.test(normalized) && normalized !== '0') return normalized
+      if (normalized && /^-?\d{1,16}$/u.test(normalized) && !/^-?0+$/u.test(normalized)) return normalized
     }
     for (const key of ['error', 'details', 'data', 'payload', 'body']) {
       const nested = visit(object[key], depth + 1)
@@ -96,6 +97,30 @@ async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: Ima
         await response.body?.cancel()
         throw new QoderImageSearchError(response.status === 401 || response.status === 403 ? 'auth' : 'http', String(outer.requestId), { httpStatus: response.status })
       }
+      if (response.status === 401 && attempt === 0 && deps.refreshCredentials) {
+        // Refresh as soon as the rejection headers arrive. A stalled 401 body
+        // must not consume the generation deadline before authentication recovery.
+        const diagnosticController = new AbortController()
+        const diagnosticTimeout = AbortSignal.timeout(imageErrorDiagnosticTimeoutMs)
+        const diagnosticSignal = AbortSignal.any([activeSignal, diagnosticController.signal, diagnosticTimeout])
+        const diagnostic = readLimitedImageError(response, diagnosticSignal, `Qoder ${kind} error response`).catch(() => '')
+        try {
+          credentials = await deps.refreshCredentials(credentials, activeSignal)
+        } catch (refreshError) {
+          const bodyText = await diagnostic
+          diagnosticController.abort()
+          if (callerSignal?.aborted) throw refreshError
+          const error = new QoderLlmError(`Qoder ${kind} failed (HTTP ${response.status}); request ${String(outer.requestId)}.`, 'PROVIDER_ERROR')
+          error.httpStatus = response.status
+          error.source = 'http'
+          error.upstreamCode = safeUpstreamCode(bodyText)
+          // A failed refresh cannot erase the explicit 401 rejection that caused
+          // it. Do not submit a second generation request when refresh fails.
+          throw error
+        }
+        diagnosticController.abort()
+        continue
+      }
       let bodyText = ''
       try { bodyText = await readLimitedImageError(response, activeSignal, `Qoder ${kind} error response`) } catch (error) {
         if (callerSignal?.aborted) throw error
@@ -104,16 +129,6 @@ async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: Ima
       error.httpStatus = response.status
       error.source = 'http'
       error.upstreamCode = safeUpstreamCode(bodyText)
-      // A failed refresh cannot erase the explicit 401 rejection that caused
-      // it. Do not submit a second generation request when refresh fails.
-      if (response.status === 401 && attempt === 0 && deps.refreshCredentials) {
-        try { credentials = await deps.refreshCredentials(credentials, activeSignal) }
-        catch (refreshError) {
-          if (callerSignal?.aborted) throw refreshError
-          throw error
-        }
-        continue
-      }
       throw error
     }
     let parsed: unknown

@@ -57,7 +57,15 @@ export function registerQoderRpc(
     // every cleanup, attach a rejection handler, and preserve the registration
     // failure as the error observed by the caller.
     closing = true
-    void disposeResources(streams, [...disposers].reverse()).catch(() => {})
+    void disposeResources(streams, [...disposers].reverse()).catch(cleanupError => {
+      try {
+        // Report the incomplete rollback without logging arbitrary disposer
+        // messages or replacing the original synchronous registration error.
+        ctx.logger?.warn('[Qoder RPC] Registration rollback cleanup failed', {
+          failedCleanups: cleanupError instanceof AggregateError ? cleanupError.errors.length : 1,
+        })
+      } catch { /* A logger failure must not create an unhandled rejection. */ }
+    })
     throw error
   }
   let cleanup: Promise<void> | undefined

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { nextTurn } from './helpers/timing.ts'
 
 const loadClientPlugin = async (send: typeof fetch = async (input) => {
   if (String(input).endsWith('/bootstrap')) {
@@ -17,6 +18,8 @@ const loadClientPlugin = async (send: typeof fetch = async (input) => {
   runInNewContext(source, {
     console,
     AbortController,
+    setTimeout,
+    clearTimeout,
     window: {
       __ModuleLoader__: {
         load: ({ factory }: { factory: (require: unknown) => typeof plugin }) => {
@@ -30,6 +33,23 @@ const loadClientPlugin = async (send: typeof fetch = async (input) => {
     fetch: send,
   })
   return plugin
+}
+
+function bootstrapContext(onFormLookup: (namespace: string) => void = () => {}) {
+  const form = { getSnapshot: () => ({ value: { modelsByRegion: {} } }), subscribe: () => () => {}, set: async () => true }
+  const credentials = {
+    describe: async () => ({ ok: true, value: {} }),
+    set: async () => ({ ok: true, value: undefined }),
+    unset: async () => ({ ok: true, value: undefined }),
+  }
+  return {
+    configForms: { get: (namespace: string) => { onFormLookup(namespace); return form } },
+    effect: (callback: () => unknown) => callback(),
+    locale: { register() {}, bind: () => (key: string) => key },
+    remote: { credentials },
+    inject() {},
+    slots: { inject: (_name: string, callback: () => unknown) => callback(), register: () => {} },
+  }
 }
 
 test('client settings declares required services', async () => {
@@ -65,24 +85,142 @@ for (const [label, envelope] of [
   ['empty host namespace', { ok: true, value: {} }],
 ] as const) {
   test(`client settings rejects ${label} without resolving a fallback form`, async () => {
+    let calls = 0
     const plugin = await loadClientPlugin(async input => {
       assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+      calls++
       return Response.json(envelope)
     })
     let formLookups = 0
-    const credentials = {
-      describe: async () => ({ ok: true, value: {} }),
-      set: async () => ({ ok: true, value: undefined }),
-      unset: async () => ({ ok: true, value: undefined }),
-    }
     await assert.rejects(plugin.apply({
-      configForms: { get: () => { formLookups++; throw new Error('fallback form must not be resolved') } },
-      effect: (callback: () => unknown) => callback(),
-      remote: { credentials },
+      ...bootstrapContext(() => { formLookups++ }),
     }), /Qoder settings namespace bootstrap/u)
     assert.equal(formLookups, 0)
+    assert.equal(calls, 1)
   })
 }
+
+test('client settings retries temporary bootstrap failures and mounts after a later success', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    if (calls === 1) return new Response('', { status: 503 })
+    if (calls === 2) return new Response('', { status: 429 })
+    return Response.json({ ok: true, value: { settingsNamespace: 'retry-entry' } })
+  })
+  let lookedUp = 0
+  const applying = plugin.apply(bootstrapContext(() => { lookedUp++ }))
+  await nextTurn()
+  assert.equal(calls, 1)
+  time.tick(250)
+  await nextTurn()
+  assert.equal(calls, 2)
+  time.tick(500)
+  await nextTurn()
+  await applying
+  assert.equal(calls, 3)
+  assert.equal(lookedUp, 1)
+})
+
+test('client settings exhausts temporary bootstrap retries without resolving a fallback form', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    return new Response('', { status: 503 })
+  })
+  let lookedUp = 0
+  const applying = plugin.apply(bootstrapContext(() => { lookedUp++ }))
+  const rejected = assert.rejects(applying, /failed after 3 attempts/u)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await nextTurn()
+    assert.equal(calls, attempt)
+    if (attempt < 3) {
+      time.tick(attempt === 1 ? 250 : 500)
+      await nextTurn()
+    }
+  }
+  await rejected
+  assert.equal(lookedUp, 0)
+})
+
+test('client settings does not retry permanent bootstrap authorization failures', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    return new Response('', { status: 401 })
+  })
+  const applying = plugin.apply(bootstrapContext())
+  await assert.rejects(applying, /failed after 1 attempt/u)
+  assert.equal(calls, 1)
+})
+
+test('client settings cancels a pending retry delay during unload', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    return new Response('', { status: 503 })
+  })
+  let cleanup!: () => void
+  let lookedUp = 0
+  const context = {
+    ...bootstrapContext(() => { lookedUp++ }),
+    effect: (callback: () => unknown) => {
+      const disposer = callback()
+      cleanup = typeof disposer === 'function' ? () => { disposer() } : () => {}
+      return () => {}
+    },
+  }
+  const applying = plugin.apply(context)
+  await nextTurn()
+  assert.equal(calls, 1)
+  cleanup()
+  time.tick(250)
+  await nextTurn()
+  await applying
+  assert.equal(calls, 1)
+  assert.equal(lookedUp, 0)
+})
+
+test('client settings bounds each unresponsive bootstrap request and aborts every timed-out signal', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  const signals: AbortSignal[] = []
+  const plugin = await loadClientPlugin(async (input, init) => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    assert.ok(init?.signal)
+    signals.push(init.signal)
+    return new Promise<Response>((_resolve, _reject) => {
+      // The request intentionally never resolves; the client timeout owns the bound.
+    })
+  })
+  const applying = plugin.apply(bootstrapContext())
+  const rejected = assert.rejects(applying, /timed out after 3 attempts/u)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await nextTurn()
+    assert.equal(signals.length, attempt)
+    time.tick(5_000)
+    await nextTurn()
+    assert.equal(signals[attempt - 1].aborted, true)
+    if (attempt < 3) {
+      time.tick(attempt === 1 ? 250 : 500)
+      await nextTurn()
+    }
+  }
+  await rejected
+  assert.ok(signals.every(signal => signal.aborted))
+})
 
 test('client settings mounts with declared services and reports rejected writes', async () => {
   const plugin = await loadClientPlugin()
@@ -256,9 +394,11 @@ for (const authorizationOk of [false, true]) {
 
 test('client settings does not register UI after bootstrap is cancelled during unload', async () => {
   let release!: (response: Response) => void
+  let requestSignal!: AbortSignal
   const pending = new Promise<Response>(resolve => { release = resolve })
-  const plugin = await loadClientPlugin(async input => {
+  const plugin = await loadClientPlugin(async (input, init) => {
     assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    requestSignal = init?.signal as AbortSignal
     return pending
   })
   let cleanup!: () => void
@@ -279,6 +419,7 @@ test('client settings does not register UI after bootstrap is cancelled during u
   })
   await Promise.resolve()
   cleanup()
+  assert.equal(requestSignal.aborted, true)
   release(Response.json({ ok: true, value: { settingsNamespace: 'custom-qoder-entry' } }))
   await applying
   assert.equal(formLookups, 0)

@@ -69,6 +69,7 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
 
 test('the RPC disposer awaits every route, continues after failure, and is idempotent', async () => {
   const calls: string[] = []
+  let subscriptions = 0
   const routeFailure = new Error('route cleanup failed')
   let release!: () => void
   const deferred = new Promise<void>(resolve => { release = resolve })
@@ -77,7 +78,10 @@ test('the RPC disposer awaits every route, continues after failure, and is idemp
     if (route.path.endsWith('/account')) return deferred
     if (route.path.endsWith('/models')) return Promise.reject(routeFailure)
   })
-  const dispose = registerQoderRpc(context, async () => ({ ok: true, value: {} }))
+  const dispose = registerQoderRpc(context, async () => ({ ok: true, value: {} }), () => {
+    subscriptions++
+    return () => {}
+  })
   const pending = dispose()
   const repeated = dispose()
   assert.strictEqual(repeated, pending)
@@ -86,6 +90,10 @@ test('the RPC disposer awaits every route, continues after failure, and is idemp
 
   await Promise.resolve()
   assert.equal(settled, false)
+  const streamRoute = routes.find(route => route.path.endsWith('/sessionTierEvents'))!
+  const response = await streamRoute.fetch(rpcRequest(streamRoute.path))
+  assert.equal(response.status, 503)
+  assert.equal(subscriptions, 0, 'no new event subscription may start during teardown')
   release()
   await assert.rejects(pending, error => {
     assert.ok(error instanceof AggregateError)
@@ -125,12 +133,14 @@ test('the RPC disposer closes active streams before unregistering routes', async
 
 test('registration rollback preserves its original error and catches cleanup rejection', async () => {
   const registrationError = new Error('route registration failed')
-  const cleanupError = new Error('rollback cleanup failed')
+  const cleanupError = new Error('sensitive rollback diagnostic')
   const cleaned: string[] = []
+  const warnings: unknown[][] = []
   const { context } = captureConnection(route => () => {
     cleaned.push(route.path)
     return Promise.reject(cleanupError)
   })
+  Object.assign(context, { logger: { warn: (...args: unknown[]) => { warnings.push(args) } } })
   const fetchRegistry = (context.connection as any).fetch
   const register = fetchRegistry.register
   fetchRegistry.register = (route: ConnectionFetchRoute) => {
@@ -140,6 +150,8 @@ test('registration rollback preserves its original error and catches cleanup rej
   assert.throws(() => registerQoderRpc(context, async () => ({ ok: true, value: {} })), error => error === registrationError)
   await new Promise<void>(resolve => setImmediate(resolve))
   assert.deepEqual(cleaned, ['/api/qoder-subscription/account'])
+  assert.deepEqual(warnings, [['[Qoder RPC] Registration rollback cleanup failed', { failedCleanups: 1 }]])
+  assert.doesNotMatch(JSON.stringify(warnings), /sensitive rollback diagnostic/u)
 })
 
 test('a registered route decodes the request payload and encodes the handler result', async () => {

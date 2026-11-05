@@ -20,6 +20,8 @@ export class SessionTierState {
   private active = false
   private lifetime = 0
   private revalidateRequested = false
+  private preserveQueuedReadError = false
+  private inFlightRead?: { loading: boolean }
   private unsubscribe?: () => void
   readonly scope: QoderSessionTierScope
   private readonly operations: Operations
@@ -42,22 +44,28 @@ export class SessionTierState {
     this.generation++
     this.readGeneration++
     this.revalidateRequested = false
+    this.preserveQueuedReadError = false
+    this.inFlightRead = undefined
     this.unsubscribe?.()
     this.unsubscribe = undefined
   }
   private matches(value: QoderSessionTierSelection | undefined): value is QoderSessionTierSelection {
     return !!value && value.region === this.scope.region && value.sessionId === this.scope.sessionId && value.modelId === this.scope.modelId
   }
-  private async read(loading: boolean): Promise<void> {
+  private async read(loading: boolean, preserveError = false): Promise<void> {
     if (!this.active) return
     const generation = this.generation
     const readGeneration = ++this.readGeneration
+    const inFlightRead = { loading }
+    this.inFlightRead = inFlightRead
     if (loading) this.publish({ loading: true, operationError: undefined })
     try {
       const result = await this.operations.readSessionTier?.(this.scope)
       const selection = result?.ok ? result.value : undefined
       if (this.active && generation === this.generation && readGeneration === this.readGeneration && !this.snapshot.saving) {
-        this.publish(this.matches(selection) ? { selection, loading: false, error: false, operationError: undefined } : { loading: false, error: true, operationError: result && !result.ok ? result.error : undefined })
+        this.publish(this.matches(selection)
+          ? { selection, loading: false, ...(preserveError ? {} : { error: false, operationError: undefined }) }
+          : { loading: false, error: true, ...(preserveError ? {} : { operationError: result && !result.ok ? result.error : undefined }) })
         this.startQueuedRevalidation()
       }
     } catch {
@@ -65,12 +73,19 @@ export class SessionTierState {
         this.publish({ loading: false, error: true })
         this.startQueuedRevalidation()
       }
+    } finally {
+      if (this.inFlightRead === inFlightRead) this.inFlightRead = undefined
     }
   }
   private startQueuedRevalidation(): void {
-    if (!this.revalidateRequested) return
+    // A listener can synchronously start another save from the publish above.
+    // Leave the request queued until that save has finished instead of
+    // launching a read concurrently with the new write.
+    if (!this.revalidateRequested || !this.active || this.snapshot.saving) return
+    const preserveError = this.preserveQueuedReadError
     this.revalidateRequested = false
-    void this.revalidate()
+    this.preserveQueuedReadError = false
+    void this.read(false, preserveError)
   }
   async refresh() {
     if (!this.active) return
@@ -93,21 +108,30 @@ export class SessionTierState {
   async select(tierKey: string) {
     if (!this.active || this.snapshot.loading || this.snapshot.saving || !this.snapshot.selection) return
     if (tierKey === this.snapshot.selection.tierKey && !this.snapshot.error) return
+    if (this.inFlightRead?.loading === false) this.revalidateRequested = true
     const generation = ++this.generation
     this.readGeneration++
     const lifetime = this.lifetime
+    let writeFailed = false
+    this.preserveQueuedReadError = false
     this.publish({ saving: true, error: false, operationError: undefined })
     try {
       const { sessionId, modelId, region } = this.scope
       const result = await this.operations.setSessionTier?.(sessionId, modelId, tierKey, region)
       const selection = result?.ok ? result.value : undefined
       if (this.active && generation === this.generation) {
-        this.publish(this.matches(selection) ? { selection, error: false, operationError: undefined } : { error: true, operationError: result && !result.ok ? result.error : undefined })
+        if (this.matches(selection)) this.publish({ selection, error: false, operationError: undefined })
+        else {
+          writeFailed = true
+          this.publish({ error: true, operationError: result && !result.ok ? result.error : undefined })
+        }
       }
     } catch {
+      writeFailed = true
       if (this.active && generation === this.generation) this.publish({ error: true })
     } finally {
       if (this.active && lifetime === this.lifetime) {
+        if (writeFailed && this.revalidateRequested) this.preserveQueuedReadError = true
         this.publish({ saving: false })
         this.startQueuedRevalidation()
       }
