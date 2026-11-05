@@ -1,6 +1,7 @@
 /** Bearer-authenticated model-server HTTP SSE transport. */
 
 import type { QoderHostRun } from '../turn.ts'
+import type { QoderBusinessRequest } from './business-finish.ts'
 
 import { attributionHeaders, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { QoderRequestCompression } from './request-compression.ts'
@@ -24,6 +25,7 @@ export interface QoderModelServerDependencies {
   requestCompressionLevel?: number
   /** Immutable host turn boundary captured before provider I/O. */
   hostRun?: QoderHostRun
+  onBusinessRequest?: (request: QoderBusinessRequest) => void
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   refreshCredentials: (rejected: QoderCredentials, signal?: AbortSignal) => Promise<QoderCredentials>
@@ -113,9 +115,11 @@ export async function* streamModelServerChat(
           dispatch: async (wireBody, headers) => {
             headerTimer = setTimeout(() => { headerTimedOut = true; controller.abort('response header timeout') }, dependencies.responseHeaderTimeoutMs)
             try {
-              return await dependencies.fetch(getQoderModelServerUrl(dependencies.region), {
+              const pending = dependencies.fetch(getQoderModelServerUrl(dependencies.region), {
                 method: 'POST', headers, body: wireBody, signal: controller.signal,
               })
+              dependencies.onBusinessRequest?.({ business: request.business, sessionId: request.sessionId, modelKey: request.modelKey, credentials: activeCredentials })
+              return await pending
             } finally { if (headerTimer) clearTimeout(headerTimer) }
           },
           headers: {

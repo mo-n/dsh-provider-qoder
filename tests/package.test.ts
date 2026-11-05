@@ -11,7 +11,9 @@ import type {
   CredentialRef,
   ResolvedCredential,
 } from '@deepseek-ai/dsh-credentials'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { Session } from '@deepseek-ai/dsh-session'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { WebRuntime, type WebSearchProvider, type WebSearchRequest } from '@deepseek-ai/dsh-web'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as plugin from '../src/index.ts'
@@ -156,6 +158,51 @@ class TestCredentials extends CredentialProvider {
     return Promise.resolve()
   }
 }
+
+test('Cordis unload finishes browser-authorized runs before disposing their captured credential lease', async t => {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime).await()
+  await ctx.plugin(TestCredentials).await()
+  ctx.provide('connection', { fetch: { register: () => () => {} } } as any)
+  ctx.provide('attachments', { imageLimits: { maxImagesPerMessage: 20, maxMessageImageBytes: 100 * 1024 * 1024 } } as any)
+  const grant = {
+    id: 'browser-unload', region: 'global', expiresAt: Date.now() + 3_600_000,
+    refreshToken: 'fixture-refresh', credentials: { userID: 'browser-unload-user', authToken: 'fixture-device', name: '', email: '', machineID: 'fixture-machine' },
+  }
+  t.mock.method(ctx.credentials, 'readRecord', async () => ({ kind: 'grant', payload: { version: 1, method: 'browser', grant } }))
+  let adapter!: QoderAdapter
+  const register = ctx.llm.registerAdapter.bind(ctx.llm)
+  t.mock.method(ctx.llm, 'registerAdapter', (ids: Parameters<typeof register>[0], value: Parameters<typeof register>[1]) => {
+    adapter = value as QoderAdapter
+    return register(ids, value)
+  })
+  let finishes = 0
+  const subscribers: Array<string | null> = []
+  t.mock.method(globalThis, 'fetch', (async (input, init) => {
+    if (String(input).includes('/business/finish')) {
+      finishes++
+      subscribers.push(new Headers(init?.headers).get('cosy-user'))
+      return Response.json({})
+    }
+    if (String(input).includes('/agent_chat_generation')) {
+      return new Response(`data: ${JSON.stringify({ statusCodeValue: 200, body: JSON.stringify({ choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }] }) })}\n\ndata: [DONE]\n\n`)
+    }
+    throw new Error('Unexpected mocked Qoder operation')
+  }) as typeof fetch)
+  const fiber = ctx.plugin({ name: plugin.name, inject: plugin.inject, apply: plugin.apply })
+  await fiber.await()
+  try {
+    const session = Session.create(SessionId('browser-unload-session'))
+    ctx.emit('session/event', session, session.append('turn/start', { turn: 1 }))
+    for await (const _chunk of adapter.stream({ provider: QODER_PROVIDER_ID, model: 'cmodel', sessionId: session.id,
+      messages: [createUserMessage({ content: [{ type: 'text', text: 'fixture' }], source: { kind: 'user' } })],
+    })) { /* drain */ }
+    assert.equal(finishes, 0)
+    await fiber.dispose()
+    assert.equal(finishes, 1)
+    assert.deepEqual(subscribers, ['browser-unload-user'])
+  } finally { await ctx.fiber.dispose() }
+})
 
 test('package exports the expected plugin surface', () => {
   assert.equal(plugin.name, 'provider-qoder')

@@ -44,7 +44,13 @@ type QoderLogger = NonNullable<QoderTransportOptions['logger']>
 export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void {
   const leases = new QoderQueueLeases()
   const queueStatus = new QoderQueueStatusStore()
-  ctx.effect(() => async () => { queueStatus.dispose(); await leases.dispose() }, 'provider-qoder: queue lifecycle')
+  let authorization: QoderBrowserAuthorizationManager
+  ctx.effect(() => async () => {
+    queueStatus.dispose()
+    // Cordis disposes separate effects concurrently. Preserve captured browser
+    // credentials until the abandoned runs have finished their bounded reports.
+    try { await leases.dispose() } finally { await authorization?.dispose() }
+  }, 'provider-qoder: run and authorization lifecycle')
   bindQoderQueueLeases(ctx, leases)
   const config = readConfig(input)
   const settingsNamespace = qoderSettingsNamespace(ctx)
@@ -59,7 +65,6 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   }
 
   let current = (): QoderConfig => baseConfig
-  let authorization: QoderBrowserAuthorizationManager
   const createTransport = (value: QoderRuntimeConfig, resolvePat?: () => Promise<string>): QoderTransport => createQoderTransport({
     ...value,
     resolvePat: resolvePat ?? (() => resolveManagedQoderPat(ctx.credentials)),
@@ -98,7 +103,6 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       void catalog.refresh()
     },
   })
-  ctx.effect(() => () => authorization.dispose(), 'provider-qoder: browser authorization lifecycle')
   const catalog = new QoderCatalogLifecycle({
     resolveTransport: () => runtime.transport,
     region: () => runtime.config.region,

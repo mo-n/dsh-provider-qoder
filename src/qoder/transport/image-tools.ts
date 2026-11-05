@@ -15,6 +15,8 @@ import { qoderEncodeBody } from './wire/encoding.ts'
 import { qoderTurnTracker, qoderSessionId } from './wire/prepare.ts'
 import { qoderIdeVersion } from './wire/client-identity.ts'
 import { defaultMaxErrorBytes, defaultMaxJsonBytes, readLimitedText } from './request.ts'
+import type { QoderBusinessRequest } from './business-finish.ts'
+import type { QoderBusiness } from './wire/model-types.ts'
 
 type Obj = Record<string, unknown>
 const record = (value: unknown): Obj | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Obj : undefined
@@ -59,6 +61,7 @@ export interface ImageToolDependencies {
   logger?: QoderLogger
   fetch: typeof fetch
   region: QoderRegion
+  onBusinessRequest?: (request: QoderBusinessRequest) => void
   resolveCredentials: (signal?: AbortSignal) => Promise<CosyCredentials>
   refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
   timeoutMs?: number
@@ -73,7 +76,7 @@ export function imageToolUrl(region: QoderRegion, kind: 'imageSearch' | 'generat
   // WASM normalizes an existing /algo prefix instead of prepending it twice.
   return `${resolveQoderEndpoints(region).baseUrl}algo/api/v2/service/pro/${kind}?Encode=1`
 }
-async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: ImageToolDependencies, signal?: AbortSignal, requestSetId?: string, callerSignal?: AbortSignal): Promise<unknown> {
+async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: ImageToolDependencies, signal?: AbortSignal, requestSetId?: string, callerSignal?: AbortSignal, business?: QoderBusiness): Promise<unknown> {
   const timeout = AbortSignal.timeout(deps.timeoutMs ?? (kind === 'generateImage' ? 180_000 : 30_000))
   const activeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
   activeSignal.throwIfAborted()
@@ -82,9 +85,11 @@ async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: Ima
   let credentials = await deps.resolveCredentials(activeSignal)
   for (let attempt = 0; attempt < 2; attempt++) {
     activeSignal.throwIfAborted()
-    const response = await deps.fetch(url, { method: 'POST', body, redirect: 'error', signal: activeSignal,
+    const pending = deps.fetch(url, { method: 'POST', body, redirect: 'error', signal: activeSignal,
       headers: { ...buildAuthHeaders(body, url, credentials), 'Content-Type': 'application/json', Accept: 'application/json', 'Accept-Encoding': 'identity',
         ...requestSetId ? { 'X-RequestSet-ID': requestSetId } : {} } })
+    if (business) deps.onBusinessRequest?.({ business, sessionId: String(outer.sessionId), modelKey: 'ge3i', credentials })
+    const response = await pending
     if (kind === 'generateImage') deps.logger?.debug?.('[Qoder Image] Generation response headers', { requestId: outer.requestId, status: response.status, attempt: attempt + 1 })
     if (!response.ok) {
       if (kind === 'imageSearch') {
@@ -389,7 +394,7 @@ export async function generateImage(request: QoderImageGenerationRequest, deps: 
     begin('generation')
     const generationTimeout = AbortSignal.timeout(deps.timeoutMs ?? 180_000)
     activeSignal = signal ? AbortSignal.any([signal, generationTimeout]) : generationTimeout
-    try { parsed = record(await post('generateImage', { payload: JSON.stringify({ model: 'ge3i', prompt: request.prompt, size: request.size ?? '1024x1024', metadata: { business } }), encodeVersion: '1', sessionId: identity.sessionId, requestId }, deps, activeSignal, identity.requestSetId, signal)) } catch (error) {
+    try { parsed = record(await post('generateImage', { payload: JSON.stringify({ model: 'ge3i', prompt: request.prompt, size: request.size ?? '1024x1024', metadata: { business } }), encodeVersion: '1', sessionId: identity.sessionId, requestId }, deps, activeSignal, identity.requestSetId, signal, business)) } catch (error) {
       failure(error)
       if (signal?.aborted || error instanceof QoderLlmError && error.code === 'ABORTED' || error instanceof Error && error.name === 'AbortError') {
         if (error instanceof QoderLlmError && error.code === 'ABORTED') throw error

@@ -447,6 +447,7 @@ test('a delayed old finish cannot release the next real turn lease after identic
       const url = new URL(String(input))
       if (url.pathname.endsWith('/jobToken/exchange')) return Response.json({ token: 'offline-token' })
       if (url.pathname.endsWith('/userinfo')) return Response.json({ id: 'offline-user' })
+      if (url.pathname.endsWith('/business/finish')) return Response.json({})
       if (url.pathname.endsWith('/queue/status')) {
         activeLeases.add(url.searchParams.get('requestSetId')!)
         return Response.json({ isQueued: false })

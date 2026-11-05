@@ -3,4 +3,12 @@
  */
 export interface QoderHostRun {
   readonly id: string
+  /** Register transport-owned finalization, including work prepared after the boundary closed. */
+  readonly onEnd?: (finish: (end: QoderRunEnd) => Promise<void>) => void
+}
+
+/** Terminal or abandonment state of the host turn, independent of model-step completion. */
+export interface QoderRunEnd {
+  readonly stage: 'complete' | 'abort' | 'error'
+  readonly endedAt: number
 }

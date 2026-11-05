@@ -29,6 +29,8 @@ import type { QoderCredentialLease } from '../authorization.ts'
 import type { CosyCredentials } from './wire/cosy.ts'
 import { streamModelServerChat } from './model-server.ts'
 import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
+import { retainQoderBusiness } from './business-finish.ts'
+import type { QoderHostRun } from '../turn.ts'
 
 export const defaultStreamIdleTimeoutMs = 5 * 60 * 1000
 
@@ -172,14 +174,18 @@ export class DefaultQoderTransport implements QoderTransport {
   async generateImage(request: QoderImageGenerationRequest, signal?: AbortSignal): Promise<QoderImageGenerationResult> {
     validateImageGeneration(request)
     const hostRun = request.hostRun ?? (request.sessionId === undefined ? undefined : this.captureQueueLeaseOwner?.(request.sessionId)?.run)
-    return generateImage({ ...request, hostRun }, await this.imageToolDependencies(signal), signal)
+    return generateImage({ ...request, hostRun }, await this.imageToolDependencies(signal, hostRun), signal)
   }
 
-  private async imageToolDependencies(signal?: AbortSignal): Promise<ImageToolDependencies> {
+  private async imageToolDependencies(signal?: AbortSignal, hostRun?: QoderHostRun): Promise<ImageToolDependencies> {
     const lease = await this.lease(signal)
     return { fetch: this.fetchImpl, region: this.region, logger: this.logger,
       resolveCredentials: nextSignal => lease.resolve(nextSignal),
       refreshCredentials: (rejected, nextSignal) => lease.resolve(nextSignal, rejected.authToken),
+      onBusinessRequest: request => retainQoderBusiness(hostRun, request, {
+        fetch: this.fetchImpl, region: this.region, logger: this.logger,
+        resolveCredentials: (nextSignal, rejectedToken) => lease.resolve(nextSignal, rejectedToken),
+      }),
     }
   }
 
@@ -245,6 +251,10 @@ export class DefaultQoderTransport implements QoderTransport {
       modelQueueMaxWaitMs: this.modelQueueMaxWaitMs,
       onQueueUpdate: this.onQueueUpdate,
       hostRun: queueOwner?.run,
+      onBusinessRequest: options.purpose === undefined ? request => retainQoderBusiness(queueOwner?.run, request, {
+        fetch: this.fetchImpl, region: this.region, logger: this.logger,
+        resolveCredentials: (signal, rejectedToken) => lease.resolve(signal, rejectedToken),
+      }) : undefined,
       onQueueLease: queueOwner?.retain,
       resolveCredentials: async (refresh, signal) => {
         const current = await lease.resolve(signal)
