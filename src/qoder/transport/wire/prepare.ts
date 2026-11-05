@@ -57,6 +57,9 @@ export function qoderSessionId(userId: string, sessionId?: string, identityScope
 
 
 function callKind(options: GenerateOptions): QoderCallKind {
+  // Newer DSH hosts provide review attribution; older pinned host types do not
+  // yet include this purpose. Match only the explicit runtime value.
+  if (String(options.purpose) === 'auto-review') return 'auto-review'
   return options.purpose === undefined ? 'conversation' : 'auxiliary'
 }
 

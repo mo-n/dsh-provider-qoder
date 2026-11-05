@@ -11,7 +11,8 @@
  * weakly owned identity survives history projections and standalone-cache eviction.
  * Named standalone calls infer boundaries from the multiset of user-role
  * messages; requests without a DSH session use a scoped fixed-time window.
- * Auxiliary calls always receive independent identities.
+ * Explicit auto review uses a separate scoped fixed-time window; other
+ * auxiliary calls always receive independent identities.
  *
  * Standalone limit: text identifies a message because wire messages lack host
  * message IDs. Identical input replacing an earlier occurrence during compaction
@@ -47,7 +48,7 @@ export interface QoderTurnIdentity {
  * the same provider with the same session identity but a message list of their
  * own, and those must never move a turn's boundary.
  */
-export type QoderCallKind = 'conversation' | 'auxiliary'
+export type QoderCallKind = 'conversation' | 'auxiliary' | 'auto-review'
 
 /** Bounded per-session memory: one entry per conversation this process serves. */
 export interface QoderTurnTrackerOptions {
@@ -71,7 +72,7 @@ export interface QoderTurnTrackerOptions {
    * real idle window.
    */
   now?: () => number
-  /** Fixed lifetime for no-session aggregation windows. */
+  /** Fixed lifetime for fallback and auto-review aggregation windows. */
   unscopedWindowTtlMs?: number
 }
 
@@ -126,7 +127,7 @@ interface SessionTurnState {
   sessionId: string
 }
 
-interface UnscopedWindowState {
+interface AggregationWindowState {
   readonly expiresAt: number
   readonly identity: QoderTurnIdentity
 }
@@ -260,9 +261,9 @@ export class QoderTurnTracker {
   // Weak ownership keeps active/late requests stable without retaining completed runs.
   private hosted = new WeakMap<QoderHostRun, Map<string, { modelKey?: string; identity: QoderTurnIdentity }>>()
   private readonly sessions = new Map<string, SessionTurnState>()
-  private readonly unscopedWindows = new Map<string, UnscopedWindowState>()
+  private readonly aggregationWindows = new Map<string, AggregationWindowState>()
   /** Process-local session mapping survives the bounded five-minute window cache. */
-  private readonly unscopedSessionIds = new Map<string, string>()
+  private readonly aggregationSessionIds = new Map<string, string>()
 
   constructor(options: QoderTurnTrackerOptions = {}) {
     this.maxSessions = options.maxSessions ?? defaultMaxSessions
@@ -292,9 +293,19 @@ export class QoderTurnTracker {
   ): QoderTurnIdentity {
     const now = this.now()
 
+    // Explicit review calls have their own fixed-time grouping. A supplied DSH
+    // session isolates reviews from other conversations; the captured host run
+    // must not let reviews open or claim the main conversation identity.
+    if (kind === 'auto-review' && resolveOptions.scope !== undefined) {
+      return this.resolveAggregationWindow(
+        JSON.stringify(['auto-review', resolveOptions.scope, sessionId ?? null]),
+        modelKey ?? '', requestId, messages, now, resolveOptions.sessionId,
+      )
+    }
+
     if (sessionId === undefined || sessionId.length === 0) {
       if (kind === 'conversation' && hostRun === undefined && resolveOptions.scope !== undefined) {
-        return this.resolveUnscopedWindow(resolveOptions.scope, modelKey ?? '', requestId, messages, now)
+        return this.resolveAggregationWindow(resolveOptions.scope, modelKey ?? '', requestId, messages, now)
       }
       const independentSessionId = resolveOptions.sessionId ?? crypto.randomUUID()
       return {
@@ -308,7 +319,7 @@ export class QoderTurnTracker {
       }
     }
 
-    if (kind === 'auxiliary') {
+    if (kind === 'auxiliary' || kind === 'auto-review') {
       if (this.sessions.has(sessionId)) {
         this.sessions.get(sessionId)!.lastTouchedAt = now
       }
@@ -518,31 +529,32 @@ export class QoderTurnTracker {
   /** Forget every session. */
   clear(): void {
     this.sessions.clear()
-    this.unscopedWindows.clear()
-    this.unscopedSessionIds.clear()
+    this.aggregationWindows.clear()
+    this.aggregationSessionIds.clear()
     this.hosted = new WeakMap()
   }
 
-  /** Resolve a fixed five-minute identity window for an unscoped conversation call. */
-  private resolveUnscopedWindow(
+  /** Resolve a fixed five-minute identity window for fallback or review calls. */
+  private resolveAggregationWindow(
     scope: string,
     modelKey: string,
     requestId: string,
     messages: readonly QoderWireMessage[],
     now: number,
+    wireSessionId?: string,
   ): QoderTurnIdentity {
     const key = `${scope}\0${modelKey}`
-    const previous = this.unscopedWindows.get(key)
+    const previous = this.aggregationWindows.get(key)
     if (previous !== undefined && now < previous.expiresAt) {
       return { ...previous.identity, chatRecordId: requestId, businessStage: 'processing' }
     }
 
     // The wire session remains stable over multiple windows; only the agent run
     // and request set roll at the fixed boundary.
-    let sessionId = this.unscopedSessionIds.get(key)
+    let sessionId = this.aggregationSessionIds.get(key)
     if (sessionId === undefined) {
-      sessionId = crypto.randomUUID()
-      this.unscopedSessionIds.set(key, sessionId)
+      sessionId = wireSessionId ?? crypto.randomUUID()
+      this.aggregationSessionIds.set(key, sessionId)
     }
     const identity: QoderTurnIdentity = {
       requestSetId: crypto.randomUUID(),
@@ -553,19 +565,19 @@ export class QoderTurnTracker {
       sessionId,
       businessName: firstPromptName(messages),
     }
-    const window: UnscopedWindowState = {
+    const window: AggregationWindowState = {
       expiresAt: now + this.unscopedWindowTtlMs,
       identity,
     }
-    this.unscopedWindows.set(key, window)
-    this.evictUnscopedWindows(now)
+    this.aggregationWindows.set(key, window)
+    this.evictAggregationWindows(now)
     return identity
   }
 
   /** Prune only expired windows; an active window must survive scope pressure. */
-  private evictUnscopedWindows(now: number): void {
-    for (const [key, window] of this.unscopedWindows) {
-      if (window.expiresAt <= now) this.unscopedWindows.delete(key)
+  private evictAggregationWindows(now: number): void {
+    for (const [key, window] of this.aggregationWindows) {
+      if (window.expiresAt <= now) this.aggregationWindows.delete(key)
     }
   }
 
