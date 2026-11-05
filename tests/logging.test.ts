@@ -28,6 +28,41 @@ test('Qoder diagnostics redact token-like values in JSON and plain-text payloads
   assert.doesNotMatch(String(redactLogPayload('upstream rejected pt-plain-secret')), /pt-plain-secret/)
 })
 
+test('Qoder diagnostics redact JSON credentials in error messages and arrays', () => {
+  const message = JSON.stringify([{ token: 'arbitrary-private-value', code: 'AUTH' }])
+  const output = JSON.stringify(redactLogValue(new Error(message)))
+  assert.doesNotMatch(output, /arbitrary-private-value/)
+  assert.match(output, /AUTH/)
+  assert.match(output, /REDACTED/)
+})
+
+test('Qoder diagnostics omit encoded credentials when JSON cannot be safely inspected', () => {
+  const secret = 'arbitrary-private-value'
+  const json = JSON.stringify({ token: secret })
+  let encoded = json
+  for (let index = 0; index < 6; index++) encoded = JSON.stringify(encoded)
+  for (const value of [
+    { a: { b: { c: { d: json } } } },
+    encoded,
+    JSON.stringify({ token: secret, padding: 'x'.repeat(16 * 1024) }),
+    `{"token":"${secret}",`,
+  ]) {
+    const output = JSON.stringify(redactLogValue(value))
+    assert.doesNotMatch(output, /arbitrary-private-value/)
+    assert.match(output, /TRUNCATED/)
+  }
+})
+
+test('parsed subscriber profile diagnostics mask every supported user identifier spelling', () => {
+  const entries: unknown[] = []
+  logParsedResponse({ debug: (...args) => entries.push(args) }, 'auth.user-info', {
+    id: 'subscriber-123456', uid: 'subscriber-123456',
+    userId: 'subscriber-123456', user_id: 'subscriber-123456',
+  })
+  assert.doesNotMatch(JSON.stringify(entries), /subscriber-123456/)
+  assert.match(JSON.stringify(entries), /…3456/)
+})
+
 test('Qoder diagnostics preserve nested fetch failure codes while redacting causes', () => {
   const cause = Object.assign(new Error('connect timeout pt-connect-secret'), {
     code: 'UND_ERR_CONNECT_TIMEOUT',

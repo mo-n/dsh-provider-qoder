@@ -10,7 +10,6 @@ import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-web'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { QoderTransportRuntime, transportConfig, type QoderRuntimeConfig } from './transport-runtime.ts'
 import { QoderAdapter } from './adapter.ts'
 import { QODER_PROVIDER_ID } from './provider.ts'
@@ -20,13 +19,14 @@ import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import { resolveManagedQoderPat } from './credential.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
+import { redactLogValue } from '../qoder/transport/logging.ts'
 import {
   createQoderTransport,
   type QoderTransport,
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
 import { modelsFor, readConfig, type Config as QoderConfig, type LiveConfig } from './config.ts'
-import { bindQoderSettings } from './settings.ts'
+import { bindQoderSettings, qoderSettingsNamespace } from './settings.ts'
 import { createQoderRpcHandler } from './rpc-handler.ts'
 import { registerQoderRpc } from './rpc.ts'
 import { QoderBrowserAuthorizationManager, browserAuthorizationKey } from './browser-authorization.ts'
@@ -36,20 +36,10 @@ export const name = 'provider-qoder'
 export const inject = ['llm', 'credentials', 'connection', 'attachments']
 
 const providerQoder = QODER_PROVIDER_ID
-const settingsNamespace = 'provider-qoder' as SettingsNamespace
 const fiberDisposed: FiberState = 4
 const fiberUnloading: FiberState = 5
 
 type QoderLogger = NonNullable<QoderTransportOptions['logger']>
-
-function logError(error: unknown): unknown {
-  if (!(error instanceof Error)) return { name: 'UnknownError' }
-  return {
-    name: error.name,
-    message: error.message,
-    ...'code' in error ? { code: error.code } : {},
-  }
-}
 
 export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void {
   const leases = new QoderQueueLeases()
@@ -57,6 +47,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   ctx.effect(() => async () => { queueStatus.dispose(); await leases.dispose() }, 'provider-qoder: queue lifecycle')
   bindQoderQueueLeases(ctx, leases)
   const config = readConfig(input)
+  const settingsNamespace = qoderSettingsNamespace(ctx)
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
   const initialRegion = config.region ?? 'global'
   const baseConfig: QoderConfig = {
@@ -113,7 +104,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     region: () => runtime.config.region,
     configuredModels: region => modelsFor(current(), region),
     onDiscovered: () => registration.replace([providerQoder]),
-    onPersistenceError: error => logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', logError(error)),
+    onPersistenceError: error => logger?.error?.('[Qoder Settings] Failed to synchronize model catalog', redactLogValue(error)),
   })
   ctx.effect(() => () => catalog.dispose(), 'provider-qoder: catalog lifecycle')
   const adapter = new QoderAdapter({
@@ -235,6 +226,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
       const result = await controller.resolveAgent(SessionId(sessionId))
       if ('error' in result) throw result.error
     },
+    settingsNamespace: () => settingsNamespace,
     logger,
   })
 
@@ -243,7 +235,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   } catch (error) {
     // The settings RPC is an optional surface: a registration failure must not
     // take the model adapter or the web-search router down with it.
-    logger?.error?.('[Qoder RPC] Failed to register the settings RPC routes', logError(error))
+    logger?.error?.('[Qoder RPC] Failed to register the settings RPC routes', redactLogValue(error))
   }
 
   bindQoderSearch(ctx, {

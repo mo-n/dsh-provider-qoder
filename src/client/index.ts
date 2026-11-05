@@ -24,9 +24,9 @@ import { en, zh, type QoderCredentialCopy } from './locales.ts'
 import { createSessionTierEvents } from './session-tier-events.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
 import { installQoderSettingsNavIcon } from './settings-nav-icon.ts'
+import { readQoderSettingsNamespace } from './settings-bootstrap.ts'
 
 const localeNamespace = 'settings.qoderCredential'
-const settingsNamespace = 'provider-qoder'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -44,18 +44,40 @@ const fill = (text: string, values?: Record<string, string | number>): string =>
   )
 }
 
-export function apply(ctx: ClientContext): void {
-  mount(ctx, ctx.configForms.get<QoderModelSettingsSection>(settingsNamespace))
+export function apply(ctx: ClientContext): Promise<void> {
+  // Resolve declared services before the asynchronous bootstrap so missing
+  // injection remains an immediate startup error rather than a misleading
+  // namespace/network failure.
+  void ctx.configForms
+  assertCredentials(ctx)
+
+  const controller = new AbortController()
+  let disposed = false
+  ctx.effect(() => () => {
+    disposed = true
+    controller.abort()
+  }, 'provider-qoder: settings namespace bootstrap')
+
+  const rpc = createQoderRpcCaller()
+  return readQoderSettingsNamespace(rpc, controller.signal).then(settingsNamespace => {
+    if (disposed || controller.signal.aborted) return
+    if (settingsNamespace === undefined) return
+    mount(ctx, ctx.configForms.get<QoderModelSettingsSection>(settingsNamespace), rpc)
+  })
 }
 
-function mount(ctx: ClientContext, modelScope: ModelForm): void {
-  ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'provider-qoder: credential copy')
-
+function assertCredentials(ctx: ClientContext): void {
   const credentials = ctx.remote.credentials
   if (!credentials || typeof credentials.describe !== 'function' || typeof credentials.set !== 'function' || typeof credentials.unset !== 'function') {
     throw new Error('Qoder settings require the DSH credentials Remote API.')
   }
-  const rpc = createQoderRpcCaller()
+}
+
+function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof createQoderRpcCaller>): void {
+  ctx.effect(() => ctx.locale.register(localeNamespace, { zh, en }), 'provider-qoder: credential copy')
+
+  const credentials = ctx.remote.credentials
+  assertCredentials(ctx)
   const tierEvents = createSessionTierEvents()
   ctx.effect(() => () => tierEvents.dispose(), 'provider-qoder: session context tier events')
 

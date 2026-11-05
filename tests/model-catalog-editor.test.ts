@@ -1,4 +1,5 @@
 import { accepted as acceptedResult } from './helpers/operation-result.ts'
+import { deferred } from './helpers/timing.ts'
 import type { OperationResult } from '../src/client/operation-result.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,12 +13,6 @@ const globalModels: QoderCatalogModel[] = [
   { id: 'global-b', name: 'Global B' },
 ]
 const chinaModels: QoderCatalogModel[] = [{ id: 'china-a', name: 'China A' }]
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (error: Error) => void
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
-  return { promise, resolve, reject }
-}
 
 test('region switch discards a late discovery without submitting a save', async () => {
   const result = deferred<QoderModelDiscoveryResult>()

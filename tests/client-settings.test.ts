@@ -5,12 +5,21 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { nextTurn } from './helpers/timing.ts'
 
-const loadClientPlugin = async (send: typeof fetch = async () => { throw new Error('Unexpected network request') }) => {
-  let plugin!: { apply(ctx: unknown): void; inject: string[] }
+const loadClientPlugin = async (send: typeof fetch = async (input) => {
+  if (String(input).endsWith('/bootstrap')) {
+    return Response.json({ ok: true, value: { settingsNamespace: 'provider-qoder' } })
+  }
+  throw new Error('Unexpected network request')
+}) => {
+  let plugin!: { apply(ctx: unknown): Promise<void>; inject: string[] }
   const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   runInNewContext(source, {
     console,
+    AbortController,
+    setTimeout,
+    clearTimeout,
     window: {
       __ModuleLoader__: {
         load: ({ factory }: { factory: (require: unknown) => typeof plugin }) => {
@@ -26,13 +35,191 @@ const loadClientPlugin = async (send: typeof fetch = async () => { throw new Err
   return plugin
 }
 
-test('client settings declares required services', async () => {
-  const plugin = await loadClientPlugin()
-  assert.deepEqual([...plugin.inject], ['slots', 'locale', 'remote', 'remote.credentials', 'configForms'])
+function bootstrapContext(onFormLookup: (namespace: string) => void = () => {}) {
+  const form = { getSnapshot: () => ({ value: { modelsByRegion: {} } }), subscribe: () => () => {}, set: async () => true }
+  const credentials = {
+    describe: async () => ({ ok: true, value: {} }),
+    set: async () => ({ ok: true, value: undefined }),
+    unset: async () => ({ ok: true, value: undefined }),
+  }
+  return {
+    configForms: { get: (namespace: string) => { onFormLookup(namespace); return form } },
+    effect: (callback: () => unknown) => callback(),
+    locale: { register() {}, bind: () => (key: string) => key },
+    remote: { credentials },
+    inject() {},
+    slots: { inject: (_name: string, callback: () => unknown) => callback(), register: () => {} },
+  }
+}
+
+test('client settings mounts under the namespace returned by the host', async () => {
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    return Response.json({ ok: true, value: { settingsNamespace: 'custom-qoder-entry' } })
+  })
+  let namespace: string | undefined
+  const form = { getSnapshot: () => ({ value: { modelsByRegion: {} } }) }
+  const credentials = {
+    describe: async () => ({ ok: true, value: {} }),
+    set: async () => ({ ok: true, value: undefined }),
+    unset: async () => ({ ok: true, value: undefined }),
+  }
+  await plugin.apply({
+    configForms: { get: (id: string) => { namespace = id; return form } },
+    effect: (callback: () => unknown) => callback(),
+    locale: { register() {}, bind: () => (key: string) => key },
+    remote: { credentials },
+    inject() {},
+    slots: { inject: (_name: string, callback: () => unknown) => callback(), register: () => {} },
+  })
+  assert.equal(namespace, 'custom-qoder-entry')
+})
+
+for (const [label, envelope] of [
+  ['host bootstrap failure', { ok: false, error: { code: 'INTERNAL', message: 'host unavailable' } }],
+  ['empty host namespace', { ok: true, value: {} }],
+] as const) {
+  test(`client settings rejects ${label} without resolving a fallback form`, async () => {
+    let calls = 0
+    const plugin = await loadClientPlugin(async input => {
+      assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+      calls++
+      return Response.json(envelope)
+    })
+    let formLookups = 0
+    await assert.rejects(plugin.apply({
+      ...bootstrapContext(() => { formLookups++ }),
+    }), /Qoder settings namespace bootstrap/u)
+    assert.equal(formLookups, 0)
+    assert.equal(calls, 1)
+  })
+}
+
+test('client settings retries temporary bootstrap failures and mounts after a later success', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    if (calls === 1) return new Response('', { status: 503 })
+    if (calls === 2) return new Response('', { status: 429 })
+    return Response.json({ ok: true, value: { settingsNamespace: 'retry-entry' } })
+  })
+  let lookedUp = 0
+  const applying = plugin.apply(bootstrapContext(() => { lookedUp++ }))
+  await nextTurn()
+  assert.equal(calls, 1)
+  time.tick(250)
+  await nextTurn()
+  assert.equal(calls, 2)
+  time.tick(500)
+  await nextTurn()
+  await applying
+  assert.equal(calls, 3)
+  assert.equal(lookedUp, 1)
+})
+
+test('client settings exhausts temporary bootstrap retries without resolving a fallback form', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    return new Response('', { status: 503 })
+  })
+  let lookedUp = 0
+  const applying = plugin.apply(bootstrapContext(() => { lookedUp++ }))
+  const rejected = assert.rejects(applying, /failed after 3 attempts/u)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await nextTurn()
+    assert.equal(calls, attempt)
+    if (attempt < 3) {
+      time.tick(attempt === 1 ? 250 : 500)
+      await nextTurn()
+    }
+  }
+  await rejected
+  assert.equal(lookedUp, 0)
+})
+
+test('client settings does not retry permanent bootstrap authorization failures', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    return new Response('', { status: 401 })
+  })
+  const applying = plugin.apply(bootstrapContext())
+  await assert.rejects(applying, /failed after 1 attempt/u)
+  assert.equal(calls, 1)
+})
+
+test('client settings cancels a pending retry delay during unload', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  const plugin = await loadClientPlugin(async input => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    calls++
+    return new Response('', { status: 503 })
+  })
+  let cleanup!: () => void
+  let lookedUp = 0
+  const context = {
+    ...bootstrapContext(() => { lookedUp++ }),
+    effect: (callback: () => unknown) => {
+      const disposer = callback()
+      cleanup = typeof disposer === 'function' ? () => { disposer() } : () => {}
+      return () => {}
+    },
+  }
+  const applying = plugin.apply(context)
+  await nextTurn()
+  assert.equal(calls, 1)
+  cleanup()
+  time.tick(250)
+  await nextTurn()
+  await applying
+  assert.equal(calls, 1)
+  assert.equal(lookedUp, 0)
+})
+
+test('client settings bounds each unresponsive bootstrap request and aborts every timed-out signal', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['setTimeout'] })
+  const signals: AbortSignal[] = []
+  const plugin = await loadClientPlugin(async (input, init) => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    assert.ok(init?.signal)
+    signals.push(init.signal)
+    return new Promise<Response>((_resolve, _reject) => {
+      // The request intentionally never resolves; the client timeout owns the bound.
+    })
+  })
+  const applying = plugin.apply(bootstrapContext())
+  const rejected = assert.rejects(applying, /timed out after 3 attempts/u)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await nextTurn()
+    assert.equal(signals.length, attempt)
+    time.tick(5_000)
+    await nextTurn()
+    assert.equal(signals[attempt - 1].aborted, true)
+    if (attempt < 3) {
+      time.tick(attempt === 1 ? 250 : 500)
+      await nextTurn()
+    }
+  }
+  await rejected
+  assert.ok(signals.every(signal => signal.aborted))
 })
 
 test('client settings mounts with declared services and reports rejected writes', async () => {
   const plugin = await loadClientPlugin()
+  assert.deepEqual([...plugin.inject], ['slots', 'locale', 'remote', 'remote.credentials', 'configForms'])
   let namespace: string | undefined
   let operations!: {
     storeRegion(region: string): Promise<OperationResult<void>>
@@ -88,7 +275,7 @@ test('client settings mounts with declared services and reports rejected writes'
   ctx.remote.credentials = {} as typeof validCredentials
   assert.throws(() => plugin.apply(guardedContext(declared)), /require the DSH credentials Remote API/)
   ctx.remote.credentials = validCredentials
-  plugin.apply(guardedContext(declared))
+  await plugin.apply(guardedContext(declared))
   assert.equal(namespace, 'provider-qoder')
   assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
   assert.equal((await operations.storeRegion('china')).ok, true)
@@ -149,6 +336,9 @@ test('new conversation receives the default model directory before a model selec
     ctx.provide('remote.credentials', ctx.remote.credentials)
     ctx.provide('configForms', { get: () => form } as any)
     await ctx.plugin(plugin).await()
+    // The browser bundle and Cordis test fixture run in separate realms; let
+    // the bootstrap continuation cross the realm before asserting registrations.
+    await new Promise<void>(resolve => setImmediate(resolve))
     assert.ok(entries.has('settings.section'))
     assert.equal(entries.has('conversation.input.right'), false)
 
@@ -176,12 +366,14 @@ for (const authorizationOk of [false, true]) {
     const paths: string[] = []
     const plugin = await loadClientPlugin((async (path: string) => {
       paths.push(path)
-      return Response.json(path.endsWith('/authorization')
+      return Response.json(path.endsWith('/bootstrap')
+        ? { ok: true, value: { settingsNamespace: 'provider-qoder' } }
+        : path.endsWith('/authorization')
         ? authorizationOk ? { ok: true, value: { method: 'browser' } } : { ok: false, error: { code: 'INTERNAL' } }
         : { ok: true, value: { method: 'pat' } })
     }) as typeof fetch)
     let operations!: { store(value: string): Promise<OperationResult<void>> }
-    plugin.apply({
+    await plugin.apply({
       configForms: { get: () => ({ getSnapshot: () => ({ value: { region: 'global' } }) }) },
       effect: (callback: () => unknown) => callback(),
       locale: { register() {}, bind: () => (key: string) => key },
@@ -195,3 +387,36 @@ for (const authorizationOk of [false, true]) {
     assert.equal(paths.some(path => path.endsWith('/selectAuthorization')), authorizationOk)
   })
 }
+
+test('client settings does not register UI after bootstrap is cancelled during unload', async () => {
+  let release!: (response: Response) => void
+  let requestSignal!: AbortSignal
+  const pending = new Promise<Response>(resolve => { release = resolve })
+  const plugin = await loadClientPlugin(async (input, init) => {
+    assert.equal(String(input), '/api/qoder-subscription/bootstrap')
+    requestSignal = init?.signal as AbortSignal
+    return pending
+  })
+  let cleanup!: () => void
+  let formLookups = 0
+  const credentials = {
+    describe: async () => ({ ok: true, value: {} }),
+    set: async () => ({ ok: true, value: undefined }),
+    unset: async () => ({ ok: true, value: undefined }),
+  }
+  const applying = plugin.apply({
+    configForms: { get: () => { formLookups++; throw new Error('form must not be resolved after unload') } },
+    effect: (callback: () => unknown) => {
+      const disposer = callback()
+      cleanup = typeof disposer === 'function' ? () => { disposer() } : () => {}
+      return () => {}
+    },
+    remote: { credentials },
+  })
+  await Promise.resolve()
+  cleanup()
+  assert.equal(requestSignal.aborted, true)
+  release(Response.json({ ok: true, value: { settingsNamespace: 'custom-qoder-entry' } }))
+  await applying
+  assert.equal(formLookups, 0)
+})

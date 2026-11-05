@@ -1,7 +1,9 @@
 import { accepted } from './helpers/operation-result.ts'
+import { deferred, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createQoderTransport, type QoderTransport } from '../src/qoder/transport/index.ts'
+import { QoderLlmError } from '../src/qoder/errors.ts'
 import { QoderModelCatalogEditor } from '../src/client/model-catalog-editor.ts'
 import { QoderCatalogLifecycle } from '../src/dsh/catalog-lifecycle.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
@@ -12,13 +14,6 @@ import { parseQoderSse } from '../src/qoder/transport/wire/sse.ts'
 import { validateAndTranslateMessages } from '../src/qoder/transport/wire/translate.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>(yes => { resolve = yes })
-  return { promise, resolve }
-}
-const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 
 test('account waiters share credential recovery, including when the first caller cancels', async () => {
   for (const cancelFirst of [false, true]) {
@@ -78,7 +73,7 @@ test('credential preview cannot overwrite, persist, or supersede active discover
   assert.equal(catalog.models()[0].priceFactor, 0)
   assert.deepEqual(writes, [])
   activeRead.resolve([{ id: 'a', name: 'A', priceFactor: 1 }])
-  await pending; await tick()
+  await pending; await nextTurn()
   assert.equal(catalog.models()[0].priceFactor, 1)
   assert.deepEqual(writes, [1])
   catalog.dispose()
@@ -114,7 +109,8 @@ for (const legacy of [false, true]) {
     }
     assert.deepEqual(await collect([frames.join('')]), await collect(frames))
     assert.deepEqual(await collect([...frames.join('')]), await collect(frames))
-    await assert.rejects(collect(['data: ' + 'x'.repeat(151)]), { code: 'MALFORMED_RESPONSE' })
+    await assert.rejects(collect(['data: ' + 'x'.repeat(151)]),
+      (error: unknown) => error instanceof QoderLlmError && error.code === 'MALFORMED_RESPONSE')
   })
 }
 

@@ -2,7 +2,7 @@ import { deferred } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { zstdDecompressSync } from 'node:zlib'
-import { QoderRequestCompression, compressionRejection } from '../src/qoder/transport/request-compression.ts'
+import { QoderRequestCompression, compressionRejection, requestCompressionDisableTtlMs } from '../src/qoder/transport/request-compression.ts'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { streamModelServerChat } from '../src/qoder/transport/model-server.ts'
@@ -107,6 +107,34 @@ test('HTTP falls back once and remembers endpoint only after model confirmation'
   await check(false, args.url + '?different=query')
   await check(true, args.url + '/other')
   await check(true, args.url, 'legacy')
+})
+
+test('HTTP endpoint capability is re-probed after the disable TTL expires', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['Date'], now: 10_000 })
+  const args = options()
+  const first = new QoderRequestCompression()
+  let firstCalls = 0
+  await first.send({ ...args, dispatch: async (wire) => {
+    firstCalls++
+    return firstCalls === 1 ? new Response('unsupported zstd', { status: 415 }) : new Response('ok')
+  } })
+  first.confirm()
+  assert.equal(firstCalls, 2)
+
+  const identity = async () => new QoderRequestCompression().send({ ...args, dispatch: async wire => {
+    assert.equal(wire instanceof Uint8Array, false)
+    return new Response('ok')
+  } })
+  await identity()
+  time.tick(requestCompressionDisableTtlMs - 1)
+  await identity()
+
+  time.tick(1)
+  await new QoderRequestCompression().send({ ...args, dispatch: async wire => {
+    assert.equal(wire instanceof Uint8Array, true)
+    return new Response('ok')
+  } })
 })
 
 test('ordinary rejection and network failure never replay automatically', async () => {
@@ -375,6 +403,25 @@ test('compression rejection callback preserves a bounded original response befor
     body: errorBody.slice(0, 8192), bodyTruncated: true, probeTimedOut: false,
     reason: 'invalid_json_at_origin',
   })
+})
+
+test('legacy endpoint capability is re-probed after the disable TTL expires', async t => {
+  const time = t.mock.timers
+  time.enable({ apis: ['Date'], now: 20_000 })
+  const args = options('legacy')
+  const rejection = '{"code":101,"message":"signature invalid"}'
+  const rejectCompressed = async () => assert.rejects(new QoderRequestCompression().send({ ...args, dispatch: async wire => {
+    assert.equal(wire instanceof Uint8Array, true)
+    return new Response(rejection, { status: 403 })
+  } }), (error: unknown) => error instanceof QoderLlmError && error.code === 'TRANSPORT')
+  await rejectCompressed()
+
+  await new QoderRequestCompression().send({ ...args, dispatch: async wire => {
+    assert.equal(wire instanceof Uint8Array, false)
+    return new Response('ok')
+  } })
+  time.tick(requestCompressionDisableTtlMs)
+  await rejectCompressed()
 })
 
 test('failed diagnostic capture does not prevent identity recovery', async () => {

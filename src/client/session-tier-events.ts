@@ -1,5 +1,10 @@
 import { qoderRpcPath, type QoderSessionTierScope } from '../dsh/rpc-channel.ts'
 
+// NDJSON is bounded per logical line in UTF-8 bytes. The limit applies to the
+// current partial line, so a chunk containing many small valid lines is not
+// rejected merely because the chunk itself is large.
+const maxEventLineBytes = 64 * 1024
+
 /** One authenticated host change stream shared by the mounted composer controls. */
 export function createSessionTierEvents(send: typeof fetch = (...args) => globalThis.fetch(...args)) {
   const listeners = new Set<{ scope: QoderSessionTierScope; listener: () => void }>()
@@ -29,21 +34,69 @@ export function createSessionTierEvents(send: typeof fetch = (...args) => global
         if (!response.ok || !response.body) throw new Error('Context tier stream unavailable')
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
-        let buffered = ''
+        const encoder = new TextEncoder()
+        let line = ''
+        let lineBytes = 0
+        let droppingOversizedLine = false
+        const resetLine = () => {
+          line = ''
+          lineBytes = 0
+          droppingOversizedLine = false
+        }
+        const consume = (text: string) => {
+          let offset = 0
+          while (offset < text.length) {
+            const newline = text.indexOf('\n', offset)
+            const end = newline < 0 ? text.length : newline
+            const segment = text.slice(offset, end)
+            if (!droppingOversizedLine) {
+              const segmentBytes = encoder.encode(segment).byteLength
+              if (lineBytes + segmentBytes > maxEventLineBytes) {
+                // A model id has no provider-side length cap. Drop only this
+                // logical line, but invalidate every mounted view once so a
+                // legal oversized scope is recovered through a bounded host
+                // reread rather than silently lost. Continue scanning the
+                // same chunk for following records.
+                delay = 1000
+                notify()
+                line = ''
+                lineBytes = 0
+                droppingOversizedLine = true
+              } else {
+                line += segment
+                lineBytes += segmentBytes
+              }
+            }
+            if (newline < 0) return
+            if (!droppingOversizedLine && line.length > 0) {
+              try {
+                const item: unknown = JSON.parse(line)
+                if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+                  const value = item as Record<string, unknown>
+                  delay = 1000
+                  if (value.ready === true) notify()
+                  else if ((value.region === 'global' || value.region === 'china')
+                    && typeof value.sessionId === 'string' && typeof value.modelId === 'string') {
+                    notify({ region: value.region, sessionId: value.sessionId, modelId: value.modelId })
+                  }
+                }
+              } catch {
+                // One malformed record must not tear down the shared stream.
+              }
+            }
+            resetLine()
+            offset = newline + 1
+          }
+        }
         try {
           while (!controller.signal.aborted) {
             const { value, done } = await reader.read()
             if (done) break
-            buffered += decoder.decode(value, { stream: true })
-            let newline: number
-            while ((newline = buffered.indexOf('\n')) >= 0) {
-              const item = JSON.parse(buffered.slice(0, newline))
-              buffered = buffered.slice(newline + 1)
-              delay = 1000
-              if (item.ready === true) notify()
-              else if ((item.region === 'global' || item.region === 'china') && typeof item.sessionId === 'string' && typeof item.modelId === 'string') notify(item)
-            }
+            consume(decoder.decode(value, { stream: true }))
           }
+          // Flush a split UTF-8 code point. A trailing unterminated record is
+          // intentionally discarded because the host stream is NDJSON.
+          consume(decoder.decode())
         } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
       } catch { /* Reconnect also rereads the host, covering events missed while disconnected. */ }
       if (controller.signal.aborted) break

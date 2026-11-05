@@ -14,7 +14,7 @@ import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBody } from './wire/encoding.ts'
 import { qoderTurnTracker, qoderSessionId } from './wire/prepare.ts'
 import { qoderIdeVersion } from './wire/client-identity.ts'
-import { defaultMaxJsonBytes, readLimitedText } from './request.ts'
+import { defaultMaxErrorBytes, defaultMaxJsonBytes, readLimitedText } from './request.ts'
 
 type Obj = Record<string, unknown>
 const record = (value: unknown): Obj | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Obj : undefined
@@ -24,7 +24,28 @@ const maxDataUrlCharacters = 4 * Math.ceil(maxImageBytes / 3) + 1024
 const maxGenerationJsonBytes = maxDataUrlCharacters + defaultMaxJsonBytes
 const maxImageRedirects = 5
 const imageDownloadTimeoutMs = 600_000
+const imageErrorDiagnosticTimeoutMs = 1_000
 function string(value: unknown): string | undefined { return typeof value === 'string' && value.trim() ? value.trim() : undefined }
+function safeUpstreamCode(raw: string): string | undefined {
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { return undefined }
+  const visit = (candidate: unknown, depth = 0): string | undefined => {
+    if (depth > 4 || candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) return undefined
+    const object = candidate as Record<string, unknown>
+    for (const key of ['code', 'error_code', 'errorCode', 'errCode']) {
+      const field = object[key]
+      const normalized = typeof field === 'number' && Number.isFinite(field) ? String(field)
+        : typeof field === 'string' ? field.trim() : undefined
+      if (normalized && /^-?\d{1,16}$/u.test(normalized) && !/^-?0+$/u.test(normalized)) return normalized
+    }
+    for (const key of ['error', 'details', 'data', 'payload', 'body']) {
+      const nested = visit(object[key], depth + 1)
+      if (nested) return nested
+    }
+    return undefined
+  }
+  return visit(value)
+}
 function pick(value: Obj, keys: string[]): string | undefined {
   for (const key of keys) { const found = string(value[key]); if (found) return found }
 }
@@ -52,7 +73,7 @@ export function imageToolUrl(region: QoderRegion, kind: 'imageSearch' | 'generat
   // WASM normalizes an existing /algo prefix instead of prepending it twice.
   return `${resolveQoderEndpoints(region).baseUrl}algo/api/v2/service/pro/${kind}?Encode=1`
 }
-async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: ImageToolDependencies, signal?: AbortSignal, requestSetId?: string): Promise<unknown> {
+async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: ImageToolDependencies, signal?: AbortSignal, requestSetId?: string, callerSignal?: AbortSignal): Promise<unknown> {
   const timeout = AbortSignal.timeout(deps.timeoutMs ?? (kind === 'generateImage' ? 180_000 : 30_000))
   const activeSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
   activeSignal.throwIfAborted()
@@ -65,17 +86,49 @@ async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: Ima
       headers: { ...buildAuthHeaders(body, url, credentials), 'Content-Type': 'application/json', Accept: 'application/json', 'Accept-Encoding': 'identity',
         ...requestSetId ? { 'X-RequestSet-ID': requestSetId } : {} } })
     if (kind === 'generateImage') deps.logger?.debug?.('[Qoder Image] Generation response headers', { requestId: outer.requestId, status: response.status, attempt: attempt + 1 })
-    // Only explicit HTTP authentication rejection may replay, never an uncertain failure.
-    if (response.status === 401 && attempt === 0 && deps.refreshCredentials) {
-      await response.body?.cancel()
-      credentials = await deps.refreshCredentials(credentials, activeSignal)
-      continue
-    }
     if (!response.ok) {
-      await response.body?.cancel()
-      if (kind === 'imageSearch') throw new QoderImageSearchError(response.status === 401 || response.status === 403 ? 'auth' : 'http', String(outer.requestId), { httpStatus: response.status })
+      if (kind === 'imageSearch') {
+        // Only explicit HTTP authentication rejection may replay, never an uncertain failure.
+        if (response.status === 401 && attempt === 0 && deps.refreshCredentials) {
+          await response.body?.cancel()
+          credentials = await deps.refreshCredentials(credentials, activeSignal)
+          continue
+        }
+        await response.body?.cancel()
+        throw new QoderImageSearchError(response.status === 401 || response.status === 403 ? 'auth' : 'http', String(outer.requestId), { httpStatus: response.status })
+      }
+      if (response.status === 401 && attempt === 0 && deps.refreshCredentials) {
+        // Refresh as soon as the rejection headers arrive. A stalled 401 body
+        // must not consume the generation deadline before authentication recovery.
+        const diagnosticController = new AbortController()
+        const diagnosticTimeout = AbortSignal.timeout(imageErrorDiagnosticTimeoutMs)
+        const diagnosticSignal = AbortSignal.any([activeSignal, diagnosticController.signal, diagnosticTimeout])
+        const diagnostic = readLimitedImageError(response, diagnosticSignal, `Qoder ${kind} error response`).catch(() => '')
+        try {
+          credentials = await deps.refreshCredentials(credentials, activeSignal)
+        } catch (refreshError) {
+          const bodyText = await diagnostic
+          diagnosticController.abort()
+          if (callerSignal?.aborted) throw refreshError
+          const error = new QoderLlmError(`Qoder ${kind} failed (HTTP ${response.status}); request ${String(outer.requestId)}.`, 'PROVIDER_ERROR')
+          error.httpStatus = response.status
+          error.source = 'http'
+          error.upstreamCode = safeUpstreamCode(bodyText)
+          // A failed refresh cannot erase the explicit 401 rejection that caused
+          // it. Do not submit a second generation request when refresh fails.
+          throw error
+        }
+        diagnosticController.abort()
+        continue
+      }
+      let bodyText = ''
+      try { bodyText = await readLimitedImageError(response, activeSignal, `Qoder ${kind} error response`) } catch (error) {
+        if (callerSignal?.aborted) throw error
+      }
       const error = new QoderLlmError(`Qoder ${kind} failed (HTTP ${response.status}); request ${String(outer.requestId)}.`, 'PROVIDER_ERROR')
       error.httpStatus = response.status
+      error.source = 'http'
+      error.upstreamCode = safeUpstreamCode(bodyText)
       throw error
     }
     let parsed: unknown
@@ -186,14 +239,17 @@ async function downloadUrl(raw: string, deps: ImageToolDependencies, signal: Abo
  * Native HTTP(S) never follows redirects and never performs another DNS lookup.
  */
 export function pinnedDownload(url: string, init: RequestInit, addresses: readonly string[], requestImpl: typeof httpsRequest = new URL(url).protocol === 'http:' ? httpRequest : httpsRequest): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const address = addresses[0]
-    if (!address || !publicAddress(address)) { reject(new Error('Unsafe image address')); return }
+  const signal = init.signal
+  const candidates = [...new Set(addresses)]
+  if (!candidates.length || candidates.some(address => !publicAddress(address))) return Promise.reject(new Error('Unsafe image address'))
+  const attempt = (address: string): Promise<Response> => new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return }
+    let responded = false
     const request = requestImpl(url, {
       method: 'GET',
       // Do not reuse a socket opened under another caller's DNS policy.
       agent: false,
-      signal: init.signal ?? undefined,
+      signal: signal ?? undefined,
       headers: { Accept: 'image/*', 'Accept-Encoding': 'identity' },
       lookup: (_hostname, options, callback) => {
         // Node may ask for all addresses for automatic family selection.
@@ -201,6 +257,7 @@ export function pinnedDownload(url: string, init: RequestInit, addresses: readon
         else callback(null, address, isIP(address))
       },
     }, response => {
+      responded = true
       const headers = new Headers()
       for (const [name, value] of Object.entries(response.headers)) {
         if (Array.isArray(value)) for (const item of value) headers.append(name, item)
@@ -214,9 +271,22 @@ export function pinnedDownload(url: string, init: RequestInit, addresses: readon
         resolve(new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, { status, headers }))
       }
     })
-    request.once('error', reject)
+    request.once('error', error => {
+      // Retry only failures that happen before receiving an HTTP response.
+      if (!responded) reject(error)
+    })
     request.end()
   })
+  return (async () => {
+    let lastError: unknown
+    for (const address of candidates) {
+      try { return await attempt(address) } catch (error) {
+        if (signal?.aborted) throw signal.reason ?? error
+        lastError = error
+      }
+    }
+    throw lastError ?? new Error('Image download failed')
+  })()
 }
 function imageMediaType(bytes: Uint8Array): string {
   const b = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -239,6 +309,32 @@ function abortableImageOperation<T>(operation: Promise<T>, signal: AbortSignal):
     operation.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
     if (signal.aborted) onAbort()
   })
+}
+
+async function readLimitedImageError(response: Response, signal: AbortSignal, label: string): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > defaultMaxErrorBytes) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new QoderLlmError(`${label} exceeded its response size limit.`, 'MALFORMED_RESPONSE')
+  }
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let bytes = 0
+  let text = ''
+  try {
+    while (true) {
+      const { done, value } = await abortableImageOperation(reader.read(), signal)
+      if (done) break
+      bytes += value.byteLength
+      if (bytes > defaultMaxErrorBytes) throw new QoderLlmError(`${label} exceeded its response size limit.`, 'MALFORMED_RESPONSE')
+      text += decoder.decode(value, { stream: true })
+    }
+    return text + decoder.decode()
+  } finally {
+    await reader.cancel().catch(() => undefined)
+    reader.releaseLock()
+  }
 }
 
 function validateImageContentType(raw: string | null): void {
@@ -292,9 +388,17 @@ export async function generateImage(request: QoderImageGenerationRequest, deps: 
     begin('generation')
     const generationTimeout = AbortSignal.timeout(deps.timeoutMs ?? 180_000)
     activeSignal = signal ? AbortSignal.any([signal, generationTimeout]) : generationTimeout
-    try { parsed = record(await post('generateImage', { payload: JSON.stringify({ model: 'ge3i', prompt: request.prompt, size: request.size ?? '1024x1024', metadata: { business } }), encodeVersion: '1', sessionId: qoderSessionId(credentials.userID, request.sessionId), requestId }, deps, activeSignal, identity.requestSetId)) } catch (error) {
+    try { parsed = record(await post('generateImage', { payload: JSON.stringify({ model: 'ge3i', prompt: request.prompt, size: request.size ?? '1024x1024', metadata: { business } }), encodeVersion: '1', sessionId: qoderSessionId(credentials.userID, request.sessionId), requestId }, deps, activeSignal, identity.requestSetId, signal)) } catch (error) {
       failure(error)
-      throw new QoderLlmError(`Qoder ImageGen did not confirm an outcome (request ${requestId}); do not automatically regenerate.`, 'PROVIDER_ERROR')
+      if (signal?.aborted || error instanceof QoderLlmError && error.code === 'ABORTED' || error instanceof Error && error.name === 'AbortError') {
+        if (error instanceof QoderLlmError && error.code === 'ABORTED') throw error
+        throw new QoderLlmError(`Qoder ImageGen was cancelled (request ${requestId}).`, 'ABORTED', { cause: error })
+      }
+      // An explicit HTTP response confirms that Qoder rejected the submission;
+      // preserve its status and bounded upstream code. Network, timeout and
+      // malformed responses remain uncertain and must never be replayed.
+      if (error instanceof QoderLlmError && error.source === 'http') throw error
+      throw new QoderLlmError(`Qoder ImageGen did not confirm an outcome (request ${requestId}); do not automatically regenerate.`, 'PROVIDER_ERROR', { cause: error })
     }
     imageUrl = string(record(Array.isArray(parsed?.data) ? parsed.data[0] : undefined)?.url)
     debug('Generation completed', { hasImageUrl: !!imageUrl })

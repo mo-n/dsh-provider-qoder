@@ -21,7 +21,7 @@ import type {
   QoderSubscriberStatus,
 } from '../account.ts'
 import { QoderLlmError } from '../errors.ts'
-import type { QoderLogger } from './logging.ts'
+import { redactLogValue, type QoderLogger } from './logging.ts'
 import {
   opaqueCredentialKey,
   openApiJsonRequest,
@@ -445,7 +445,7 @@ export class QoderUsageReader {
       return await this.fetchPlan(jobToken, signal)
     } catch (error) {
       if (signal.aborted) throw error
-      this.logger?.warn?.('[Qoder Plan] Failed to load user plan (degraded)', error instanceof Error ? error.message : error)
+      this.logger?.warn?.('[Qoder Plan] Failed to load user plan (degraded)', redactLogValue(error))
       return undefined
     }
   }
@@ -474,7 +474,7 @@ export class QoderUsageReader {
       return await this.fetchStatus(jobToken, signal)
     } catch (error) {
       if (signal?.aborted) throw error
-      this.logger?.warn?.('[Qoder Status] Failed to load user status (degraded)', error instanceof Error ? error.message : error)
+      this.logger?.warn?.('[Qoder Status] Failed to load user status (degraded)', redactLogValue(error))
       return undefined
     }
   }

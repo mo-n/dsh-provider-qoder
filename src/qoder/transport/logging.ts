@@ -7,7 +7,7 @@ export interface QoderLogger {
 }
 
 const sensitiveKey = /(?:authorization|credential|password|secret|token)/iu
-const identifierKey = /^(?:accountId|id|uid|userId)$/iu
+const identifierKey = /^(?:accountId|id|uid|userId|user_id)$/iu
 const tokenValue = /\b(?:jrt|jt|pt)-[\w.-]+\b/giu
 const bearerValue = /Bearer\s+[^\s,;]+/giu
 const maxDepth = 4
@@ -35,10 +35,12 @@ function redactString(value: string): string {
 export function redactLogValue(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     // Model causes can carry credential-bearing objects in repeatedly encoded JSON.
-    if (depth < maxDepth && value.length <= 16 * 1024 && /^[\s]*[{"]/u.test(value)) {
+    if (/^[\s]*[{\["]/u.test(value)) {
+      // Never fall back to raw JSON when parsing or recursion would exceed the budget.
+      if (depth >= maxDepth || value.length > 16 * 1024) return '[TRUNCATED]'
       try {
         return redactString(JSON.stringify(redactLogValue(JSON.parse(value), depth + 1)))
-      } catch { /* Preserve bounded plain text diagnostics. */ }
+      } catch { return '[TRUNCATED]' /* Malformed JSON may still contain credentials. */ }
     }
     return redactString(value)
   }
@@ -46,13 +48,13 @@ export function redactLogValue(value: unknown, depth = 0): unknown {
   if (depth >= maxDepth) return '[TRUNCATED]'
   if (value instanceof Error) {
     return {
-      name: value.name,
-      message: redactString(value.message),
+      name: redactLogValue(value.name, depth + 1),
+      message: redactLogValue(value.message, depth + 1),
       ...('code' in value ? { code: redactLogValue(value.code, depth + 1) } : {}),
       ...('cause' in value ? { cause: redactLogValue(value.cause, depth + 1) } : {}),
       ...('upstreamCode' in value ? { upstreamCode: redactLogValue(value.upstreamCode, depth + 1) } : {}),
-      ...('source' in value ? { source: value.source } : {}),
-      ...('httpStatus' in value ? { httpStatus: value.httpStatus } : {}),
+      ...('source' in value ? { source: redactLogValue(value.source, depth + 1) } : {}),
+      ...('httpStatus' in value ? { httpStatus: redactLogValue(value.httpStatus, depth + 1) } : {}),
       ...('failure' in value ? { failure: redactLogValue(value.failure, depth + 1) } : {}),
       ...(value instanceof AggregateError ? { errors: redactLogValue(value.errors, depth + 1) } : {}),
     }

@@ -1,8 +1,8 @@
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
-import { qoderCredentialRef } from '../dsh/credential-contract.ts'
 import type { QoderSessionTierScope, QoderSessionTierSelection } from '../dsh/rpc-channel.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderAuthorizationOperations, QoderCredentialStatus, QoderModelSettingsSnapshot } from './credential-operations.ts'
+import { isEnvironmentCredentialSource, qoderCredentialRef } from '../dsh/credential-contract.ts'
 import { regionOf } from './credential-operations.ts'
 import { failure, operationCause, success, type OperationResult } from './operation-result.ts'
 import type { QoderRpcCaller } from './rpc-client.ts'
@@ -32,7 +32,10 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
       const response = await credentials.describe([qoderCredentialRef])
       if (!response.ok) return failure('describePat', 'read-pat', response.error)
       const value = response.value[qoderCredentialRef]
-      return value ? success(value) : failure('describePat', 'read-pat', undefined)
+      // An absent managed reference is an ordinary disconnected state, not a
+      // failed host read. Keep this separate from transport/protocol failures
+      // so normal first-run loads do not emit an error diagnostic.
+      return success(value ?? { configured: false, writable: false })
     } catch (error) { return failure('describePat', 'read-pat', error) }
   }
   const setting = async (operation: string, write: () => Promise<boolean | void>) => {
@@ -51,8 +54,24 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
     describe: async (): Promise<OperationResult<QoderCredentialStatus>> => {
       try {
         const result = await authorization.read(regionOf(form.getSnapshot().value))
-        return result.ok ? success({ configured: result.value.configured && !result.value.expired,
-          source: result.value.method, writable: result.value.writable }) : failure('describe', 'read-authorization', result.error)
+        if (!result.ok) return failure('describe', 'read-authorization', result.error)
+        const authorizationView = result.value
+        const authorizationConfigured = authorizationView.configured && !authorizationView.expired
+        // Browser/none describe the active authorization record only. Their
+        // method is not a credential source, and probing PAT storage here can
+        // make a browser-only installation look like it has a managed PAT.
+        if (authorizationView.method !== 'pat') {
+          return success({ configured: authorizationConfigured, writable: authorizationView.writable })
+        }
+        const pat = await describePat()
+        if (!pat.ok) return pat
+        return success({
+          configured: authorizationConfigured
+            && pat.value.configured
+            && !isEnvironmentCredentialSource(pat.value.source),
+          ...(pat.value.source === undefined ? {} : { source: pat.value.source }),
+          writable: pat.value.writable,
+        })
       } catch (error) { return failure('describe', 'read-authorization', error) }
     },
     store: async (value: string): Promise<OperationResult<void>> => {

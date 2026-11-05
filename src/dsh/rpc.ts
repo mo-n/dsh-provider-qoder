@@ -2,7 +2,8 @@
  * Loopback settings RPC for the Qoder cards.
  *
  * Endpoints use Connection exact Fetch routes on its shared `/api` channel.
- * See ADR-0008 for the reason this replaces the dedicated RPC channel.
+ * This keeps the provider behind DSH's platform boundary (ADR-0001) while
+ * leaving authentication and route ownership with Connection.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -25,42 +26,71 @@ export type QoderRpcHandler = (endpoint: string, payload: unknown, signal: Abort
  *
  * @param ctx - host context carrying the Connection service.
  * @param handler - decoded endpoint handler, shared by every endpoint.
- * @returns disposer removing every registered route.
+ * @returns an idempotent disposer that settles after every route is removed.
  * @throws when Connection exposes no exact Fetch registry.
  */
 export function registerQoderRpc(
   ctx: Context,
   handler: QoderRpcHandler,
   subscribeTiers?: (listener: (scope: QoderSessionTierScope) => void) => () => void,
-): () => void {
+): () => Promise<void> {
   const registry = ctx.connection?.fetch
   if (typeof registry?.register !== 'function') {
     throw new Error('provider-qoder: connection exposes no exact Fetch route registry')
   }
   const streams = new Set<() => void>()
   const disposers: Array<() => unknown> = []
+  let closing = false
   try {
     for (const endpoint of qoderRpcEndpoints) disposers.push(registry.register({
       path: qoderRpcPath(endpoint),
       methods: ['POST'],
       requestBody: 'buffered',
       fetch: request => endpoint === 'sessionTierEvents' && subscribeTiers
-        ? Promise.resolve(sessionTierEvents(request, subscribeTiers, streams))
+        ? closing
+          ? Promise.resolve(new Response('provider-qoder: settings RPC is closing', { status: 503 }))
+          : Promise.resolve(sessionTierEvents(request, subscribeTiers, streams))
         : handleQoderRpcRequest(endpoint, handler, request),
     }))
   } catch (error) {
-    for (const close of streams) close()
-    for (const dispose of disposers.reverse()) {
-      try { void Promise.resolve(dispose()).catch(() => {}) } catch { /* Continue rollback. */ }
-    }
+    // Registration is synchronous, so rollback cannot be awaited here. Start
+    // every cleanup, attach a rejection handler, and preserve the registration
+    // failure as the error observed by the caller.
+    closing = true
+    void disposeResources(streams, [...disposers].reverse()).catch(cleanupError => {
+      try {
+        // Report the incomplete rollback without logging arbitrary disposer
+        // messages or replacing the original synchronous registration error.
+        ctx.logger?.warn('[Qoder RPC] Registration rollback cleanup failed', {
+          failedCleanups: cleanupError instanceof AggregateError ? cleanupError.errors.length : 1,
+        })
+      } catch { /* A logger failure must not create an unhandled rejection. */ }
+    })
     throw error
   }
+  let cleanup: Promise<void> | undefined
   return () => {
-    for (const close of streams) close()
-    for (const dispose of disposers) {
-      void dispose()
-    }
+    closing = true
+    cleanup ??= disposeResources(streams, disposers)
+    return cleanup
   }
+}
+
+/** Close streams before unregistering routes, while collecting every failure. */
+async function disposeResources(streams: Set<() => unknown>, disposers: readonly (() => unknown)[]): Promise<void> {
+  const streamClosures = [...streams]
+  streams.clear()
+  const invoke = (dispose: () => unknown) => {
+    try { return Promise.resolve(dispose()) } catch (error) { return Promise.reject(error) }
+  }
+  const streamPromises = streamClosures.map(invoke)
+  const streamResults = streamPromises.length > 0 ? await Promise.allSettled(streamPromises) : []
+  const routeResults = await Promise.allSettled(disposers.map(invoke))
+  const errors = [
+    ...streamResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason),
+    ...routeResults.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason),
+  ]
+  if (errors.length > 0) throw new AggregateError(errors, 'provider-qoder: failed to dispose settings RPC routes')
 }
 
 /**
@@ -118,15 +148,19 @@ function sessionTierEvents(
       close = () => {
         if (ended) return
         ended = true
-        unsubscribe()
-        request.signal.removeEventListener('abort', close)
+        const errors: unknown[] = []
+        try { unsubscribe() } catch (error) { errors.push(error) }
+        try { request.signal.removeEventListener('abort', onAbort) } catch (error) { errors.push(error) }
         streams.delete(close)
         try { controller.close() } catch { /* The reader may already have cancelled. */ }
+        if (errors.length === 1) throw errors[0]
+        if (errors.length > 1) throw new AggregateError(errors, 'provider-qoder: failed to close a session tier stream')
       }
       unsubscribe = subscribe(scope => send(scope))
       streams.add(close)
-      request.signal.addEventListener('abort', close, { once: true })
-      if (request.signal.aborted) close()
+      const onAbort = () => { try { close() } catch { /* The request has no teardown caller to report to. */ } }
+      request.signal.addEventListener('abort', onAbort, { once: true })
+      if (request.signal.aborted) onAbort()
       else send({ ready: true })
     },
     cancel() { close() },

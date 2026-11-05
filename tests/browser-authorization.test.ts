@@ -1,4 +1,4 @@
-import { mockTime, nextTurn } from './helpers/timing.ts'
+import { deferred, mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -11,12 +11,6 @@ import type { QoderRegion } from '../src/qoder/region.ts'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>(yes => { resolve = yes })
-  return { promise, resolve }
-}
-const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 const json = (value: unknown) => new Response(JSON.stringify(value))
 function grant(region: QoderRegion = 'global', id: string = region): QoderBrowserGrant {
   return { id, region, credentials: { userID: id, name: `Subscriber ${id}`, email: `${id}@example.test`,
@@ -71,7 +65,7 @@ function fixture(store = storage(), refresh?: QoderAuthorizationTransport['refre
     }),
   })
   return { store, manager, completions, begins: () => begins,
-    async finish(region: QoderRegion, value = grant(region)) { completions.get(region)!.resolve(value); await tick() },
+    async finish(region: QoderRegion, value = grant(region)) { completions.get(region)!.resolve(value); await nextTurn() },
   }
 }
 
@@ -232,7 +226,7 @@ test('concurrent rejections serialize one rotation, and another process reuses t
   const refresh: QoderAuthorizationTransport['refresh'] = async (value, _signal, rejected) => {
     if (rejected !== value.credentials.authToken) return value
     rotations++
-    await tick()
+    await nextTurn()
     return { ...value, credentials: { ...value.credentials, authToken: 'rotated-device' }, refreshToken: 'rotated-refresh' }
   }
   const first = fixture(store, refresh)

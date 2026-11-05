@@ -6,7 +6,7 @@ This repository delivers `dsh-provider-qoder`, an extension enabling DeepSeek Ha
 
 - **Separation of Concerns**: DSH platform integration (`src/dsh/`), settings UI (`src/client/`), and Qoder upstream transport (`src/qoder/`) are strictly decoupled.
 - **Centralized Transport**: All upstream Qoder network interactions must be centralized in `QoderTransport`. Never scatter direct `fetch` calls across the adapter layers (see ADR-0003).
-- **Ubiquitous Language**: Strictly adhere to the domain terminology defined in `CONTEXT.md` (e.g., Managed Qoder PAT, Job Token, Context Tier, Multimodal Input). Never use synonyms explicitly advised against in the glossary.
+- **Ubiquitous Language**: Strictly adhere to the domain terminology defined in `GLOSSARY.md` (e.g., Managed Qoder PAT, Job Token, Context Tier, Multimodal Input). Never use synonyms explicitly advised against in the glossary.
 
 ## Commands & Verification
 
@@ -25,5 +25,5 @@ Refer to `package.json` for dependencies and available scripts. Key verification
 
 ## Agent Guidelines
 
-- **Domain Documentation**: Single-context architecture. Read `CONTEXT.md` in the root and ADRs in `docs/adr/` before exploring or making architectural changes (see `docs/agents/domain.md`).
+- **Domain Documentation**: Single-context architecture. Read `GLOSSARY.md` in the root and ADRs in `docs/adr/` before exploring or making architectural changes (see `docs/agents/domain.md`).
 - **Issue Tracking**: Local issues and feature specifications are tracked as Markdown files under `.scratch/` (see `docs/agents/issue-tracker.md`).

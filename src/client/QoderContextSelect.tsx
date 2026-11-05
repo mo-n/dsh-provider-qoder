@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { contextTiersOf, formatContextTokens, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import { QODER_PROVIDER_ID } from '../dsh/provider.ts'
@@ -80,13 +80,17 @@ function SessionContextSelect({ operations, sessionId, region, activeModel, t, h
   lastUsed?: { provider?: string; model?: string } | null
 }) {
   const [open, setOpen] = useState(false)
+  const [focusedIndex, setFocusedIndex] = useState(0)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const focusedIndexRef = useRef(0)
   const state = useMemo(() => new SessionTierState({ region, sessionId, modelId: activeModel.id }, operations), [region, sessionId, activeModel.id, operations])
   const snapshot = useSyncExternalStore(state.subscribe, state.getSnapshot)
   useLayoutEffect(() => { state.activate(); return () => state.dispose() }, [state])
   // Settings and request history can change the host's fallback without a manual selection event.
   const catalogSignature = JSON.stringify(activeModel)
-  useEffect(() => { void state.refresh() }, [state, catalogSignature, historicalWindow, lastUsed?.provider, lastUsed?.model])
+  useEffect(() => { void state.revalidate() }, [state, catalogSignature, historicalWindow, lastUsed?.provider, lastUsed?.model])
   useEffect(() => {
     if (!open) return
     const handleClickOutside = (e: MouseEvent) => {
@@ -97,6 +101,7 @@ function SessionContextSelect({ operations, sessionId, region, activeModel, t, h
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setOpen(false)
+        triggerRef.current?.focus()
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -111,22 +116,79 @@ function SessionContextSelect({ operations, sessionId, region, activeModel, t, h
   const currentTier = snapshot.selection
   const selectedTierKey = currentTier?.tierKey
   const pending = snapshot.loading || snapshot.saving
-  const selectTier = (tierKey: string) => { setOpen(false); void state.select(tierKey) }
+  const focusMenuItem = (index: number) => {
+    if (!tiers.length) return
+    const next = (index + tiers.length) % tiers.length
+    focusedIndexRef.current = next
+    setFocusedIndex(next)
+    itemRefs.current[next]?.focus()
+  }
+  useLayoutEffect(() => {
+    if (!open || pending) return
+    const selectedIndex = tiers.findIndex(tier => tier.key === selectedTierKey)
+    focusMenuItem(selectedIndex >= 0 ? selectedIndex : 0)
+  }, [open])
+  const closeMenu = (restoreTrigger: boolean) => {
+    setOpen(false)
+    if (restoreTrigger) triggerRef.current?.focus()
+  }
+  const selectTier = (tierKey: string) => {
+    if (pending) return
+    setOpen(false)
+    // Keep the trigger focusable while the host write is pending so removing
+    // the menu cannot strand focus on the document body.
+    triggerRef.current?.focus()
+    if (tierKey !== selectedTierKey || snapshot.error) void state.select(tierKey)
+  }
+  const handleMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!tiers.length || pending) return
+    if (e.key === 'Tab') {
+      // Let the browser move focus out of the menu. The root blur handler closes it
+      // after the next focus target is known, without stealing that focus back.
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeMenu(true)
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      focusMenuItem(focusedIndexRef.current + 1)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      focusMenuItem(focusedIndexRef.current - 1)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      focusMenuItem(0)
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      focusMenuItem(tiers.length - 1)
+    }
+  }
+  const handleRootBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      if (open) setOpen(false)
+    }
+  }
 
   const defaultSuffix = t ? t('contextTierDefaultSuffix').replace(/[（）()]/g, '') : '默认'
   const selectTitle = t ? t('contextSelectTitle') : '选择上下文大小'
   const menuHeader = t ? t('contextSelectMenuHeader') : '上下文容量'
 
   return (
-    <div className={css.root} ref={rootRef}>
+    <div className={css.root} ref={rootRef} onBlurCapture={handleRootBlur}>
       <button
         type="button"
         className={`${css.trigger} ${open ? css.triggerActive : ''}`}
-        disabled={pending || !currentTier}
+        ref={element => { triggerRef.current = element }}
+        disabled={!currentTier}
+        aria-disabled={pending || !currentTier}
+        aria-haspopup="menu"
         aria-expanded={open}
         aria-label={selectTitle}
         title={`${selectTitle}: ${currentTier ? formatContextTokens(currentTier.tokenCount) : '…'}`}
-        onClick={() => setOpen(prev => !prev)}
+        onClick={() => { if (!pending && currentTier) setOpen(prev => !prev) }}
       >
         <span className={css.icon}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -141,20 +203,26 @@ function SessionContextSelect({ operations, sessionId, region, activeModel, t, h
         </span>
       </button>
 
-      {snapshot.error && <span role="alert" className={css.error}>{t ? t(snapshot.operationError?.outcome === 'unknown' ? 'operationOutcomeUnknown' : 'contextSelectFailed') : 'contextSelectFailed'} <button type="button" disabled={pending} onClick={() => { void state.refresh() }}>{t ? t('refresh') : 'refresh'}</button></span>}
+      {snapshot.error && <div className={css.error}>
+        <span role="alert">{t ? t(snapshot.operationError?.outcome === 'unknown' ? 'operationOutcomeUnknown' : 'contextSelectFailed') : 'contextSelectFailed'}</span>
+        <button type="button" disabled={pending} onClick={() => { void state.refresh() }}>{t ? t('refresh') : 'refresh'}</button>
+      </div>}
       {open && (
-        <div className={css.menu} role="menu" aria-label={selectTitle}>
+        <div className={css.menu} role="menu" aria-label={selectTitle} onKeyDown={handleMenuKeyDown}>
           <div className={css.menuHeader}>{menuHeader}</div>
-          {tiers.map(tier => {
+          {tiers.map((tier, index) => {
             const isSelected = tier.key === selectedTierKey
             return (
               <button
                 key={tier.key}
                 type="button"
                 role="menuitemradio"
+                ref={element => { itemRefs.current[index] = element }}
                 disabled={pending}
                 aria-checked={isSelected}
+                tabIndex={index === focusedIndex ? 0 : -1}
                 className={`${css.option} ${isSelected ? css.optionSelected : ''}`}
+                onFocus={() => { focusedIndexRef.current = index; setFocusedIndex(index) }}
                 onClick={() => { void selectTier(tier.key) }}
               >
                 <div className={css.optionInfo}>

@@ -18,22 +18,31 @@ interface CatalogState {
   inflight?: Promise<readonly QoderCatalogModel[]>
   dirty: boolean
   retryRequested: boolean
+  persistenceConflictExhausted: boolean
   writing?: Promise<void>
 }
 
-interface QoderCatalogLifecycleOptions {
+export interface QoderCatalogLifecycleOptions {
   resolveTransport(): QoderTransport
   region(): QoderRegion
   configuredModels(region: QoderRegion): readonly QoderCatalogModel[]
   onDiscovered?(transport: QoderTransport, models: readonly QoderCatalogModel[]): unknown
   onPersistenceError?(error: unknown): void
+  /**
+   * Delay after a settings revision conflict before rereading and retrying.
+   * The seam keeps protocol tests deterministic without sleeping in real time.
+   */
+  persistenceConflictBackoffMs?: readonly number[]
 }
+
+const maxPersistenceConflictRetries = 3
+const defaultPersistenceConflictBackoffMs = [50, 100, 200] as const
 
 export class QoderCatalogLifecycle {
   private readonly options: QoderCatalogLifecycleOptions
   private readonly catalogs: Record<QoderRegion, CatalogState> = {
-    global: { models: [], generation: 0, expiresAt: 0, dirty: false, retryRequested: false },
-    china: { models: [], generation: 0, expiresAt: 0, dirty: false, retryRequested: false },
+    global: { models: [], generation: 0, expiresAt: 0, dirty: false, retryRequested: false, persistenceConflictExhausted: false },
+    china: { models: [], generation: 0, expiresAt: 0, dirty: false, retryRequested: false, persistenceConflictExhausted: false },
   }
   private settings?: QoderCatalogSettings
   private disposed = false
@@ -160,18 +169,25 @@ export class QoderCatalogLifecycle {
       return
     }
     state.retryRequested = false
+    state.persistenceConflictExhausted = false
     const writing = Promise.resolve().then(() => this.persist(region, settings)).catch(error => {
       this.options.onPersistenceError?.(error)
     }).finally(() => {
       if (state.writing === writing) state.writing = undefined
       // A replacement binding waits for the previous writer to finish.
-      if (this.settings !== settings || state.retryRequested) this.schedulePersistence(region)
+      // Once conflicts exhaust the bounded budget, a watcher notification that
+      // arrived during this write must not immediately start another conflict
+      // loop. The dirty metadata remains available to an explicit retry.
+      const retryRequested = state.retryRequested
+      state.retryRequested = false
+      if (this.settings !== settings || retryRequested && !state.persistenceConflictExhausted) this.schedulePersistence(region)
     })
     state.writing = writing
   }
 
   private async persist(region: QoderRegion, settings: QoderCatalogSettings): Promise<void> {
     const state = this.catalogs[region]
+    let conflictRetries = 0
     while (!this.disposed && this.settings === settings && state.dirty) {
       const snapshot = settings.read(region)
       if (!snapshot) return // Keep dirty until settings becomes available/writable.
@@ -185,8 +201,30 @@ export class QoderCatalogLifecycle {
       } catch (error) {
         state.dirty = true
         if (!(error instanceof SettingsConflictError)) throw error
+        if (conflictRetries >= maxPersistenceConflictRetries) {
+          state.persistenceConflictExhausted = true
+          throw error
+        }
+        conflictRetries++
+        await this.waitForPersistenceConflict(settings, conflictRetries)
         // Re-read the latest selection, revision and accepted metadata together.
       }
+      if (!state.dirty) {
+        // A successful write starts a fresh bounded retry budget if a newer
+        // discovery arrived while that write was in flight.
+        conflictRetries = 0
+      }
     }
+  }
+
+  private async waitForPersistenceConflict(settings: QoderCatalogSettings, retry: number): Promise<void> {
+    if (this.disposed || this.settings !== settings) return
+    const configured = this.options.persistenceConflictBackoffMs ?? defaultPersistenceConflictBackoffMs
+    const delayMs = Math.max(0, configured[Math.min(retry - 1, configured.length - 1)] ?? 0)
+    if (delayMs === 0) {
+      await Promise.resolve()
+      return
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, delayMs))
   }
 }

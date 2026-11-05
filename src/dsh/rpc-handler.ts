@@ -3,6 +3,7 @@ import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderTransport, QoderTransportOptions } from '../qoder/transport/index.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
+import { redactLogValue } from '../qoder/transport/logging.ts'
 import type { QoderAdapter } from './adapter.ts'
 import type { QoderBrowserAuthorizationManager } from './browser-authorization.ts'
 import type { QoderQueueStatusStore } from './queue-status.ts'
@@ -22,16 +23,8 @@ interface QoderRpcHandlerOptions {
   readQueue: QoderQueueStatusStore['read']
   /** Join host restoration when needed; the host owns session publication. */
   restoreSession(sessionId: string): Promise<void>
+  settingsNamespace?(): string
   logger?: QoderLogger
-}
-
-function logError(error: unknown): unknown {
-  if (!(error instanceof Error)) return { name: 'UnknownError' }
-  return {
-    name: error.name,
-    message: error.message,
-    ...'code' in error ? { code: error.code } : {},
-  }
 }
 
 type QoderHostRpcResult<T> =
@@ -79,7 +72,7 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
         code = 'UPSTREAM_ERROR'
       }
     }
-    logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
+    logger?.error?.(`[Qoder RPC] Failed to ${operation}`, redactLogValue(error))
     return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
   }
 }
@@ -87,12 +80,19 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
 /** Create a handler without registering routes or taking ownership of dependencies. */
 export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpcHandler {
   const { resolveTransport, discoverModels, authorization, adapter, readQueue, restoreSession, logger } = options
+  const settingsNamespace = options.settingsNamespace ?? (() => 'provider-qoder')
   return async (endpoint, payload, signal) => {
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
     if (endpoint === 'sessionTierEvents') return publicError('UNKNOWN_ENDPOINT', 'This endpoint requires the event stream handler')
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return publicError('INVALID_REQUEST', 'An object payload is required')
     const data = payload as Record<string, unknown>
+
+    if (endpoint === 'bootstrap') {
+      const namespace = settingsNamespace()
+      if (!namespace.trim()) return publicError('INTERNAL', 'Qoder settings namespace is unavailable')
+      return { ok: true, value: { settingsNamespace: namespace } }
+    }
 
     if (endpoint === 'authorization' || endpoint === 'beginLogin' || endpoint === 'cancelLogin' || endpoint === 'selectAuthorization') {
       const region = data?.region

@@ -68,6 +68,10 @@ const external = [
   '@deepseek-ai/schemastery',
 ]
 
+// SessionId is an identity helper from /types; permit only it and its stateless
+// brand helper to be inlined. Other host packages must stay external.
+const onlyBundle = ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-brand']
+
 export default defineConfig([
   {
     name: 'dsh-provider-qoder',
@@ -82,7 +86,7 @@ export default defineConfig([
     fixedExtension: false,
     dts: true,
     clean: true,
-    deps: { neverBundle: external },
+    deps: { neverBundle: external, onlyBundle },
   },
   {
     name: 'dsh-provider-qoder/client',
@@ -95,6 +99,7 @@ export default defineConfig([
     sourcemap: false,
     clean: false,
     deps: {
+      onlyBundle,
       neverBundle: [
         'react',
         'react/jsx-runtime',

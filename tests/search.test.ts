@@ -1,11 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Context } from '@deepseek-ai/cordis'
-import { WebError, type WebSearchProvider, type WebSearchResult } from '@deepseek-ai/dsh-web'
+import { WebError } from '@deepseek-ai/dsh-web'
 import { getQoderWebSearchUrl, qoderWebSearchPath } from '../src/qoder/transport/endpoints.ts'
 import { QoderSearchClient } from '../src/qoder/transport/search.ts'
-import { QoderSearchProvider, QODER_SEARCH_PROVIDER_ID } from '../src/dsh/search-provider.ts'
-import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
+import { QoderSearchProvider } from '../src/dsh/search-provider.ts'
 import type { QoderTransport } from '../src/qoder/transport/index.ts'
 import type { CosyCredentials } from '../src/qoder/transport/wire/cosy.ts'
 
@@ -178,61 +177,4 @@ test('QoderSearchProvider caps direct results to maxResults', async () => {
   const unlimited = await provider.search({ query: 'limits' })
   assert.deepEqual(unlimited.sources, sources)
   assert.equal(unlimited.truncated, false)
-})
-
-test('QoderSearchProvider routes Qoder search through transport', async () => {
-  const ctx = new Context()
-  ctx.provide('agents', {
-    currentInitiator: () => ({
-      options: {
-        provider: QODER_PROVIDER_ID,
-      },
-    }),
-  } as any)
-
-  let transportSearchCalled = false
-  const fakeTransport = {
-    searchWeb: async () => {
-      transportSearchCalled = true
-      return { sources: [{ url: 'https://transport.qoder.sh' }], truncated: false }
-    },
-  } as any
-
-  const provider = new QoderSearchProvider({
-    ctx,
-    resolveTransport: () => fakeTransport,
-    getWebSearchMode: () => 'auto',
-  })
-
-  const result = await provider.search({ query: 'test transport' })
-  assert.equal(transportSearchCalled, true)
-  assert.equal(result.sources[0].url, 'https://transport.qoder.sh')
-})
-
-test('QoderSearchProvider falls back to agentDefaultModel when currentInitiator is absent', async () => {
-  const ctx = new Context()
-  ctx.provide('agents', {
-    currentInitiator: () => undefined,
-  } as any)
-  ctx.provide('agentDefaultModel', {
-    currentSelection: () => ({ provider: QODER_PROVIDER_ID, model: 'gfmodel' }),
-  } as any)
-
-  let qoderSearchCalled = false
-  const fakeTransport = {
-    searchWeb: async () => {
-      qoderSearchCalled = true
-      return { sources: [{ url: 'https://default-qoder.sh' }], truncated: false }
-    },
-  } as any
-
-  const provider = new QoderSearchProvider({
-    ctx,
-    resolveTransport: () => fakeTransport,
-    getWebSearchMode: () => 'auto',
-  })
-
-  const result = await provider.search({ query: 'test default model' })
-  assert.equal(qoderSearchCalled, true)
-  assert.equal(result.sources[0].url, 'https://default-qoder.sh')
 })

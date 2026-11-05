@@ -566,3 +566,31 @@ test('QoderUsageReader degrades gracefully when plan or status endpoint returns 
   assert.equal(account.plan, undefined)
   assert.equal(account.status, undefined)
 })
+
+test('QoderUsageReader redacts plan and status failure logs while preserving partial account reads', async () => {
+  const warnings: unknown[][] = []
+  const fetchMock: typeof fetch = async input => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-test' }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'subscriber-test' }))
+    if (url.includes('/quota/usage')) return new Response(JSON.stringify({ userQuota: { remaining: 40 } }))
+    if (url.includes('/user/plan') || url.includes('/user/status')) {
+      throw new QoderLlmError(JSON.stringify({ token: 'arbitrary-private-value' }), 'TRANSPORT', {
+        cause: { authorization: 'Bearer nested-private-value' },
+      })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+  const reader = new QoderUsageReader({
+    authService: new QoderAuthService({ fetch: fetchMock, resolveMachineId: () => 'machine-test' }),
+    fetch: fetchMock,
+    logger: { warn: (...args) => warnings.push(args) },
+  })
+  const account = await reader.readAccount('pt-test')
+  assert.equal(account.usage?.userQuota?.remaining, 40)
+  assert.equal(account.plan, undefined)
+  assert.equal(account.status, undefined)
+  assert.equal(warnings.length, 2)
+  assert.doesNotMatch(JSON.stringify(warnings), /arbitrary-private-value|nested-private-value/)
+  assert.match(JSON.stringify(warnings), /TRANSPORT/)
+})

@@ -16,7 +16,25 @@ export interface QoderCompressionRejection {
   reason?: Rejection
 }
 // Process-local, protocol + origin + path; never persist subscriber information.
-const disabledEndpoints = new Set<string>()
+// A transient gateway/WAF response must not disable probing for the lifetime of
+// the process. Keep the endpoint disabled long enough to avoid retry storms,
+// then allow a later request to re-probe the capability.
+export const requestCompressionDisableTtlMs = 30 * 60 * 1000
+const disabledEndpoints = new Map<string, number>()
+
+function endpointDisabled(key: string, now = Date.now()): boolean {
+  const expiresAt = disabledEndpoints.get(key)
+  if (expiresAt === undefined) return false
+  if (now >= expiresAt) {
+    disabledEndpoints.delete(key)
+    return false
+  }
+  return true
+}
+
+function disableEndpoint(key: string, now = Date.now()): void {
+  disabledEndpoints.set(key, now + requestCompressionDisableTtlMs)
+}
 
 function endpointKey(protocol: Protocol, url: string): string {
   const { origin, pathname } = new URL(url)
@@ -119,7 +137,7 @@ export class QoderRequestCompression {
     identityReason = !enabled ? 'disabled'
       : this.fallbackAttempted ? 'fallback_already_attempted'
         : vpcEndpoint(url) ? 'vpc_endpoint'
-          : disabledEndpoints.has(key) ? 'endpoint_disabled'
+          : endpointDisabled(key) ? 'endpoint_disabled'
             : body.length < minChars ? 'below_threshold'
               : typeof zlib.zstdCompress !== 'function' || zlib.constants.ZSTD_c_compressionLevel === undefined ? 'native_unavailable'
                 : existingEncoding && existingEncoding !== 'identity' ? 'existing_encoding' : undefined
@@ -170,7 +188,7 @@ export class QoderRequestCompression {
   }
 
   confirm(): void {
-    if (this.pendingConfirmation) disabledEndpoints.add(this.pendingConfirmation)
+    if (this.pendingConfirmation) disableEndpoint(this.pendingConfirmation)
     this.pendingConfirmation = undefined
     this.compressedEndpoint = undefined
   }
@@ -187,7 +205,7 @@ export class QoderRequestCompression {
   }
 
   private rejectLegacy(status: number, reason: Rejection): never {
-    if (this.compressedEndpoint) disabledEndpoints.add(this.compressedEndpoint)
+    if (this.compressedEndpoint) disableEndpoint(this.compressedEndpoint)
     // DSH retries with a new request identity. Never replay a model stream here.
     throw new QoderLlmError(`Qoder rejected Zstd (${reason}); retry without compression.`, 'TRANSPORT', { status })
   }

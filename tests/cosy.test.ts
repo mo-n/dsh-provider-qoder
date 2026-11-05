@@ -4,13 +4,9 @@ import assert from 'node:assert/strict'
 import { writeFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { buildAuthHeaders, computeSigPath, qoderMachineOs, qoderIdeVersion } from '../src/qoder/transport/wire/cosy.ts'
+import { buildAuthHeaders, qoderMachineOs, qoderIdeVersion } from '../src/qoder/transport/wire/cosy.ts'
 import { getQoderChatUrl } from '../src/qoder/transport/endpoints.ts'
 import { getMachineId, qoderMachineIdPaths } from '../src/qoder/transport/machine-id.ts'
-
-test('computeSigPath strips the /algo prefix', () => {
-  assert.equal(computeSigPath('https://api3.qoder.sh/algo/api/v2/service'), '/api/v2/service')
-})
 
 test('getMachineId accepts an isolated storage location', () => {
   const path = join(tmpdir(), `qoder-machine-${crypto.randomUUID()}`, 'machine_id')

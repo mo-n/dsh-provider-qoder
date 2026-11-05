@@ -51,6 +51,21 @@ jobs:
       - name: Build, test, and check package contents
         run: pnpm run check
 
+      - name: Prepare release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          const { body } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'release-notes.json'), 'utf8'))
+          // Preserve PR titles and links for the release issue processing step.
+          const notes = body.replace(/^([*-] .+) by @\S+ in (https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+)[ \t]*$/gm, '$1 in $2')
+          writeFileSync(join(process.env.RUNNER_TEMP, 'release-notes.md'), notes)
+          NODE
+
       # Verification already ran above; avoid repeating prepublishOnly.
       - name: Publish with npm trusted publishing
         run: npm publish --ignore-scripts --access public --provenance --registry https://registry.npmjs.org --tag "$DIST_TAG"
@@ -63,7 +78,7 @@ jobs:
           DIST_TAG: ${{ steps.release.outputs.dist-tag }}
         run: |
           pnpm pack
-          RELEASE_ARGS=("$GITHUB_REF_NAME" *.tgz --title "$GITHUB_REF_NAME" --generate-notes)
+          RELEASE_ARGS=("$GITHUB_REF_NAME" *.tgz --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md")
           if [ "$DIST_TAG" = "next" ]; then
             RELEASE_ARGS+=(--prerelease)
           fi
