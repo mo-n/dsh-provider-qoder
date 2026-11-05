@@ -3,6 +3,7 @@ import type { QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderTransport, QoderTransportOptions } from '../qoder/transport/index.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
+import { redactLogValue } from '../qoder/transport/logging.ts'
 import type { QoderAdapter } from './adapter.ts'
 import type { QoderBrowserAuthorizationManager } from './browser-authorization.ts'
 import type { QoderQueueStatusStore } from './queue-status.ts'
@@ -24,15 +25,6 @@ interface QoderRpcHandlerOptions {
   restoreSession(sessionId: string): Promise<void>
   settingsNamespace?(): string
   logger?: QoderLogger
-}
-
-function logError(error: unknown): unknown {
-  if (!(error instanceof Error)) return { name: 'UnknownError' }
-  return {
-    name: error.name,
-    message: error.message,
-    ...'code' in error ? { code: error.code } : {},
-  }
 }
 
 type QoderHostRpcResult<T> =
@@ -80,7 +72,7 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
         code = 'UPSTREAM_ERROR'
       }
     }
-    logger?.error?.(`[Qoder RPC] Failed to ${operation}`, logError(error))
+    logger?.error?.(`[Qoder RPC] Failed to ${operation}`, redactLogValue(error))
     return publicError(code, error instanceof Error ? error.message : `Failed to ${operation}`)
   }
 }

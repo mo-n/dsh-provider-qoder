@@ -8,6 +8,23 @@ import type { QoderRegion } from '../src/qoder/region.ts'
 const unused = (): never => { throw new Error('Unexpected dependency call') }
 const signal = () => new AbortController().signal
 
+test('RPC failure logs redact exception messages and nested credential causes', async () => {
+  const deps = options()
+  const entries: unknown[] = []
+  deps.logger = { error: (...args) => entries.push(args) }
+  deps.discoverModels = async () => {
+    throw Object.assign(new Error(JSON.stringify({ token: 'arbitrary-private-value' }), {
+      cause: { authorization: 'Bearer nested-private-value' },
+    }), { code: 'ECONNRESET' })
+  }
+  const result = await createQoderRpcHandler(deps)('models', {}, signal())
+  assert.equal(result.ok, false)
+  assert.equal(entries.length, 1)
+  const output = JSON.stringify(entries)
+  assert.doesNotMatch(output, /arbitrary-private-value|nested-private-value/)
+  assert.match(output, /ECONNRESET/)
+})
+
 function options(): Parameters<typeof createQoderRpcHandler>[0] {
   return {
     region: () => 'global',
