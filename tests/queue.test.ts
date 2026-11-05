@@ -482,3 +482,71 @@ test('a delayed old finish cannot release the next real turn lease after identic
   assert.equal(activeLeases.size, 0)
   assert.equal(finishCalls, 2)
 })
+
+test('anonymous requests sharing a request set release the queue lease once after all callers finish', async () => {
+  let finishes = 0
+  const fetch = (async input => {
+    if (String(input).includes('/ask/finish')) { finishes++; return Response.json({}) }
+    throw new Error(`unexpected queue request: ${String(input)}`)
+  }) as typeof globalThis.fetch
+  const first = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-shared' }))
+  const second = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-shared' }))
+  first.entered({ modelKey: 'model' })
+  second.entered({ modelKey: 'model' })
+  await first.finish(10)
+  assert.equal(finishes, 0)
+  await second.finish(20)
+  assert.equal(finishes, 1)
+})
+
+test('a new anonymous caller waits for a prior shared lease release before dispatch', async () => {
+  let completeRelease!: () => void
+  const releaseResponse = new Promise<Response>(resolve => { completeRelease = () => resolve(Response.json({})) })
+  const fetch = (async input => {
+    if (String(input).includes('/ask/finish')) return releaseResponse
+    throw new Error(`unexpected queue request: ${String(input)}`)
+  }) as typeof globalThis.fetch
+  const first = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-barrier' }))
+  first.entered({ modelKey: 'model' })
+  const finishing = first.finish(10)
+  await setImmediate()
+  const second = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-barrier' }))
+  let ready = false
+  const waiting = second.ready().then(() => { ready = true })
+  await setImmediate()
+  assert.equal(ready, false)
+  completeRelease()
+  await finishing
+  await waiting
+  assert.equal(ready, true)
+  await second.finish(20)
+})
+
+test('a cancelled waiter cannot replace an earlier anonymous release barrier', async () => {
+  let completeRelease!: () => void
+  const releaseResponse = new Promise<Response>(resolve => { completeRelease = () => resolve(Response.json({})) })
+  const fetch = (async input => {
+    if (String(input).includes('/ask/finish')) return releaseResponse
+    throw new Error(`unexpected queue request: ${String(input)}`)
+  }) as typeof globalThis.fetch
+  const first = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-chain' }))
+  first.entered({ modelKey: 'model' })
+  const firstFinish = first.finish(10)
+  await setImmediate()
+
+  // This caller is cancelled before it can pass the first ready barrier. Its
+  // cleanup must chain after the first release rather than replace it.
+  const cancelled = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-chain' }))
+  const cancelledFinish = cancelled.finish(20)
+  const next = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-chain' }))
+  let ready = false
+  const waiting = next.ready().then(() => { ready = true })
+  await setImmediate()
+  assert.equal(ready, false)
+  completeRelease()
+  await firstFinish
+  await cancelledFinish
+  await waiting
+  assert.equal(ready, true)
+  await next.finish(30)
+})

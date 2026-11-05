@@ -8,6 +8,7 @@ import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { streamModelServerChat } from '../src/qoder/transport/model-server.ts'
 import { streamQoderChat } from '../src/qoder/transport/chat.ts'
 import { qoderEncodeBodyBytes } from '../src/qoder/transport/wire/encoding.ts'
+import { qoderIdeVersion } from '../src/qoder/transport/wire/client-identity.ts'
 import { Config } from '../src/dsh/config.ts'
 import { createQoderTransport } from '../src/qoder/transport/index.ts'
 import { transportConfig } from '../src/dsh/transport-runtime.ts'
@@ -454,7 +455,7 @@ for (const { fallbackStatus, region } of [
           fetch: (async (_url, init) => {
             const headers = new Headers(init?.headers)
             assert.equal(headers.get('authorization'), 'Bearer do-not-capture-authorization')
-            assert.equal(headers.get('cosy-version'), '1.1.73')
+            assert.equal(headers.get('cosy-version'), qoderIdeVersion)
             assert.equal(headers.get('cosy-clienttype'), '5')
             assert.ok(headers.get('cosy-machineos'))
             assert.equal(headers.get('cosy-key'), null)

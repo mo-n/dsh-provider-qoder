@@ -301,7 +301,7 @@ test('buildQoderRequestBody uses the resolved identity and configured model', as
   assert.equal(body.session_type, 'qodercli')
   assert.equal(body.model_config.key, 'custom-model')
   assert.equal(body.parameters.max_tokens, 4096)
-  assert.match(body.session_id, /^[a-f0-9]{16}-session-1$/)
+  assert.match(body.session_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
 })
 
 test('buildQoderRequestBody applies discovered Qoder transport metadata', async () => {

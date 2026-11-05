@@ -161,6 +161,33 @@ test('generation uses ge3i, preserves host turn identity and downloads original 
   const result = await generateImage({ prompt: 'cat', sessionId: 'session', hostRun }, deps)
   assert.equal(result.mediaType, 'image/png'); assert.deepEqual(Buffer.from(result.bytes), png)
 })
+test('image-first host runs share UUID sessions with model calls and isolate service regions', async () => {
+  const sessionIds: string[] = []
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+  for (const region of ['global', 'china'] as const) {
+    const hostRun = { id: `image-first-${region}` }
+    let imageSessionId = ''; let businessId = ''; let requestSetId = ''
+    const deps = dependencies((async (_url, init) => {
+      const body = decode(String(init?.body))
+      const payload = JSON.parse(String(body.payload))
+      imageSessionId = String(body.sessionId)
+      businessId = payload.metadata.business.id
+      requestSetId = new Headers(init?.headers).get('X-RequestSet-ID')!
+      return json({ data: [{ url: `data:image/png;base64,${png.toString('base64')}` }] })
+    }) as typeof fetch)
+    deps.region = region
+    await generateImage({ prompt: 'cat', sessionId: 'image-first-session', hostRun }, deps)
+    const model = await prepareQoderRequest({ provider: 'qoder', model: 'chat-model', sessionId: 'image-first-session' as never, messages: [] }, creds.userID, [], undefined, undefined, undefined, region, hostRun)
+    assert.match(imageSessionId, uuid)
+    assert.match(requestSetId, uuid)
+    assert.equal(model.sessionId, imageSessionId)
+    assert.equal(model.business.id, businessId)
+    assert.equal(model.requestSetId, requestSetId)
+    sessionIds.push(imageSessionId)
+  }
+  assert.notEqual(sessionIds[0], sessionIds[1])
+})
+
 test('uncertain generation failures never replay', async () => {
   for (const response of [new Response('oops', { status: 500 }), new Response('invalid JSON'), json({ code: 103 }), json({ data: [] })]) {
     let calls = 0

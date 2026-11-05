@@ -184,10 +184,10 @@ test('the request envelope keeps run identity and its injected timestamp across 
   }
   assert.equal(first.business.id, second.business.id)
   assert.notEqual(nextTurn.business.id, first.business.id)
+  assert.match(first.session_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu)
   assert.equal(first.business.begin_at, 1000)
   assert.equal(second.business.begin_at, 1000)
   assert.equal(nextTurn.business.begin_at, 3000)
-  assert.match(first.session_id, /^[a-f0-9]{16}-identity-session-envelope$/)
 })
 
 test('an auxiliary host call never moves the open turn', async () => {
@@ -421,6 +421,66 @@ test('provider identities isolate queue request sets between subscribers and reg
   assert.notEqual(other.business.id, first.business.id)
   assert.notEqual(regional.request_set_id, first.request_set_id)
   assert.equal(same.request_set_id, first.request_set_id)
+})
+
+test('business name follows the prompt that opens each turn and stays frozen', () => {
+  const tracker = new QoderTurnTracker()
+  const session = 'business-name-session'
+  const first = tracker.resolveTurnIdentity(session, [wireUser('Old prompt')])
+  const next = tracker.resolveTurnIdentity(session, [wireUser('Old prompt'), wireUser('New prompt')])
+  const continued = tracker.resolveTurnIdentity(session, [
+    wireUser('Old prompt'),
+    wireUser('New prompt'),
+    injected('steering context'),
+  ])
+
+  assert.equal(first.businessName, 'Old prompt')
+  assert.equal(next.businessName, 'New prompt')
+  assert.equal(continued.businessName, 'New prompt')
+})
+
+test('unscoped conversation requests share a fixed five-minute run window', () => {
+  let now = 10_000
+  const tracker = new QoderTurnTracker({ now: () => now, maxSessions: 1 })
+  const resolve = (scope: string, model = 'review-model') => tracker.resolveTurnIdentity(
+    undefined,
+    [wireUser('Review this tool call')],
+    'conversation',
+    undefined,
+    model,
+    undefined,
+    { scope },
+  )
+
+  const first = resolve('global\0subscriber-a')
+  now += 60_000
+  // Active windows are not evicted merely because other scopes are observed.
+  resolve('global\0subscriber-b')
+  resolve('global\0subscriber-c')
+  const same = resolve('global\0subscriber-a')
+  assert.equal(same.sessionId, first.sessionId)
+  assert.equal(same.businessId, first.businessId)
+  assert.equal(same.requestSetId, first.requestSetId)
+
+  now = 10_000 + 5 * 60 * 1000
+  const next = resolve('global\0subscriber-a')
+  assert.equal(next.sessionId, first.sessionId)
+  assert.notEqual(next.businessId, first.businessId)
+  assert.notEqual(next.requestSetId, first.requestSetId)
+  assert.equal(next.businessStage, 'start')
+})
+
+test('unscoped auxiliary calls never claim the conversation aggregation window', () => {
+  const tracker = new QoderTurnTracker({ now: () => 10_000 })
+  const context = { scope: 'global\0subscriber-a' }
+  const conversation = tracker.resolveTurnIdentity(undefined, [wireUser('Review')], 'conversation', undefined, 'model', undefined, context)
+  const auxiliary = tracker.resolveTurnIdentity(undefined, [wireUser('Summarize')], 'auxiliary', undefined, 'model', undefined, context)
+  const resumed = tracker.resolveTurnIdentity(undefined, [wireUser('Review')], 'conversation', undefined, 'model', undefined, context)
+
+  assert.notEqual(auxiliary.sessionId, conversation.sessionId)
+  assert.notEqual(auxiliary.businessId, conversation.businessId)
+  assert.equal(resumed.sessionId, conversation.sessionId)
+  assert.equal(resumed.businessId, conversation.businessId)
 })
 
 test('hosted turns survive injected context, projected history and steering, but honor model switches', async () => {

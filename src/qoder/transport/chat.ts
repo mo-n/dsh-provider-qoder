@@ -86,6 +86,7 @@ export async function* streamQoderChat(
   const clear = (): void => queue.clear()
   options.signal?.addEventListener('abort', clear, { once: true })
   try {
+    await queue.ready()
     for (;;) {
       if (options.signal?.aborted) throw aborted('Request was aborted.')
       try {

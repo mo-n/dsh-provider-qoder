@@ -9,8 +9,8 @@
  *
  * Hosted calls use a captured host run as their authoritative boundary. The
  * weakly owned identity survives history projections and standalone-cache eviction.
- * Standalone calls infer boundaries from the multiset of user-role messages:
- * unseen subscriber input opens a run; recognized host context continues it.
+ * Named standalone calls infer boundaries from the multiset of user-role
+ * messages; requests without a DSH session use a scoped fixed-time window.
  * Auxiliary calls always receive independent identities.
  *
  * Standalone limit: text identifies a message because wire messages lack host
@@ -33,6 +33,10 @@ export interface QoderTurnIdentity {
   readonly businessId: string
   readonly beginAt: number
   readonly businessStage: 'start' | 'processing'
+  /** Stable wire session identity for the resolved request group. */
+  readonly sessionId: string
+  /** First subscriber prompt used for the Qoder Credits task label. */
+  readonly businessName: string
 }
 
 /**
@@ -67,6 +71,16 @@ export interface QoderTurnTrackerOptions {
    * real idle window.
    */
   now?: () => number
+  /** Fixed lifetime for no-session aggregation windows. */
+  unscopedWindowTtlMs?: number
+}
+
+/** Optional wire context supplied by the request preparation layer. */
+export interface QoderTurnResolveOptions {
+  /** Region/subscriber scope used for requests without a DSH session id. */
+  scope?: string
+  /** Pre-resolved wire session id for a named DSH session. */
+  sessionId?: string
 }
 
 interface SessionTurnState {
@@ -106,11 +120,21 @@ interface SessionTurnState {
    * opens a new agent run and consumption record.
    */
   currentModel?: string
+  /** First subscriber prompt shown in the Qoder Credits panel. */
+  currentBusinessName: string
+  /** Stable wire session id for this DSH conversation. */
+  sessionId: string
+}
+
+interface UnscopedWindowState {
+  readonly expiresAt: number
+  readonly identity: QoderTurnIdentity
 }
 
 const defaultMaxSessions = 64
 /** A conversation untouched for this long cannot still be mid-turn. */
 const defaultIdleSessionTtlMs = 60 * 60 * 1000
+const defaultUnscopedWindowTtlMs = 5 * 60 * 1000
 
 
 /**
@@ -138,6 +162,7 @@ const injectedContextOpenings: readonly string[] = [
   '<openviking-context',
   '<goal_complete>',
   'Current runtime context. This snapshot supersedes earlier runtime-context',
+  'Time sampled while preparing turn ',
   'This is an automatically generated checkpoint condensing',
   '[model changed:',
   'background job ',
@@ -178,18 +203,17 @@ function qoderMessageOrigin(message: QoderWireMessage): QoderMessageOrigin {
   return injectedContextOpenings.some(opening => text.startsWith(opening)) ? 'injected' : 'prompt'
 }
 
-/** Stable record id of one session turn. */
-function turnIdFor(sessionId: string, turnCount: number, anchor: string): string {
-  return crypto.createHash('sha256')
-    .update('qoder-turn')
-    .update('\0')
-    .update(sessionId)
-    .update('\0')
-    .update(String(turnCount))
-    .update('\0')
-    .update(anchor)
-    .digest('hex')
-    .slice(0, 16)
+/** First subscriber prompt used for the upstream business task label. */
+function firstPromptName(messages: readonly QoderWireMessage[]): string {
+  // Hosted requests carry projected history. The latest prompt is the best
+  // available boundary-local label when the host does not expose its message id.
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role === 'user' && qoderMessageOrigin(message) === 'prompt') {
+      return wireMessageText(message).slice(0, 10)
+    }
+  }
+  return ''
 }
 
 /**
@@ -231,15 +255,23 @@ function messageFingerprint(message: QoderWireMessage): string {
 export class QoderTurnTracker {
   private readonly maxSessions: number
   private readonly idleSessionTtlMs: number
+  private readonly unscopedWindowTtlMs: number
   private readonly now: () => number
   // Weak ownership keeps active/late requests stable without retaining completed runs.
   private hosted = new WeakMap<QoderHostRun, Map<string, { modelKey?: string; identity: QoderTurnIdentity }>>()
   private readonly sessions = new Map<string, SessionTurnState>()
+  private readonly unscopedWindows = new Map<string, UnscopedWindowState>()
+  /** Process-local session mapping survives the bounded five-minute window cache. */
+  private readonly unscopedSessionIds = new Map<string, string>()
 
   constructor(options: QoderTurnTrackerOptions = {}) {
     this.maxSessions = options.maxSessions ?? defaultMaxSessions
     this.idleSessionTtlMs = options.idleSessionTtlMs ?? defaultIdleSessionTtlMs
+    this.unscopedWindowTtlMs = options.unscopedWindowTtlMs ?? defaultUnscopedWindowTtlMs
     this.now = options.now ?? Date.now
+    if (!Number.isFinite(this.unscopedWindowTtlMs) || this.unscopedWindowTtlMs <= 0) {
+      throw new Error('unscopedWindowTtlMs must be a positive finite number')
+    }
   }
 
   /**
@@ -256,16 +288,23 @@ export class QoderTurnTracker {
     requestId = crypto.randomUUID(),
     modelKey?: string,
     hostRun?: QoderHostRun,
+    resolveOptions: QoderTurnResolveOptions = {},
   ): QoderTurnIdentity {
     const now = this.now()
 
     if (sessionId === undefined || sessionId.length === 0) {
+      if (kind === 'conversation' && hostRun === undefined && resolveOptions.scope !== undefined) {
+        return this.resolveUnscopedWindow(resolveOptions.scope, modelKey ?? '', requestId, messages, now)
+      }
+      const independentSessionId = resolveOptions.sessionId ?? crypto.randomUUID()
       return {
-        requestSetId: `qoder-request-${crypto.randomUUID()}`,
+        requestSetId: crypto.randomUUID(),
         chatRecordId: requestId,
         businessId: crypto.randomUUID(),
         beginAt: now,
         businessStage: 'start',
+        sessionId: independentSessionId,
+        businessName: firstPromptName(messages),
       }
     }
 
@@ -274,16 +313,18 @@ export class QoderTurnTracker {
         this.sessions.get(sessionId)!.lastTouchedAt = now
       }
       return {
-        requestSetId: `qoder-request-${crypto.randomUUID()}`,
+        requestSetId: crypto.randomUUID(),
         chatRecordId: requestId,
         businessId: crypto.randomUUID(),
         beginAt: now,
         businessStage: 'start',
+        sessionId: resolveOptions.sessionId ?? crypto.randomUUID(),
+        businessName: firstPromptName(messages),
       }
     }
 
     if (hostRun !== undefined) {
-      return this.resolveHosted(hostRun, sessionId, requestId, modelKey, now)
+      return this.resolveHosted(hostRun, sessionId, requestId, modelKey, now, resolveOptions, messages)
     }
 
     let state = this.sessions.get(sessionId)
@@ -298,6 +339,8 @@ export class QoderTurnTracker {
         lastTouchedAt: now,
         turnCount: 0,
         currentModel: modelKey,
+        currentBusinessName: '',
+        sessionId: resolveOptions.sessionId ?? crypto.randomUUID(),
       }
       this.claimSession(sessionId, state)
     } else {
@@ -316,7 +359,7 @@ export class QoderTurnTracker {
     // identifies a message because the host's own message ids are not part of
     // the wire shape; host-appended context and transport-synthesized markers
     // join the open record, and only newly seen subscriber input opens the next.
-    const present = new Map<string, { count: number; host: QoderMessageOrigin }>()
+    const present = new Map<string, { count: number; host: QoderMessageOrigin; text: string }>()
     for (const message of messages) {
       if (message.role !== 'user') continue
       const fingerprint = messageFingerprint(message)
@@ -325,6 +368,7 @@ export class QoderTurnTracker {
         present.set(fingerprint, {
           count: 1,
           host: qoderMessageOrigin(message),
+          text: wireMessageText(message),
         })
       } else {
         entry.count += 1
@@ -332,6 +376,7 @@ export class QoderTurnTracker {
     }
 
     let opening: string | undefined
+    let openingName = ''
     let unclaimed = 0
     for (const [fingerprint, entry] of present) {
       const claimed = state.claimed.get(fingerprint) ?? 0
@@ -342,7 +387,10 @@ export class QoderTurnTracker {
       // the next one.
       if (entry.host === 'injected' || entry.host === 'synthetic') continue
       unclaimed += entry.count - claimed
-      opening = fingerprint
+      if (opening === undefined && entry.host === 'prompt') {
+        opening = fingerprint
+        openingName = entry.text.slice(0, 10)
+      }
     }
 
     // Forget occurrences this request no longer carries. A message the turn
@@ -366,17 +414,19 @@ export class QoderTurnTracker {
     if ((opening !== undefined && unclaimed > 0) || modelChanged) {
       businessStage = 'start'
       state.turnCount += 1
-      state.currentTurnId = turnIdFor(sessionId, state.turnCount, opening ?? state.currentModel ?? '')
+      state.currentTurnId = crypto.randomUUID()
       state.currentBusinessId = crypto.randomUUID()
       state.turnOpenedAt = now
+      state.currentBusinessName = openingName || firstPromptName(messages)
     } else if (state.currentTurnId === '') {
       // A conversation whose first request carries no subscriber input still
       // belongs to a record; it keeps that record until a real prompt arrives.
       businessStage = 'start'
       state.turnCount += 1
-      state.currentTurnId = turnIdFor(sessionId, state.turnCount, state.currentModel ?? '')
+      state.currentTurnId = crypto.randomUUID()
       state.currentBusinessId = crypto.randomUUID()
       state.turnOpenedAt = now
+      state.currentBusinessName = firstPromptName(messages)
     }
 
     return {
@@ -385,6 +435,8 @@ export class QoderTurnTracker {
       businessId: state.currentBusinessId,
       beginAt: state.turnOpenedAt,
       businessStage,
+      sessionId: state.sessionId,
+      businessName: state.currentBusinessName,
     }
   }
 
@@ -395,6 +447,8 @@ export class QoderTurnTracker {
     requestId: string,
     modelKey: string | undefined,
     now: number,
+    resolveOptions: QoderTurnResolveOptions,
+    messages: readonly QoderWireMessage[],
   ): QoderTurnIdentity {
     let scopes = this.hosted.get(run)
     if (scopes === undefined) {
@@ -405,14 +459,21 @@ export class QoderTurnTracker {
     const modelChanged = previous?.modelKey !== undefined && modelKey !== undefined && previous.modelKey !== modelKey
     if (previous !== undefined && !modelChanged) {
       if (modelKey !== undefined) previous.modelKey = modelKey
+      const businessName = previous.identity.businessName || firstPromptName(messages)
+      if (businessName !== previous.identity.businessName) {
+        previous.identity = { ...previous.identity, businessName }
+      }
       return { ...previous.identity, chatRecordId: requestId, businessStage: 'processing' }
     }
+    const sessionId = previous?.identity.sessionId ?? resolveOptions.sessionId ?? crypto.randomUUID()
     const identity: QoderTurnIdentity = {
-      requestSetId: `qoder-request-${crypto.randomUUID()}`,
+      requestSetId: crypto.randomUUID(),
       chatRecordId: requestId,
       businessId: crypto.randomUUID(),
       beginAt: now,
       businessStage: 'start',
+      sessionId,
+      businessName: firstPromptName(messages),
     }
     scopes.set(scope, { modelKey, identity })
     return identity
@@ -457,7 +518,55 @@ export class QoderTurnTracker {
   /** Forget every session. */
   clear(): void {
     this.sessions.clear()
+    this.unscopedWindows.clear()
+    this.unscopedSessionIds.clear()
     this.hosted = new WeakMap()
+  }
+
+  /** Resolve a fixed five-minute identity window for an unscoped conversation call. */
+  private resolveUnscopedWindow(
+    scope: string,
+    modelKey: string,
+    requestId: string,
+    messages: readonly QoderWireMessage[],
+    now: number,
+  ): QoderTurnIdentity {
+    const key = `${scope}\0${modelKey}`
+    const previous = this.unscopedWindows.get(key)
+    if (previous !== undefined && now < previous.expiresAt) {
+      return { ...previous.identity, chatRecordId: requestId, businessStage: 'processing' }
+    }
+
+    // The wire session remains stable over multiple windows; only the agent run
+    // and request set roll at the fixed boundary.
+    let sessionId = this.unscopedSessionIds.get(key)
+    if (sessionId === undefined) {
+      sessionId = crypto.randomUUID()
+      this.unscopedSessionIds.set(key, sessionId)
+    }
+    const identity: QoderTurnIdentity = {
+      requestSetId: crypto.randomUUID(),
+      chatRecordId: requestId,
+      businessId: crypto.randomUUID(),
+      beginAt: now,
+      businessStage: 'start',
+      sessionId,
+      businessName: firstPromptName(messages),
+    }
+    const window: UnscopedWindowState = {
+      expiresAt: now + this.unscopedWindowTtlMs,
+      identity,
+    }
+    this.unscopedWindows.set(key, window)
+    this.evictUnscopedWindows(now)
+    return identity
+  }
+
+  /** Prune only expired windows; an active window must survive scope pressure. */
+  private evictUnscopedWindows(now: number): void {
+    for (const [key, window] of this.unscopedWindows) {
+      if (window.expiresAt <= now) this.unscopedWindows.delete(key)
+    }
   }
 
   private claimSession(sessionId: string, state: SessionTurnState): void {
