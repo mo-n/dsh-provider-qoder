@@ -52,11 +52,6 @@ function bootstrapContext(onFormLookup: (namespace: string) => void = () => {}) 
   }
 }
 
-test('client settings declares required services', async () => {
-  const plugin = await loadClientPlugin()
-  assert.deepEqual([...plugin.inject], ['slots', 'locale', 'remote', 'remote.credentials', 'configForms'])
-})
-
 test('client settings mounts under the namespace returned by the host', async () => {
   const plugin = await loadClientPlugin(async input => {
     assert.equal(String(input), '/api/qoder-subscription/bootstrap')
@@ -224,6 +219,7 @@ test('client settings bounds each unresponsive bootstrap request and aborts ever
 
 test('client settings mounts with declared services and reports rejected writes', async () => {
   const plugin = await loadClientPlugin()
+  assert.deepEqual([...plugin.inject], ['slots', 'locale', 'remote', 'remote.credentials', 'configForms'])
   let namespace: string | undefined
   let operations!: {
     storeRegion(region: string): Promise<OperationResult<void>>

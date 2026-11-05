@@ -2,15 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resolveLocalizedText } from '../src/client/locales.ts'
 
-test('resolveLocalizedText prefers an exact language tag match', () => {
-  const text = {
-    values: { 'zh-CN': 'SOTA 专属积分', 'en-US': 'SOTA Exclusive Credits' },
-    fallback: 'sota model series',
-  }
-  assert.equal(resolveLocalizedText(text, 'zh-CN'), 'SOTA 专属积分')
-  assert.equal(resolveLocalizedText(text, 'en-US'), 'SOTA Exclusive Credits')
-})
-
 test('resolveLocalizedText matches the built-in zh/en ids against regional provider keys', () => {
   const text = {
     values: { 'zh-CN': 'SOTA 专属积分', 'en-US': 'SOTA Exclusive Credits' },
@@ -22,8 +13,9 @@ test('resolveLocalizedText matches the built-in zh/en ids against regional provi
 })
 
 test('resolveLocalizedText prefers an exact key over a shared primary subtag', () => {
-  const text = { values: { zh: '通用中文', 'zh-CN': '简体中文' }, fallback: 'generic' }
+  const text = { values: { zh: '通用中文', 'zh-CN': '简体中文', 'en-US': 'SOTA Exclusive Credits' }, fallback: 'generic' }
   assert.equal(resolveLocalizedText(text, 'zh-CN'), '简体中文')
+  assert.equal(resolveLocalizedText(text, 'en-US'), 'SOTA Exclusive Credits')
   assert.equal(resolveLocalizedText(text, 'zh-TW'), '通用中文')
 })
 
