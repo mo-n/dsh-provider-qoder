@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { Context, Service } from '@deepseek-ai/cordis'
+import type { CSSProperties, ReactElement } from 'react'
 import { nextTurn } from './helpers/timing.ts'
 
 const loadClientPlugin = async (send: typeof fetch = async (input) => {
@@ -73,6 +74,44 @@ test('client settings mounts under the namespace returned by the host', async ()
     slots: { inject: (_name: string, callback: () => unknown) => callback(), register: () => {} },
   })
   assert.equal(namespace, 'custom-qoder-entry')
+})
+
+test('client registers the Qoder navigation icon only when the host declares its slot', async () => {
+  const plugin = await loadClientPlugin()
+  const iconSlot = 'settings.section.icon'
+  const ids = new Map<string, string>()
+  let declareIconSlot: (() => unknown) | undefined
+  let renderIcon: ((props: { size: number; active: boolean }) => ReactElement<{
+    'aria-hidden': string
+    style: CSSProperties
+  }>) | undefined
+
+  await plugin.apply({
+    ...bootstrapContext(),
+    slots: {
+      inject(name: string, register: () => unknown) {
+        if (name === iconSlot) declareIconSlot = register
+        else register()
+      },
+      register(options: { name: string; id: string }, component: typeof renderIcon) {
+        ids.set(options.name, options.id)
+        if (options.name === iconSlot) renderIcon = component
+      },
+    },
+  })
+
+  assert.equal(ids.get('settings.section'), 'dsh-provider-qoder')
+  assert.equal(ids.has(iconSlot), false)
+  assert.ok(declareIconSlot)
+  declareIconSlot()
+  assert.equal(ids.get(iconSlot), ids.get('settings.section'))
+  assert.ok(renderIcon)
+  const icon = renderIcon({ size: 20, active: true })
+  assert.equal(icon.props['aria-hidden'], 'true')
+  assert.equal(icon.props.style.width, 20)
+  assert.equal(icon.props.style.height, 20)
+  assert.equal(icon.props.style.backgroundColor, 'currentColor')
+  assert.match(String(icon.props.style.mask), /data:image\/svg\+xml,/u)
 })
 
 for (const [label, envelope] of [
@@ -250,7 +289,9 @@ test('client settings mounts with declared services and reports rejected writes'
     remote: { credentials: { describe: async () => ({ ok: true, value: {} }), set: async () => ({ ok: true, value: undefined }), unset: async () => ({ ok: true, value: undefined }) } },
     inject: () => {},
     slots: {
-      inject: (_name: string, callback: () => void) => callback(),
+      inject: (name: string, callback: () => void) => {
+        if (name !== 'settings.section.icon') callback()
+      },
       register: (spec: { name: string; inject(): { operations: typeof operations } }) => {
         registeredSlots.push(spec.name)
         if (spec.name !== 'conversation.input.dock') operations = spec.inject().operations

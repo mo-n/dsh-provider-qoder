@@ -1,5 +1,5 @@
 {
-  "source": "qodercli 1.1.73 offline QoderContext.prepareRequest with fixture credentials, 2026-10-26",
+  "source": "Offline QoderContext.prepareRequest with fixture credentials, 2026-10-26",
   "requests": [
     {
       "path": "/algo/api/v2/service/pro/imageSearch?Encode=1",
@@ -21,7 +21,6 @@
         "Cosy-MachineType": "5",
         "Cosy-Scene": "assistant",
         "Cosy-User": "fixture-user",
-        "Cosy-Version": "1.1.73",
         "Login-Version": "v2"
       },
       "body": "DxK^PSWhBMn*V,KWmkw*GoKLuOjbDHFSmYKf#xLru(gzBMn*"
@@ -46,7 +45,6 @@
         "Cosy-MachineType": "5",
         "Cosy-Scene": "assistant",
         "Cosy-User": "fixture-user",
-        "Cosy-Version": "1.1.73",
         "Login-Version": "v2"
       },
       "body": "DxK^PSWhBMn*V,KWmkw*GoKLuOjbDHFSmYKf#xLru(gzBMn*"

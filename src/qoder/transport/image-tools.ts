@@ -1,4 +1,4 @@
-/** Image protocols verified offline against qodercli 1.1.73 WASM prepareRequest. */
+/** Qoder image search, generation, and download protocols. */
 import { randomUUID } from 'node:crypto'
 import { BlockList, isIP } from 'node:net'
 import { lookup } from 'node:dns/promises'
@@ -20,7 +20,6 @@ import type { QoderBusiness } from './wire/model-types.ts'
 
 type Obj = Record<string, unknown>
 const record = (value: unknown): Obj | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Obj : undefined
-// qodercli 1.1.73 YKe/gTu/fTu: decoded bytes, redirects and per-download deadline.
 const maxImageBytes = 32 * 1024 * 1024
 const maxDataUrlCharacters = 4 * Math.ceil(maxImageBytes / 3) + 1024
 const maxGenerationJsonBytes = maxDataUrlCharacters + defaultMaxJsonBytes
