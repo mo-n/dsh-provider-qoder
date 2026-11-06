@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mockTime } from './helpers/timing.ts'
 import { type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { qoderIdeVersion } from '../src/qoder/transport/wire/client-identity.ts'
 import { qoderEncodeBodyBytes } from '../src/qoder/transport/wire/encoding.ts'
@@ -147,10 +148,11 @@ test('legacy encoding carries the same UUID identity fields as the HTTP envelope
   })
 })
 
-test('HTTP authentication recovery repeats the complete prepared identity', async () => {
+test('HTTP authentication recovery repeats the complete prepared identity', async t => {
+  const clock = mockTime(t)
   const seen: HttpRequestBody[] = []
   let calls = 0
-  const credentials = { userID: 'subscriber-a', authToken: 'initial', name: '', email: '' }
+  const credentials = { userID: 'subscriber-http-auth', authToken: 'initial', name: '', email: '' }
   const response = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     seen.push(JSON.parse(String(init?.body)) as HttpRequestBody)
     calls += 1
@@ -163,7 +165,13 @@ test('HTTP authentication recovery repeats the complete prepared identity', asyn
     region: 'global',
     responseHeaderTimeoutMs: 1_000,
     streamIdleTimeoutMs: 1_000,
-    refreshCredentials: async () => ({ ...credentials, authToken: 'refreshed' }),
+    refreshCredentials: async () => {
+      clock.tick(5 * 60 * 1_000)
+      const next = await prepareQoderRequest(options(), credentials.userID, messages(),
+        undefined, undefined, undefined, 'global')
+      assert.notEqual(next.business.id, seen[0]!.metadata.business.id)
+      return { ...credentials, authToken: 'refreshed' }
+    },
   })) continue
   assert.equal(calls, 2)
   const first = seen[0]!
@@ -187,13 +195,14 @@ test('HTTP authentication recovery repeats the complete prepared identity', asyn
   assert.equal(firstIdentity.request_id, secondIdentity.request_id)
   assert.equal(firstIdentity.request_set_id, secondIdentity.request_set_id)
   assert.equal(firstIdentity.session_id, secondIdentity.session_id)
-  assert.equal(firstIdentity.business.id, secondIdentity.business.id)
+  assert.deepEqual(firstIdentity.business, secondIdentity.business)
 })
 
-test('legacy authentication recovery repeats the complete prepared identity', async () => {
+test('legacy authentication recovery repeats the complete prepared identity', async t => {
+  const clock = mockTime(t)
   const seen: QoderWireRequest[] = []
   let calls = 0
-  const credentials = { userID: 'subscriber-a', authToken: 'initial', name: '', email: '' }
+  const credentials = { userID: 'subscriber-legacy-auth', authToken: 'initial', name: '', email: '' }
   const response = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     seen.push(decodeLegacy(init?.body as string))
     calls += 1
@@ -207,7 +216,13 @@ test('legacy authentication recovery repeats the complete prepared identity', as
     requestCompression: false,
     responseHeaderTimeoutMs: 1_000,
     streamIdleTimeoutMs: 1_000,
-    refreshCredentials: async () => ({ ...credentials, authToken: 'refreshed' }),
+    refreshCredentials: async () => {
+      clock.tick(5 * 60 * 1_000)
+      const next = await prepareQoderRequest(options(), credentials.userID, messages(),
+        undefined, undefined, undefined, 'global')
+      assert.notEqual(next.business.id, seen[0]!.business.id)
+      return { ...credentials, authToken: 'refreshed' }
+    },
   })) continue
   assert.equal(calls, 2)
   const first = seen[0]!
@@ -217,5 +232,5 @@ test('legacy authentication recovery repeats the complete prepared identity', as
   assert.equal(first.request_id, second.request_id)
   assert.equal(first.request_set_id, second.request_set_id)
   assert.equal(first.session_id, second.session_id)
-  assert.equal(first.business.id, second.business.id)
+  assert.deepEqual(first.business, second.business)
 })

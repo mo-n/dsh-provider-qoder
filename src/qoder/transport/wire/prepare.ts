@@ -127,7 +127,7 @@ export async function prepareQoderRequest(
     }
   }
   const requestId = crypto.randomUUID()
-  const sessionIdParam = options.sessionId === undefined ? undefined : String(options.sessionId)
+  const sessionIdParam = String(options.sessionId ?? '') || undefined
   const wireSessionId = sessionIdParam === undefined ? undefined : qoderSessionId(userId, sessionIdParam, identityScope)
   const identity = tracker.resolveTurnIdentity(
     sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]),

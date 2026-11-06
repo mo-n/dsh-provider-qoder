@@ -564,3 +564,20 @@ test('captured requests retain their identity after host end and cannot affect a
   assert.equal(old.retain({ key: 'late', sessionId: 'late-request', release: async () => {} }), false)
   await runs.dispose()
 })
+
+test('standalone tracking ignores a full time snapshot and accepts a similar subscriber prompt', () => {
+  const tracker = new QoderTurnTracker()
+  const prompt = wireUser('First prompt')
+  const first = tracker.resolveTurnIdentity('time-context', [prompt])
+  const timeSnapshot = wireUser(
+    'Time sampled while preparing turn 1, step 2: 2026-11-05T15:40:21+08:00[Asia/Singapore]\n'
+    + 'Browser time zone for this request: Asia/Singapore. Interpret otherwise-unqualified dates and times in this zone.\n'
+    + 'Elapsed since the preceding step context: 1m 2s.',
+  )
+  const same = tracker.resolveTurnIdentity('time-context', [prompt, timeSnapshot])
+  assert.equal(same.businessId, first.businessId)
+  const next = tracker.resolveTurnIdentity('time-context', [prompt, timeSnapshot,
+    wireUser('Time sampled while preparing turn means what?')])
+  assert.notEqual(next.businessId, first.businessId)
+  assert.equal(next.businessName, 'Time sampl')
+})

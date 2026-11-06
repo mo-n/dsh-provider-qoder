@@ -115,13 +115,14 @@ export interface ModelQueueOptions {
 }
 
 /**
- * Coordinates queue-lease cleanup for anonymous requests that share one
+ * Coordinates queue-lease cleanup for requests without a host lease owner that share one
  * upstream request set. DSH-owned turns use `onLease` and retain/release
  * through their host run; hostless calls have no host owner, so their server
  * lease must remain alive until every request using the set has finished.
  */
 interface AnonymousLeaseScope {
   references: number
+  elapsed: () => number
   leases: Map<string, (elapsedMs: number) => Promise<void>>
   cleanup?: Promise<void>
 }
@@ -131,14 +132,18 @@ const anonymousLeaseScopes = new Map<string, AnonymousLeaseScope>()
 interface AnonymousLeaseHandle {
   entered(model: string, release: (elapsedMs: number) => Promise<void>): void
   ready(): Promise<void>
-  finish(elapsedMs: number): Promise<void>
+  finish(): Promise<void>
 }
 
-function anonymousLeaseHandle(key: string): AnonymousLeaseHandle {
+function anonymousLeaseHandle(key: string, clock: QueueClock): AnonymousLeaseHandle {
   let scope = anonymousLeaseScopes.get(key)
   if (scope === undefined) {
-    scope = { references: 0, leases: new Map() }
+    scope = { references: 0, elapsed: () => 0, leases: new Map() }
     anonymousLeaseScopes.set(key, scope)
+  }
+  if (scope.references === 0) {
+    const startedAt = clock.now()
+    scope.elapsed = () => Math.max(0, clock.now() - startedAt)
   }
   scope.references += 1
   let finished = false
@@ -149,11 +154,12 @@ function anonymousLeaseHandle(key: string): AnonymousLeaseHandle {
       // endpoint bound to this request set, while all callers share it.
       if (!scope!.leases.has(model)) scope!.leases.set(model, release)
     },
-    async finish(elapsedMs) {
+    async finish() {
       if (finished) return
       finished = true
       scope!.references -= 1
       if (scope!.references > 0) return
+      const elapsedMs = scope!.elapsed()
       const leases = [...scope!.leases.values()]
       scope!.leases.clear()
       const releaseCleanup = (): Promise<void> => Promise.allSettled(leases.map(release => release(elapsedMs))).then(() => undefined)
@@ -190,11 +196,9 @@ export class ModelQueue {
     if (!Number.isSafeInteger(this.maxWaitMs) || this.maxWaitMs <= 0 || this.maxWaitMs > 2_147_483_647) {
       throw new Error('modelQueueMaxWaitMs must be a positive integer no greater than 2147483647')
     }
-    // Host-owned calls are already reference-counted by QoderQueueLeases. Only
-    // hostless calls need a transport-local shared scope. Validate first so a
-    // rejected queue cannot leave a reference behind.
-    this.anonymousLease = options.dshSessionId === undefined
-      ? anonymousLeaseHandle(JSON.stringify([options.region, options.subscriberId, options.requestSetId, options.model]))
+    // Calls with no host lease owner share cleanup even if they have a session.
+    this.anonymousLease = !options.dshSessionId || options.onLease === undefined
+      ? anonymousLeaseHandle(JSON.stringify([options.region, options.subscriberId, options.requestSetId, options.model]), this.clock)
       : undefined
   }
 
@@ -209,8 +213,24 @@ export class ModelQueue {
   }
 
   /** Wait for a prior request-set lease release before reusing its identity. */
-  ready(): Promise<void> {
-    return this.anonymousLease?.ready() ?? Promise.resolve()
+  async ready(): Promise<void> {
+    const signal = this.options.signal
+    checkAbort(signal)
+    const barrier = this.anonymousLease?.ready()
+    if (signal === undefined || barrier === undefined) {
+      await barrier
+      return
+    }
+    let abort!: () => void
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(new QoderLlmError('Qoder request was aborted.', 'ABORTED'))
+      signal.addEventListener('abort', abort, { once: true })
+    })
+    try {
+      await Promise.race([barrier, interrupted])
+    } finally {
+      signal.removeEventListener('abort', abort)
+    }
   }
 
   /** Register even a queue signal rejected by the output guard, so cleanup still runs. */
@@ -334,7 +354,7 @@ export class ModelQueue {
   async finish(elapsedMs: number): Promise<void> {
     this.clear()
     if (this.anonymousLease !== undefined) {
-      await this.anonymousLease.finish(elapsedMs)
+      await this.anonymousLease.finish()
       this.models.clear()
       return
     }

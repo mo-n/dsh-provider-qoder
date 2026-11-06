@@ -91,3 +91,15 @@ test('auto review without a host run or session still aggregates and stays separ
     assert.notEqual(first.requestSetId, ordinary.requestSetId)
   }
 })
+
+test('empty session IDs share the same fallback window as omitted IDs', async () => {
+  const tracker = new QoderTurnTracker({ now: () => 1_000 })
+  const prepare = (sessionId: GenerateOptions['sessionId'], content: string) =>
+    prepareQoderRequest({ provider: 'qoder', model: 'review-model', messages: [], sessionId },
+      'subscriber', [{ role: 'user', content }], undefined, undefined, tracker, 'global')
+  const first = await prepare('' as GenerateOptions['sessionId'], 'First review')
+  const next = await prepare(undefined, 'Second review')
+  assert.equal(first.sessionId, next.sessionId)
+  assert.equal(first.requestSetId, next.requestSetId)
+  assert.equal(first.business.id, next.business.id)
+})

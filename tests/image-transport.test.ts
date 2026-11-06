@@ -141,7 +141,7 @@ test('static validation and pre-cancellation avoid credential resolution and net
 })
 test('generation uses ge3i, preserves host turn identity and downloads original bytes without auth', async () => {
   const hostRun = { id: 'host-run' }
-  const modelRequest = await prepareQoderRequest({ provider: 'qoder', model: 'chat-model', sessionId: 'session' as never, messages: [] }, creds.userID, [], undefined, undefined, undefined, 'global', hostRun)
+  const modelRequest = await prepareQoderRequest({ provider: 'qoder', model: 'chat-model', sessionId: 'session' as never, messages: [] }, creds.userID, [{ role: 'user', content: 'Draw a diagram of a cat' }], undefined, undefined, undefined, 'global', hostRun)
   let calls = 0
   const deps = dependencies((async (_url, init) => {
     calls++
@@ -150,6 +150,8 @@ test('generation uses ge3i, preserves host turn identity and downloads original 
       assert.equal(payload.model, 'ge3i'); assert.equal(payload.size, '1024x1024')
       assert.equal(payload.metadata.business.id, modelRequest.business.id)
       assert.equal(payload.metadata.business.type, 'text2img')
+      assert.equal(payload.metadata.business.name, modelRequest.business.name)
+      assert.equal(payload.metadata.business.name, 'Draw a dia')
       assert.equal(body.sessionId, modelRequest.sessionId)
       assert.equal(new Headers(init?.headers).get('X-RequestSet-ID'), modelRequest.requestSetId)
       return json({ data: [{ url: 'https://images.example.com/a.png?signature=private' }] })
@@ -166,22 +168,25 @@ test('image-first host runs share UUID sessions with model calls and isolate ser
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
   for (const region of ['global', 'china'] as const) {
     const hostRun = { id: `image-first-${region}` }
-    let imageSessionId = ''; let businessId = ''; let requestSetId = ''
+    let imageSessionId = ''; let businessId = ''; let requestSetId = ''; let businessName = ''
     const deps = dependencies((async (_url, init) => {
       const body = decode(String(init?.body))
       const payload = JSON.parse(String(body.payload))
       imageSessionId = String(body.sessionId)
       businessId = payload.metadata.business.id
+      businessName = payload.metadata.business.name
       requestSetId = new Headers(init?.headers).get('X-RequestSet-ID')!
       return json({ data: [{ url: `data:image/png;base64,${png.toString('base64')}` }] })
     }) as typeof fetch)
     deps.region = region
-    await generateImage({ prompt: 'cat', sessionId: 'image-first-session', hostRun }, deps)
-    const model = await prepareQoderRequest({ provider: 'qoder', model: 'chat-model', sessionId: 'image-first-session' as never, messages: [] }, creds.userID, [], undefined, undefined, undefined, region, hostRun)
+    await generateImage({ prompt: 'A cat wearing a hat', sessionId: 'image-first-session', hostRun }, deps)
+    const model = await prepareQoderRequest({ provider: 'qoder', model: 'chat-model', sessionId: 'image-first-session' as never, messages: [] }, creds.userID, [{ role: 'user', content: 'Describe the image' }], undefined, undefined, undefined, region, hostRun)
     assert.match(imageSessionId, uuid)
     assert.match(requestSetId, uuid)
     assert.equal(model.sessionId, imageSessionId)
     assert.equal(model.business.id, businessId)
+    assert.equal(businessName, 'A cat wear')
+    assert.equal(model.business.name, businessName)
     assert.equal(model.requestSetId, requestSetId)
     sessionIds.push(imageSessionId)
   }

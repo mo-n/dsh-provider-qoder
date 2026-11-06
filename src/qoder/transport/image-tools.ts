@@ -383,8 +383,8 @@ export async function generateImage(request: QoderImageGenerationRequest, deps: 
   try {
     const credentials = await deps.resolveCredentials(signal)
     const sessionId = qoderSessionId(credentials.userID, request.sessionId, deps.region)
-    const identity = qoderTurnTracker.resolveTurnIdentity(request.sessionId === undefined ? undefined : JSON.stringify([deps.region, credentials.userID, request.sessionId]), [], request.hostRun ? 'conversation' : 'auxiliary', requestId, undefined, request.hostRun, { sessionId })
-    const business = { product: 'cli', version: qoderIdeVersion, type: 'text2img', stage: identity.businessStage, id: identity.businessId, begin_at: identity.beginAt, name: request.prompt.slice(0, 30) }
+    const identity = qoderTurnTracker.resolveTurnIdentity(request.sessionId === undefined ? undefined : JSON.stringify([deps.region, credentials.userID, request.sessionId]), [], request.hostRun ? 'conversation' : 'auxiliary', requestId, undefined, request.hostRun, { sessionId, fallbackBusinessName: request.prompt })
+    const business = { product: 'cli', version: qoderIdeVersion, type: 'text2img', stage: identity.businessStage, id: identity.businessId, begin_at: identity.beginAt, name: identity.businessName }
     let parsed: Obj | undefined
     begin('generation')
     const generationTimeout = AbortSignal.timeout(deps.timeoutMs ?? 180_000)

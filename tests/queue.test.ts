@@ -1,5 +1,6 @@
 import { deferred, mockTime, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
+import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { setImmediate } from 'node:timers/promises'
 import { resolveRetryPolicy, createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -52,7 +53,7 @@ function deps(fetch: typeof globalThis.fetch, extra: Partial<QoderChatDependenci
 }
 
 function queueOptions(fetch: typeof globalThis.fetch, extra: Partial<ModelQueueOptions> = {}): ModelQueueOptions {
-  return { fetch, region: 'global', requestSetId: 'call', sessionId: 'wire-session', dshSessionId: 'session', model: 'model',
+  return { fetch, region: 'global', requestSetId: randomUUID(), sessionId: 'wire-session', dshSessionId: 'session', model: 'model',
     credentials: async () => credentials, clock: clock(), ...extra }
 }
 
@@ -483,20 +484,26 @@ test('a delayed old finish cannot release the next real turn lease after identic
   assert.equal(finishCalls, 2)
 })
 
-test('anonymous requests sharing a request set release the queue lease once after all callers finish', async () => {
-  let finishes = 0
-  const fetch = (async input => {
-    if (String(input).includes('/ask/finish')) { finishes++; return Response.json({}) }
-    throw new Error(`unexpected queue request: ${String(input)}`)
-  }) as typeof globalThis.fetch
-  const first = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-shared' }))
-  const second = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-shared' }))
+test('calls without a host lease owner release once and report the full shared span', async () => {
+  const durations: number[] = []
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    assert.match(String(input), /\/ask\/finish/u)
+    durations.push(JSON.parse(JSON.parse(String(init?.body)).payload).time_consumed)
+    return Response.json({})
+  }
+  const sharedClock = clock()
+  const config = queueOptions(fetch, { requestSetId: 'standalone-shared', clock: sharedClock })
+  const first = new ModelQueue(config)
+  sharedClock.elapsed = 10
+  const second = new ModelQueue(config)
   first.entered({ modelKey: 'model' })
   second.entered({ modelKey: 'model' })
-  await first.finish(10)
-  assert.equal(finishes, 0)
+  sharedClock.elapsed = 20
+  await first.finish(20)
+  assert.deepEqual(durations, [])
+  sharedClock.elapsed = 30
   await second.finish(20)
-  assert.equal(finishes, 1)
+  assert.deepEqual(durations, [30])
 })
 
 test('a new anonymous caller waits for a prior shared lease release before dispatch', async () => {
@@ -522,31 +529,46 @@ test('a new anonymous caller waits for a prior shared lease release before dispa
   await second.finish(20)
 })
 
-test('a cancelled waiter cannot replace an earlier anonymous release barrier', async () => {
-  let completeRelease!: () => void
-  const releaseResponse = new Promise<Response>(resolve => { completeRelease = () => resolve(Response.json({})) })
-  const fetch = (async input => {
-    if (String(input).includes('/ask/finish')) return releaseResponse
-    throw new Error(`unexpected queue request: ${String(input)}`)
-  }) as typeof globalThis.fetch
-  const first = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-chain' }))
-  first.entered({ modelKey: 'model' })
-  const firstFinish = first.finish(10)
-  await setImmediate()
-
-  // This caller is cancelled before it can pass the first ready barrier. Its
-  // cleanup must chain after the first release rather than replace it.
-  const cancelled = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-chain' }))
-  const cancelledFinish = cancelled.finish(20)
-  const next = new ModelQueue(queueOptions(fetch, { dshSessionId: undefined, requestSetId: 'anonymous-chain' }))
-  let ready = false
-  const waiting = next.ready().then(() => { ready = true })
-  await setImmediate()
-  assert.equal(ready, false)
-  completeRelease()
-  await firstFinish
-  await cancelledFinish
-  await waiting
-  assert.equal(ready, true)
-  await next.finish(30)
+test('an aborted stream exits before shared cleanup and leaves the barrier intact for the next caller', async () => {
+  const releaseStarted = deferred()
+  const releaseResponse = deferred<Response>()
+  let finishes = 0
+  let requests = 0
+  const fetch: typeof globalThis.fetch = async input => {
+    const url = String(input)
+    if (url.includes('/ask/finish')) {
+      if (++finishes === 1) {
+        releaseStarted.resolve()
+        return releaseResponse.promise
+      }
+      return Response.json({})
+    }
+    if (url.includes('/queue/status')) return Response.json({ isQueued: false })
+    return ++requests % 2 === 1 ? new Response(queueFrame) : success()
+  }
+  const controller = new AbortController()
+  const stream = (signal?: AbortSignal) => collect(streamQoderChat(
+    { ...options(signal), sessionId: undefined, model: 'abort-barrier-regression' },
+    undefined, credentials, [], deps(fetch),
+  ))
+  const first = stream()
+  await releaseStarted.promise
+  const cancelled = assert.rejects(stream(controller.signal), { code: 'ABORTED' })
+  let cancelledPromptly = false
+  const cancellation = cancelled.then(() => { cancelledPromptly = true })
+  await nextTurn()
+  controller.abort()
+  await nextTurn()
+  const third = stream()
+  try {
+    await nextTurn()
+    assert.equal(cancelledPromptly, true)
+    assert.equal(requests, 2)
+    assert.equal(finishes, 1)
+  } finally {
+    releaseResponse.resolve(Response.json({}))
+    await Promise.all([first, cancellation, third])
+  }
+  assert.equal(requests, 4)
+  assert.equal(finishes, 2)
 })

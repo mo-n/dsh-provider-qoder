@@ -82,6 +82,8 @@ export interface QoderTurnResolveOptions {
   scope?: string
   /** Pre-resolved wire session id for a named DSH session. */
   sessionId?: string
+  /** Opening label for a run first reached through image generation. */
+  fallbackBusinessName?: string
 }
 
 interface SessionTurnState {
@@ -163,7 +165,6 @@ const injectedContextOpenings: readonly string[] = [
   '<openviking-context',
   '<goal_complete>',
   'Current runtime context. This snapshot supersedes earlier runtime-context',
-  'Time sampled while preparing turn ',
   'This is an automatically generated checkpoint condensing',
   '[model changed:',
   'background job ',
@@ -179,6 +180,15 @@ const injectedContextOpenings: readonly string[] = [
  * bare prefix that would swallow real prompts.
  */
 const hostNotificationTemplate = /^(?:Agent|Background subagent) \S{3,} (?:sent a message:|finished\b)/
+
+/** Match the three-line time snapshot emitted by DSH. */
+function isTimeContext(text: string): boolean {
+  const lines = text.split(/\r?\n/u, 4)
+  return lines.length === 3
+    && /^Time sampled while preparing turn \d+, step \d+: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\[[^\]]+\]$/u.test(lines[0]!)
+    && /^Browser time zone for this request: .+\. (?:Interpret otherwise-unqualified dates and times in this zone|Ask the user to clarify otherwise-unqualified dates and times)\.$/u.test(lines[1]!)
+    && /^Elapsed since the preceding (?:model-visible message|step context): (?:unavailable|(?:\d+[dhms] )*\d+[dhms])\.$/u.test(lines[2]!)
+}
 
 /**
  * Compatibility with image markers synthesized by older transport versions.
@@ -200,12 +210,12 @@ export function wireMessageText(message: QoderWireMessage): string {
 function qoderMessageOrigin(message: QoderWireMessage): QoderMessageOrigin {
   const text = wireMessageText(message).trimStart()
   if (syntheticMarkerTemplate.test(text)) return 'synthetic'
-  if (hostNotificationTemplate.test(text)) return 'injected'
+  if (hostNotificationTemplate.test(text) || isTimeContext(text)) return 'injected'
   return injectedContextOpenings.some(opening => text.startsWith(opening)) ? 'injected' : 'prompt'
 }
 
 /** First subscriber prompt used for the upstream business task label. */
-function firstPromptName(messages: readonly QoderWireMessage[]): string {
+function firstPromptName(messages: readonly QoderWireMessage[], fallback = ''): string {
   // Hosted requests carry projected history. The latest prompt is the best
   // available boundary-local label when the host does not expose its message id.
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -214,7 +224,7 @@ function firstPromptName(messages: readonly QoderWireMessage[]): string {
       return wireMessageText(message).slice(0, 10)
     }
   }
-  return ''
+  return fallback.slice(0, 10)
 }
 
 /**
@@ -269,7 +279,7 @@ export class QoderTurnTracker {
     this.maxSessions = options.maxSessions ?? defaultMaxSessions
     this.idleSessionTtlMs = options.idleSessionTtlMs ?? defaultIdleSessionTtlMs
     this.unscopedWindowTtlMs = options.unscopedWindowTtlMs ?? defaultUnscopedWindowTtlMs
-    this.now = options.now ?? Date.now
+    this.now = options.now ?? (() => Date.now())
     if (!Number.isFinite(this.unscopedWindowTtlMs) || this.unscopedWindowTtlMs <= 0) {
       throw new Error('unscopedWindowTtlMs must be a positive finite number')
     }
@@ -315,7 +325,7 @@ export class QoderTurnTracker {
         beginAt: now,
         businessStage: 'start',
         sessionId: independentSessionId,
-        businessName: firstPromptName(messages),
+        businessName: firstPromptName(messages, resolveOptions.fallbackBusinessName),
       }
     }
 
@@ -330,7 +340,7 @@ export class QoderTurnTracker {
         beginAt: now,
         businessStage: 'start',
         sessionId: resolveOptions.sessionId ?? crypto.randomUUID(),
-        businessName: firstPromptName(messages),
+        businessName: firstPromptName(messages, resolveOptions.fallbackBusinessName),
       }
     }
 
@@ -470,7 +480,7 @@ export class QoderTurnTracker {
     const modelChanged = previous?.modelKey !== undefined && modelKey !== undefined && previous.modelKey !== modelKey
     if (previous !== undefined && !modelChanged) {
       if (modelKey !== undefined) previous.modelKey = modelKey
-      const businessName = previous.identity.businessName || firstPromptName(messages)
+      const businessName = previous.identity.businessName || firstPromptName(messages, resolveOptions.fallbackBusinessName)
       if (businessName !== previous.identity.businessName) {
         previous.identity = { ...previous.identity, businessName }
       }
@@ -484,7 +494,7 @@ export class QoderTurnTracker {
       beginAt: now,
       businessStage: 'start',
       sessionId,
-      businessName: firstPromptName(messages),
+      businessName: firstPromptName(messages, resolveOptions.fallbackBusinessName),
     }
     scopes.set(scope, { modelKey, identity })
     return identity

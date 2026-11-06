@@ -82,6 +82,7 @@ export async function* streamQoderChat(
     onUpdate: dependencies.onQueueUpdate, onLease: dependencies.onQueueLease,
     logger: dependencies.logger, clock: dependencies.queueClock,
   })
+  let dispatched = false
   let sawOutput = false
   const clear = (): void => queue.clear()
   options.signal?.addEventListener('abort', clear, { once: true })
@@ -90,6 +91,7 @@ export async function* streamQoderChat(
     for (;;) {
       if (options.signal?.aborted) throw aborted('Request was aborted.')
       try {
+        dispatched = true
         for await (const chunk of streamAttempt(options, model, activeCredentials, request, dependencies)) {
           if (chunk.type !== 'usage' && chunk.type !== 'finish') sawOutput = true
           yield chunk
@@ -107,7 +109,9 @@ export async function* streamQoderChat(
     }
   } finally {
     options.signal?.removeEventListener('abort', clear)
-    await queue.finish(performance.now() - startedAt)
+    const cleanup = queue.finish(performance.now() - startedAt)
+    if (dispatched || !options.signal?.aborted) await cleanup
+    else void cleanup.catch(() => undefined)
   }
 }
 

@@ -9,7 +9,7 @@ The transport aligns turn identity with Qoder's upstream aggregation model:
 - `request_set_id`: carries the same turn identity.
 - `chat_record_id` & `request_id`: assigned a unique per-request UUID.
 - `session_id`: identifies the conversation session. Wire session and request-set identifiers are UUID v4 values. Subscriber and service-region isolation remains internal to transport; provider prefixes and host session identifiers are not sent as the wire session ID.
-- `business.name`: the opening subscriber prompt truncated to ten JavaScript string characters, retained for the run. Recognized injected context does not replace it.
+- `business.name`: the opening subscriber prompt truncated to ten JavaScript string characters, retained for the run. Recognized injected context does not replace it. If image generation opens the run before a subscriber prompt is available, its truncated prompt supplies the retained name.
 
 ## Turn Boundary Derivation
 
