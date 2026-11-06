@@ -429,14 +429,17 @@ test('automatic discovery persists rates without changing selection and refreshe
   assert.equal(settings.writes.length, 1)
   t.mock.timers.tick(1)
   advertised = [{ ...advertised[0], priceFactor: 0 }]
-  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
+  // The five-minute entry is stale but still accepted for the synchronous
+  // model switch; the new discovery is revalidated in the background.
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /2x/u)
   await drain()
   assert.equal(stored().global?.[0].priceFactor, 0)
 
   t.mock.timers.tick(300_000)
   advertised = [{ id: 'chosen', name: 'Remote name', contextWindow: 200_000 }]
-  assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, chosen.name)
+  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
   await drain()
+  assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, chosen.name)
   assert.equal(Object.hasOwn(stored().global![0], 'priceFactor'), false)
   assert.equal(settings.writes.length, 3)
   t.mock.timers.tick(300_000)

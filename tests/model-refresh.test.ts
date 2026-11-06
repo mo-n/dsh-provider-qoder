@@ -50,7 +50,7 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
   assert.equal(resolved.reasoning?.efforts[0].id, 'high')
   assert.match(resolved.name, /4x/u)
   complete(old)
-  assert.match((await pending)[0].name, /4x/u)
+  assert.match((await pending)[0].name, /2x/u)
   assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
   assert.equal(calls, 2)
   assert.deepEqual(published, [old, fresh])
@@ -88,8 +88,12 @@ test('model reads share discovery, cache for five minutes, and preserve enabled 
   const refreshed = adapter.listModels(QODER_PROVIDER_ID)
   await Promise.resolve()
   assert.equal(calls, 2)
+  // The accepted discovery remains usable while the expired entry is
+  // revalidated. Model selection must not wait for this network read.
+  assert.match((await refreshed)[0].name, /2x/u)
   complete([{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
-  assert.match((await refreshed)[0].name, /3x/u)
+  await Promise.resolve()
+  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
   assert.deepEqual(published.map(models => models[0].priceFactor), [2, 3])
 })
 
@@ -100,7 +104,12 @@ test('failed refresh retains metadata and a changed transport ignores the old in
     if (fail) throw new Error('offline')
     return [{ id: 'chosen', name: 'Chosen', priceFactor: 2 }]
   })
-  const adapter = new QoderAdapter({ resolveTransport: () => active, models: [{ id: 'chosen', name: 'Chosen' }] })
+  const catalog = new QoderCatalogLifecycle({
+    resolveTransport: () => active,
+    region: () => 'global',
+    configuredModels: () => [{ id: 'chosen', name: 'Chosen' }],
+  })
+  const adapter = new QoderAdapter({ resolveTransport: () => active, catalog })
   await adapter.listModels(QODER_PROVIDER_ID)
   fail = true
   t.mock.timers.tick(300000)
@@ -110,8 +119,11 @@ test('failed refresh retains metadata and a changed transport ignores the old in
   const stale = adapter.listModels(QODER_PROVIDER_ID)
   await Promise.resolve()
   active = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 4 }])
+  const fresh = catalog.discover()
   complete([{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
-  assert.match((await stale)[0].name, /4x/u)
+  assert.match((await stale)[0].name, /2x/u)
+  await fresh
+  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
 })
 
 test('a replaced transport cannot publish its late discovery', async () => {
