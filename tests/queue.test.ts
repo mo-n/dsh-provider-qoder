@@ -1,5 +1,5 @@
 import { deferred, mockTime, nextTurn } from './helpers/timing.ts'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { setImmediate } from 'node:timers/promises'
@@ -55,6 +55,17 @@ function deps(fetch: typeof globalThis.fetch, extra: Partial<QoderChatDependenci
 function queueOptions(fetch: typeof globalThis.fetch, extra: Partial<ModelQueueOptions> = {}): ModelQueueOptions {
   return { fetch, region: 'global', requestSetId: randomUUID(), sessionId: 'wire-session', dshSessionId: 'session', model: 'model',
     credentials: async () => credentials, clock: clock(), ...extra }
+}
+
+function pollQueue(t: TestContext, options: ModelQueueOptions): ModelQueue {
+  const queue = new ModelQueue({
+    ...options,
+    fetch: (input, init) => String(input).includes('/ask/finish')
+      ? Promise.resolve(Response.json({}))
+      : options.fetch(input, init),
+  })
+  t.after(() => queue.finish(0))
+  return queue
 }
 
 test('queue envelopes support nested string bodies and validate optional fields', () => {
@@ -152,30 +163,30 @@ test('HTTP queue error is recovered, but ordinary HTTP failure is not', async ()
   await assert.rejects(collect(streamQoderChat(options(), undefined, credentials, [], deps((async () => new Response('down', { status: 503 })) as typeof globalThis.fetch))), { code: 'SERVER' })
 })
 
-test('queue budget is cumulative across recovery and includes ready delay', async () => {
+test('queue budget is cumulative across recovery and includes ready delay', async t => {
   const fakeClock = clock()
-  const queue = new ModelQueue(queueOptions((async () => Response.json({ isQueued: false, retryAfterSeconds: 0.5 })) as typeof fetch, { maxWaitMs: 900, clock: fakeClock }))
+  const queue = pollQueue(t, queueOptions((async () => Response.json({ isQueued: false, retryAfterSeconds: 0.5 })) as typeof fetch, { maxWaitMs: 900, clock: fakeClock }))
   await queue.wait({}, 'attempt1')
   await assert.rejects(queue.wait({}, 'attempt2'), { code: 'QODER_QUEUE_TIMEOUT' })
   assert.deepEqual(fakeClock.sleeps, [500, 400])
 })
 
-test('queue polls immediately, retries three consecutive failures, and aborts 404 immediately', async () => {
+test('queue polls immediately, retries three consecutive failures, and aborts 404 immediately', async t => {
   const fakeClock = clock()
   let polls = 0
-  const queue = new ModelQueue(queueOptions((async () => { polls++; throw new Error('offline') }) as typeof fetch, { clock: fakeClock }))
+  const queue = pollQueue(t, queueOptions((async () => { polls++; throw new Error('offline') }) as typeof fetch, { clock: fakeClock }))
   await assert.rejects(queue.wait({}, 'attempt'), { code: 'QODER_QUEUE_FAILED' })
   assert.equal(polls, 3)
   assert.deepEqual(fakeClock.sleeps, [30_000, 30_000])
   polls = 0
-  const unavailable = new ModelQueue(queueOptions((async () => { polls++; return new Response('', { status: 404 }) }) as typeof fetch))
+  const unavailable = pollQueue(t, queueOptions((async () => { polls++; return new Response('', { status: 404 }) }) as typeof fetch))
   await assert.rejects(unavailable.wait({}, 'attempt'), { code: 'QODER_QUEUE_UNAVAILABLE' })
   assert.equal(polls, 1)
 })
 
-test('successful poll resets failure streak and ready cannot exceed ten recoveries', async () => {
+test('successful poll resets failure streak and ready cannot exceed ten recoveries', async t => {
   let polls = 0
-  const queue = new ModelQueue(queueOptions((async () => {
+  const queue = pollQueue(t, queueOptions((async () => {
     polls++
     if ([1, 2, 4, 5].includes(polls)) throw new Error('offline')
     return Response.json({ isQueued: polls === 3, retryAfterSeconds: 0.5 })
@@ -187,11 +198,11 @@ test('successful poll resets failure streak and ready cannot exceed ten recoveri
   assert.equal(polls, 15)
 })
 
-test('poll authentication refreshes once and re-signs with fresh credentials', async () => {
+test('poll authentication refreshes once and re-signs with fresh credentials', async t => {
   const refreshes: boolean[] = []
   let polls = 0
   const auth: string[] = []
-  const queue = new ModelQueue(queueOptions((async (_url, init) => {
+  const queue = pollQueue(t, queueOptions((async (_url, init) => {
     auth.push(new Headers(init?.headers).get('authorization')!)
     return ++polls === 1 ? new Response('', { status: 401 }) : Response.json({ isQueued: false })
   }) as typeof fetch, { credentials: async force => { refreshes.push(force); return { ...credentials, authToken: force ? 'fresh-token' : 'old-token' } } }))
@@ -226,7 +237,7 @@ test('caller cancellation aborts polling but cleanup uses an independent live si
 
 test('a stalled poll exhausts the queue budget instead of hanging', async t => {
   const time = mockTime(t)
-  const queue = new ModelQueue(queueOptions((async () => new Promise<Response>(() => {})) as typeof fetch, { maxWaitMs: 15, clock: { ...queueClock, now: () => Date.now() } }))
+  const queue = pollQueue(t, queueOptions((async () => new Promise<Response>(() => {})) as typeof fetch, { maxWaitMs: 15, clock: { ...queueClock, now: () => Date.now() } }))
   let settled = false
   const rejected = assert.rejects(queue.wait({}, 'attempt'), { code: 'QODER_QUEUE_TIMEOUT' }).then(() => { settled = true })
   await nextTurn() // Credentials and response handling reach the stalled poll.
@@ -250,8 +261,8 @@ test('finish failure does not replace a successful response or issue extra asks'
   assert.equal(warnings, 1)
 })
 
-test('invalid states and subscriber changes are terminal queue errors', async () => {
-  const invalid = new ModelQueue(queueOptions((async () => Response.json({ serviceAvailable: true })) as typeof fetch))
+test('invalid states and subscriber changes are terminal queue errors', async t => {
+  const invalid = pollQueue(t, queueOptions((async () => Response.json({ serviceAvailable: true })) as typeof fetch))
   await assert.rejects(invalid.wait({}, 'attempt'), { code: 'QODER_QUEUE_INVALID_STATE' })
   await assert.rejects(collect(streamQoderChat(options(), undefined, credentials, [], deps((async () => new Response(queueFrame)) as typeof fetch, {
     resolveCredentials: async () => ({ ...credentials, userID: 'another-subscriber' }),
@@ -290,7 +301,7 @@ test('a stalled response body is cancelled when the queue budget expires', async
   const time = mockTime(t)
   let cancelled = false
   const fetch = (async () => new Response(new ReadableStream({ cancel() { cancelled = true } }))) as typeof globalThis.fetch
-  const queue = new ModelQueue(queueOptions(fetch, { maxWaitMs: 15, clock: { ...queueClock, now: () => Date.now() } }))
+  const queue = pollQueue(t, queueOptions(fetch, { maxWaitMs: 15, clock: { ...queueClock, now: () => Date.now() } }))
   let settled = false
   const rejected = assert.rejects(queue.wait({}, 'attempt'), { code: 'QODER_QUEUE_TIMEOUT' }).then(() => { settled = true })
   await nextTurn() // Credentials and response handling reach the stalled poll.
@@ -327,12 +338,12 @@ test('cleanup is once per queued model and bounded at three seconds including cr
   assert.equal(warnings, 1)
 })
 
-test('cancellation interrupts a poll delay before another upstream request', async () => {
+test('cancellation interrupts a poll delay before another upstream request', async t => {
   const caller = new AbortController()
   let polls = 0
   let observedWait!: () => void
   const sleeping = new Promise<void>(resolve => { observedWait = resolve })
-  const queue = new ModelQueue(queueOptions((async () => { polls++; return Response.json({ isQueued: true, retryAfterSeconds: 30 }) }) as typeof fetch, {
+  const queue = pollQueue(t, queueOptions((async () => { polls++; return Response.json({ isQueued: true, retryAfterSeconds: 30 }) }) as typeof fetch, {
     signal: caller.signal,
     clock: {
       now: () => 0,
