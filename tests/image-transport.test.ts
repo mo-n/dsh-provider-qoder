@@ -233,23 +233,39 @@ test('generation cancellation stays aborted and explicit HTTP rejection keeps di
   assert.equal(calls, 1)
 })
 
-test('explicit HTTP rejection survives a stalled error body deadline', async t => {
+test('ImageGen reports a terminal HTTP rejection at the diagnostic deadline', async t => {
   const time = mockTime(t)
+  let calls = 0
   let cancelled = false
-  const body = new ReadableStream<Uint8Array>({ cancel() { cancelled = true } })
-  const deps = dependencies((async () => new Response(body, { status: 400 })) as typeof fetch)
-  deps.timeoutMs = 15
-  const rejected = assert.rejects(generateImage({ prompt: 'cat' }, deps), (error: unknown) => {
+  let settled = false
+  let generationSignal: AbortSignal | null | undefined
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true
+      return new Promise<void>(() => {})
+    },
+  })
+  const deps = dependencies(async (_url, init) => {
+    calls++
+    generationSignal = init?.signal
+    return new Response(body, { status: 403 })
+  })
+  const rejected = assert.rejects(generateImage({ prompt: 'cat' }, deps).finally(() => { settled = true }), (error: unknown) => {
     assert.ok(error instanceof QoderLlmError)
-    assert.equal(error.httpStatus, 400)
+    assert.equal(error.httpStatus, 403)
     assert.equal(error.source, 'http')
     assert.doesNotMatch(error.message, /did not confirm an outcome/u)
     return true
   })
   await nextTurn()
-  time.tick(15)
-  await rejected
+  time.tick(1_000)
+  await nextTurn()
+  assert.equal(settled, true)
   assert.equal(cancelled, true)
+  assert.equal(body.locked, false)
+  assert.equal(generationSignal?.aborted, false)
+  assert.equal(calls, 1)
+  await rejected
 })
 
 test('failed ImageGen credential refresh retains the explicit initial 401', async () => {

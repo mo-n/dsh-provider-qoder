@@ -4,6 +4,7 @@ import type { ContentBlock, ImageBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { QoderLlmError } from '../../errors.ts'
 import type { QoderCredentials } from './credentials.ts'
+import type { QoderTurnMessage, QoderTurnMessagePart } from './turn-identity.ts'
 import type {
   QoderWireImagePart,
   QoderWireMessage,
@@ -234,6 +235,41 @@ export function validateMessageShapes(messages: readonly QoderMessage[], attachm
 const maxRequestImages = 50
 const omittedImage = { type: 'text', text: '[media removed: request limit]' } as const
 
+// Keep identity metadata off the serialized messages. The projection lives
+// only as long as the translated batch used by request preparation.
+const preTrimUserMessages = new WeakMap<QoderWireMessage[], QoderTurnMessage[]>()
+
+export function userMessagesBeforeImageTrimming(messages: QoderWireMessage[]): QoderTurnMessage[] | undefined {
+  return preTrimUserMessages.get(messages)
+}
+
+/** Mirror the user-role projection without reading or publishing images. */
+function projectUserMessages(messages: readonly QoderMessage[]): QoderTurnMessage[] {
+  const users: QoderTurnMessage[] = []
+  for (const message of messages) {
+    if (message.role === 'assistant' || message.role === 'tool') continue
+    const parts: QoderTurnMessagePart[] = []
+    let hasToolResults = false
+    let hasImage = false
+    let text = ''
+    for (const block of message.content) {
+      if (block.type === 'tool-result') hasToolResults = true
+      if (block.type === 'text') {
+        text += block.text
+        parts.push({ type: 'text', text: block.text })
+      }
+      if (block.type === 'image') {
+        hasImage = true
+        parts.push({ type: 'image_url' })
+      }
+    }
+    if (hasToolResults ? hasImage || text.trim().length > 0 : message.role === 'user') {
+      users.push({ role: 'user', content: hasImage ? parts : text })
+    }
+  }
+  return users
+}
+
 function limitRequestImages(
   messages: readonly QoderMessage[],
   onTrimmed?: QoderTranslationOptions['onImagesTrimmed'],
@@ -300,6 +336,7 @@ export async function validateAndTranslateMessages(
   }
   const preserveThinking = pipeline?.preserveThinking ?? true
   const output: QoderWireMessage[] = []
+  if (requestMessages !== messages) preTrimUserMessages.set(output, projectUserMessages(messages))
   let lastAssistantToolCallIds: string[] = []
 
   if (typeof systemPrompt === 'string' && systemPrompt.trim().length > 0) {

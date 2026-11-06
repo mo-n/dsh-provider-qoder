@@ -7,7 +7,7 @@ import { type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { selectedContextTier, type QoderCatalogModel } from '../../catalog.ts'
 import { QoderLlmError } from '../../errors.ts'
 import { qoderIdeVersion } from './client-identity.ts'
-import { translateTools, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
+import { translateTools, userMessagesBeforeImageTrimming, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
 import type { QoderImageAttachments, QoderTranslationOptions } from './translate.ts'
 import { QoderTurnTracker, wireMessageText, type QoderCallKind } from './turn-identity.ts'
 import type { QoderBusiness, QoderContextConfig, QoderWireMessage, QoderWireTool } from './model-types.ts'
@@ -128,6 +128,7 @@ export async function prepareQoderRequest(
   const requestId = crypto.randomUUID()
   const sessionIdParam = String(options.sessionId ?? '') || undefined
   const wireSessionId = sessionIdParam === undefined ? undefined : qoderSessionId(userId, sessionIdParam, identityScope)
+  const standaloneMessages = userMessagesBeforeImageTrimming(messages)
   const identity = tracker.resolveTurnIdentity(
     sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]),
     messages,
@@ -138,6 +139,7 @@ export async function prepareQoderRequest(
     {
       scope: JSON.stringify([identityScope, userId]),
       ...wireSessionId === undefined ? {} : { sessionId: wireSessionId },
+      ...standaloneMessages === undefined ? {} : { standaloneMessages },
     },
   )
   return {

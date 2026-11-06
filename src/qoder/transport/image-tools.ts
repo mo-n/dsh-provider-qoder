@@ -103,34 +103,23 @@ async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: Ima
         await response.body?.cancel()
         throw new QoderImageSearchError(response.status === 401 || response.status === 403 ? 'auth' : 'http', String(outer.requestId), { httpStatus: response.status })
       }
+      const diagnosticController = new AbortController()
+      const diagnosticTimeout = AbortSignal.timeout(imageErrorDiagnosticTimeoutMs)
+      const diagnosticSignal = AbortSignal.any([activeSignal, diagnosticController.signal, diagnosticTimeout])
+      const diagnostic = readLimitedImageError(response, diagnosticSignal, `Qoder ${kind} error response`).catch(() => '')
       if (response.status === 401 && attempt === 0 && deps.refreshCredentials) {
         // Refresh as soon as the rejection headers arrive. A stalled 401 body
         // must not consume the generation deadline before authentication recovery.
-        const diagnosticController = new AbortController()
-        const diagnosticTimeout = AbortSignal.timeout(imageErrorDiagnosticTimeoutMs)
-        const diagnosticSignal = AbortSignal.any([activeSignal, diagnosticController.signal, diagnosticTimeout])
-        const diagnostic = readLimitedImageError(response, diagnosticSignal, `Qoder ${kind} error response`).catch(() => '')
         try {
           credentials = await deps.refreshCredentials(credentials, activeSignal)
-        } catch (refreshError) {
-          const bodyText = await diagnostic
           diagnosticController.abort()
-          if (callerSignal?.aborted) throw refreshError
-          const error = new QoderLlmError(`Qoder ${kind} failed (HTTP ${response.status}); request ${String(outer.requestId)}.`, 'PROVIDER_ERROR')
-          error.httpStatus = response.status
-          error.source = 'http'
-          error.upstreamCode = safeUpstreamCode(bodyText)
-          // A failed refresh cannot erase the explicit 401 rejection that caused
-          // it. Do not submit a second generation request when refresh fails.
-          throw error
+          continue
+        } catch {
+          // Report the explicit 401 if credential recovery fails.
         }
-        diagnosticController.abort()
-        continue
       }
-      let bodyText = ''
-      try { bodyText = await readLimitedImageError(response, activeSignal, `Qoder ${kind} error response`) } catch (error) {
-        if (callerSignal?.aborted) throw error
-      }
+      const bodyText = await diagnostic
+      callerSignal?.throwIfAborted()
       const error = new QoderLlmError(`Qoder ${kind} failed (HTTP ${response.status}); request ${String(outer.requestId)}.`, 'PROVIDER_ERROR')
       error.httpStatus = response.status
       error.source = 'http'
@@ -320,7 +309,7 @@ function abortableImageOperation<T>(operation: Promise<T>, signal: AbortSignal):
 async function readLimitedImageError(response: Response, signal: AbortSignal, label: string): Promise<string> {
   const declaredLength = Number(response.headers.get('content-length'))
   if (Number.isFinite(declaredLength) && declaredLength > defaultMaxErrorBytes) {
-    await response.body?.cancel().catch(() => undefined)
+    void response.body?.cancel().catch(() => undefined)
     throw new QoderLlmError(`${label} exceeded its response size limit.`, 'MALFORMED_RESPONSE')
   }
   if (!response.body) return ''
@@ -338,7 +327,8 @@ async function readLimitedImageError(response: Response, signal: AbortSignal, la
     }
     return text + decoder.decode()
   } finally {
-    await reader.cancel().catch(() => undefined)
+    // Start cancellation without waiting for the underlying stream's cleanup.
+    void reader.cancel().catch(() => undefined)
     reader.releaseLock()
   }
 }
