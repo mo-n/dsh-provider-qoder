@@ -50,6 +50,10 @@ export function getQoderQueueFinishUrl(region: QoderRegion): string {
   return `${resolveQoderEndpoints(region).baseUrl}algo/api/v2/service/ask/finish?Encode=1`
 }
 
+export function getQoderBusinessFinishUrl(region: QoderRegion): string {
+  return `${resolveQoderEndpoints(region).baseUrl}algo/api/v2/service/business/finish?Encode=1`
+}
+
 /**  model-server HTTP endpoint. */
 export function getQoderModelServerUrl(region: QoderRegion = 'global'): string {
   const host = region === 'china' ? 'gateway.qoder.com.cn' : 'api2-v2.qoder.sh'

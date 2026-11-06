@@ -146,6 +146,10 @@ _Avoid_: remote API client, quota webhook, HTTP proxy
 A single execution cycle of an agent for one subscriber turn, representing the base unit across which the Qoder service aggregates resource consumption.
 _Avoid_: request, step, conversation record, session
 
+**Qoder agent-run finalization**:
+The terminal lifecycle report for a Qoder agent run, carrying its completion, cancellation, or failure state. It is separate from releasing a Qoder model queue lease.
+_Avoid_: model-step completion, queue lease release
+
 **Qoder turn identity**:
 The composite identifier that correlates a single model request with its conversation and agent run.
 _Avoid_: consumption id, record key, session token

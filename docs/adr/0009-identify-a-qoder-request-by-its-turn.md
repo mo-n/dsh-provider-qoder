@@ -43,3 +43,34 @@ This grouping deliberately permits calls originating in different DSH conversati
 Shared queue admission is accounted for by all concurrent requests using the same request group. One request finishing or being cancelled must not release admission still used by another. Hosted queue leases remain owned by committed host turns. No background release timer or model replay is introduced.
 
 The protocol identity baseline is qodercli 1.1.82. Its native subagent path can inherit a parent's business while using a separate request set; implementing that parent relationship is outside this change. Our hosted child runs remain independent. UUID formatting and offline tests alone do not establish live gateway acceptance or exact Credits-panel presentation.
+
+## Agent-run Finalization
+
+Committed DSH `session/event` `turn/end` finalizes the Qoder agent runs actually
+dispatched under its captured host handle. Model-step completion does not close a
+run. The host retains transport-owned actions for every business identity,
+including earlier model selections and region or subscriber scopes. Replacing an
+open host turn or unloading the provider explicitly abandons its remaining runs
+with cancellation state; browser authorization remains available until this
+bounded cleanup completes.
+
+Qoder transport reports `BUSINESS_FINISH` to
+`/algo/api/v2/service/business/finish?Encode=1`, independently of
+`/ask/finish` queue lease release and regardless of the selected model protocol.
+The encoded, COSY-signed event uses the dispatched session and business identity,
+the original agent metadata, and the committed end timestamp. Terminal stages
+are `complete`, `abort`, and `error`. An ImageGen call sharing that identity does not create a second report or
+replace the agent metadata.
+
+Each region, subscriber, organization, session, and business identity is reported
+once per host handle, including across replaced transport instances. Later
+matching dispatches may update the captured credential lease. A late request
+keeps the closed handle's terminal state and cannot finalize a newer turn.
+Reports have an independent ten-second total deadline, including credential
+resolution and response cleanup. Only an HTTP 401 or an HTTP 403 carrying explicit
+subscriber expiry (`105`) allows one authentication recovery. Failures remain
+best effort and do not change the subscriber's model result.
+
+Auxiliary model calls remain isolated and do not register subscriber finalization.
+Standalone calls inferred from history lack an authoritative completion event and
+therefore do not report automatic agent-run finalization.

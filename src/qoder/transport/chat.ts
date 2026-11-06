@@ -1,6 +1,7 @@
 /** Qoder chat request encoding, queue recovery, timeout lifecycle, and SSE streaming. */
 
 import type { QoderHostRun } from '../turn.ts'
+import type { QoderBusinessRequest } from './business-finish.ts'
 
 import { randomUUID } from 'node:crypto'
 
@@ -38,6 +39,7 @@ export interface QoderChatDependencies {
   modelQueueMaxWaitMs?: number
   /** Immutable boundary captured before I/O, independent of message-history inference. */
   hostRun?: QoderHostRun
+  onBusinessRequest?: (request: QoderBusinessRequest) => void
   onQueueUpdate?: (update: QoderQueueUpdate) => void
   onQueueLease?: (lease: QoderQueueLease) => boolean
   queueClock?: QueueClock
@@ -172,9 +174,12 @@ async function* streamAttempt(
             requestController.abort('response header timeout')
           }, dependencies.responseHeaderTimeoutMs)
           try {
-            return await dependencies.fetch(chatUrl, {
+            dependencies.hostRun?.assertDispatchAllowed?.()
+            const pending = dependencies.fetch(chatUrl, {
               method: 'POST', headers, body: wireBody, signal: requestController.signal,
             })
+            dependencies.onBusinessRequest?.({ business: request.business, sessionId: request.session_id, modelKey: request.model_config.key, credentials: activeCredentials })
+            return await pending
           } finally { clearTimeout(headerTimer) }
         },
         headers: {

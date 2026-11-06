@@ -1,7 +1,9 @@
 /** Correlate transport-owned release actions with committed DSH turn boundaries. */
 import { randomUUID } from 'node:crypto'
+import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderQueueLease, QoderQueueOwner } from '../qoder/queue.ts'
-import type { QoderHostRun } from '../qoder/turn.ts'
+import type { QoderHostRun, QoderRunEnd } from '../qoder/turn.ts'
+import type { TurnEndReason } from '@deepseek-ai/dsh-session/types'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
@@ -10,7 +12,9 @@ import type {} from '@deepseek-ai/dsh-session'
 export function bindQoderQueueLeases(ctx: Context, leases: QoderQueueLeases): void {
   ctx.on('session/event', (session, event) => {
     if (event.type === 'turn/start') leases.start(session.id, event.data.turn)
-    if (event.type === 'turn/end') void leases.end(session.id, event.data.turn)
+    if (event.type === 'turn/end') void leases.end(session.id, event.data.turn, {
+      stage: qoderEndStage(event.data.reason), endedAt: event.time,
+    })
   })
   ctx.on('agent/request', async ({ agent, turn }, next) => {
     leases.start(agent.session.id, turn)
@@ -18,8 +22,24 @@ export function bindQoderQueueLeases(ctx: Context, leases: QoderQueueLeases): vo
   })
 }
 
+function qoderEndStage(reason: TurnEndReason): QoderRunEnd['stage'] {
+  switch (reason.kind) {
+    case 'completed': return 'complete'
+    case 'aborted': case 'blocked': case 'interrupted': case 'forked': return 'abort'
+    default: return 'error'
+  }
+}
+
+interface HostedRun {
+  turn: number
+  run: QoderHostRun
+  leases: Map<string, QoderQueueLease>
+  finishers: Set<(end: QoderRunEnd) => Promise<void>>
+  end?: QoderRunEnd
+}
+
 export class QoderQueueLeases {
-  private readonly runs = new Map<string, { turn: number; run: QoderHostRun; leases: Map<string, QoderQueueLease> }>()
+  private readonly runs = new Map<string, HostedRun>()
   private readonly pending = new Set<Promise<unknown>>()
   private disposed = false
 
@@ -27,7 +47,18 @@ export class QoderQueueLeases {
     if (this.disposed || this.runs.get(sessionId)?.turn === turn) return
     // A replacement must detach old actions before a newer turn can retain leases.
     void this.end(sessionId)
-    this.runs.set(sessionId, { turn, run: Object.freeze({ id: randomUUID() }), leases: new Map() })
+    const owner: HostedRun = {
+      turn, leases: new Map(), finishers: new Set(),
+      run: Object.freeze({ id: randomUUID(), assertDispatchAllowed: () => {
+        if (this.disposed) throw new QoderLlmError('Qoder provider is unloading.', 'ABORTED')
+      }, onEnd: (finish: (end: QoderRunEnd) => Promise<void>) => {
+        // A request may finish preparation after turn/end. Keep its original
+        // terminal state rather than attaching its business to the current turn.
+        if (owner.end) void this.cleanup([() => finish(owner.end!)])
+        else owner.finishers.add(finish)
+      } }),
+    }
+    this.runs.set(sessionId, owner)
   }
 
   retain = (lease: QoderQueueLease): boolean => {
@@ -47,11 +78,21 @@ export class QoderQueueLeases {
     }
   }
 
-  async end(sessionId: string, turn?: number): Promise<void> {
+  async end(sessionId: string, turn?: number, end: QoderRunEnd = { stage: 'abort', endedAt: Date.now() }): Promise<void> {
     const run = this.runs.get(sessionId)
     if (!run || (turn !== undefined && turn !== run.turn)) return
     this.runs.delete(sessionId)
-    const cleanup = Promise.allSettled([...run.leases.values()].map(lease => Promise.resolve().then(() => lease.release())))
+    run.end = Object.freeze({ ...end })
+    await this.cleanup([
+      ...[...run.leases.values()].map(lease => () => lease.release()),
+      ...[...run.finishers].map(finish => () => finish(run.end!)),
+    ])
+    run.leases.clear()
+    run.finishers.clear()
+  }
+
+  private async cleanup(actions: Array<() => Promise<void>>): Promise<void> {
+    const cleanup = Promise.allSettled(actions.map(action => Promise.resolve().then(action)))
     this.pending.add(cleanup)
     try { await cleanup } finally { this.pending.delete(cleanup) }
   }
