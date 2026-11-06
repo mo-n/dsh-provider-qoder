@@ -764,6 +764,38 @@ for (const format of ['modern', 'legacy separate', 'legacy grouped', 'mixed'] as
   })
 }
 
+test('request image limit keeps the latest 50 across user and tool messages before reading attachments', async () => {
+  const image = { type: 'image' as const, attachment: imageRef }
+  const text = { type: 'text' as const, text: 'Keep this text' }
+  const old = [
+    { role: 'user', content: [image] },
+    { role: 'user', content: [text, image] },
+    createToolResultMessage({ callId: ToolCallId('modern'), content: [image], isError: false }),
+  ]
+  const nested = { type: 'tool-result' as const, toolCallId: 'legacy', content: [image] }
+  // The nested result precedes the sibling image on the wire even when its block comes later.
+  const mixed = { role: 'user', content: [image, nested] }
+  const recent = [20, 20, 9].map(count => ({ role: 'user', content: Array.from({ length: count }, () => image) }))
+  const messages = [...old, mixed, ...recent]
+  const original = structuredClone(messages)
+  let reads = 0
+  const logs: unknown[] = []
+  const result = await validateAndTranslateMessages(messages, undefined, imageAttachments(() => { reads++ }), undefined, {
+    onImagesTrimmed: counts => logs.push(counts),
+  })
+  const placeholder = '[media removed: request limit]'
+  assert.deepEqual(result.slice(0, 4), [
+    { role: 'user', content: placeholder },
+    { role: 'user', content: text.text },
+    { role: 'tool', tool_call_id: 'modern', content: placeholder },
+    { role: 'tool', tool_call_id: 'legacy', content: placeholder },
+  ])
+  assert.deepEqual(result.slice(4).map(message => Array.isArray(message.content) && message.content.length), [1, 20, 20, 9])
+  assert.equal(reads, 50)
+  assert.deepEqual(logs, [{ original: 54, retained: 50, removed: 4 }])
+  assert.deepEqual(messages, original)
+})
+
 test('tool image limits reject before attachment reads', async () => {
   let reads = 0
   const base = imageAttachments(() => { reads++ })

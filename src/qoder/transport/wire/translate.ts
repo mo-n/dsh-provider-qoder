@@ -43,6 +43,11 @@ export interface QoderTranslateContext {
   signal?: AbortSignal
 }
 
+export interface QoderTranslationOptions extends Pick<QoderTranslateContext, 'uploader' | 'credentials'> {
+  preserveThinking?: boolean
+  onImagesTrimmed?: (counts: { original: number; retained: number; removed: number }) => void
+}
+
 function unsupported(message: string): QoderLlmError {
   return new QoderLlmError(message, 'UNSUPPORTED_CONTENT')
 }
@@ -226,14 +231,67 @@ export function validateMessageShapes(messages: readonly QoderMessage[], attachm
   return hasImages
 }
 
+const maxRequestImages = 50
+const omittedImage = { type: 'text', text: '[media removed: request limit]' } as const
+
+function limitRequestImages(
+  messages: readonly QoderMessage[],
+  onTrimmed?: QoderTranslationOptions['onImagesTrimmed'],
+): readonly QoderMessage[] {
+  let original = 0
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'image') original++
+      if (block.type === 'tool-result') {
+        for (const item of block.content) if (item.type === 'image') original++
+      }
+    }
+  }
+  if (original <= maxRequestImages) return messages
+
+  const removed = original - maxRequestImages
+  let remaining = removed
+  const trim = (blocks: readonly ContentBlock[], toolResult: boolean): readonly ContentBlock[] => {
+    if (remaining === 0 || blocks.length === 0) return blocks
+    const kept: ContentBlock[] = []
+    for (const block of blocks) {
+      if (block.type === 'image' && remaining > 0) {
+        remaining--
+        if (toolResult) kept.push(omittedImage)
+      } else {
+        kept.push(block)
+      }
+    }
+    return kept.length === 0 ? [omittedImage] : kept
+  }
+
+  const limited = messages.map(message => {
+    if (remaining === 0) return message
+    const results: ToolResultBlock[] = []
+    const siblings: ContentBlock[] = []
+    for (const block of message.content) {
+      if (block.type === 'tool-result') {
+        results.push({ ...block, content: trim(block.content, true) })
+      } else {
+        siblings.push(block)
+      }
+    }
+    // Legacy nested tool results are emitted before their sibling content.
+    return { ...message, content: [...results, ...trim(siblings, message.role === 'tool')] }
+  })
+  onTrimmed?.({ original, retained: maxRequestImages, removed })
+  return limited
+}
+
 export async function validateAndTranslateMessages(
   messages: readonly QoderMessage[],
   systemPrompt?: string,
   attachments?: QoderImageAttachments,
   signal?: AbortSignal,
-  pipeline?: Pick<QoderTranslateContext, 'uploader' | 'credentials'> & { preserveThinking?: boolean },
+  pipeline?: QoderTranslationOptions,
 ): Promise<QoderWireMessage[]> {
-  validateMessageShapes(messages, attachments)
+  const hasImages = validateMessageShapes(messages, attachments)
+  const requestMessages = hasImages ? limitRequestImages(messages, pipeline?.onImagesTrimmed) : messages
   const context: QoderTranslateContext = {
     attachments,
     signal,
@@ -248,7 +306,7 @@ export async function validateAndTranslateMessages(
     output.push({ role: 'system', content: systemPrompt })
   }
 
-  for (const message of messages) {
+  for (const message of requestMessages) {
     const toolResults = message.content.filter((block): block is ToolResultBlock => block.type === 'tool-result')
     const nonToolBlocks = message.content.filter(block => block.type !== 'tool-result')
 
