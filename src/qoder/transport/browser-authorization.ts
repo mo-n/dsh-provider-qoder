@@ -1,4 +1,4 @@
-/** qodercli 1.1.73 PKCE device flow. No website password or agent runtime is needed. */
+/** Qoder browser authorization via the PKCE device flow. */
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { QoderAuthorizationTransport, QoderBrowserGrant, QoderBrowserLoginFlow } from '../authorization.ts'

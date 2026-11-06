@@ -23,10 +23,11 @@ import type {
 import { en, zh, type QoderCredentialCopy } from './locales.ts'
 import { createSessionTierEvents } from './session-tier-events.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
-import { installQoderSettingsNavIcon } from './settings-nav-icon.ts'
+import { QoderSettingsNavIcon } from './QoderSettingsNavIcon.tsx'
 import { readQoderSettingsNamespace } from './settings-bootstrap.ts'
 
 const localeNamespace = 'settings.qoderCredential'
+const settingsSectionId = 'dsh-provider-qoder'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -117,7 +118,6 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
    * switch re-resolves provider copy instead of reusing a setup-time snapshot.
    */
   const activeLocale = (): string => ctx.locale.getLocale().active
-  installQoderSettingsNavIcon(ctx, () => t('nav'))
 
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock', id: 'qoder-model-queue', order: 30,
@@ -126,12 +126,16 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
   }, QoderQueueStatus))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
-    id: 'qoder',
+    id: settingsSectionId,
     order: 15,
     label: () => t('nav'),
     locale: localeNamespace,
     inject: () => ({ operations, t, activeLocale }),
   }, QoderAccountCard))
+  ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+    name: 'settings.section.icon',
+    id: settingsSectionId,
+  }, QoderSettingsNavIcon))
   ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
     name: 'settings.models.footer',
     id: 'qoder-credential',

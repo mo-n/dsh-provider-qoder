@@ -284,7 +284,7 @@ export async function* parseQoderChunks(
             if (originalDetails) options.onMalformedFrame?.({ ...originalDetails, disposition: 'recovered-continuation' })
           }
         } catch (error) {
-          // qodercli 1.1.73 ignores non-JSON trailers after a model finish reason.
+          // Ignore non-JSON trailers after a model finish reason.
           // A malformed frame before that point is still a protocol failure.
           const malformedJson = error instanceof QoderMalformedJsonFrameError ? error : undefined
           const skippedAfterFinish = behavior.ignoreMalformedAfterFinish && sawFinishReason
