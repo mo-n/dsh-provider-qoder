@@ -32,26 +32,34 @@ export interface PreparedQoderRequest {
   business: QoderBusiness
 }
 
-function stableHash(prefix: string, ...inputs: string[]): string {
-  const hash = crypto.createHash('sha256')
-  hash.update(prefix)
-  for (const input of inputs) {
-    hash.update('\0')
-    hash.update(input)
-  }
-  return hash.digest('hex').slice(0, 16)
-}
-
 /** One tracker preserves agent-run identity across both model protocols. */
 export const qoderTurnTracker = new QoderTurnTracker()
 
-/** Shared subscriber-scoped conversation identity for model and image requests. */
-export function qoderSessionId(userId: string, sessionId?: string): string {
-  return `${stableHash('qoder-session', userId)}-${sessionId ?? crypto.randomUUID()}`
+/**
+ * Process-local mapping from a DSH conversation to Qoder's UUID session id.
+ *
+ * The upstream wire value must be a UUID rather than a provider-readable hash,
+ * while model and image capabilities still need to resolve the same DSH session
+ * to the same value. A restarted DSH process starts a new upstream session.
+ */
+const qoderSessionIds = new Map<string, string>()
+
+/** Shared subscriber-and-region-scoped conversation identity for model and image requests. */
+export function qoderSessionId(userId: string, sessionId?: string, identityScope = ''): string {
+  if (sessionId === undefined || sessionId.length === 0) return crypto.randomUUID()
+  const key = JSON.stringify([identityScope, userId, sessionId])
+  const existing = qoderSessionIds.get(key)
+  if (existing !== undefined) return existing
+  const created = crypto.randomUUID()
+  qoderSessionIds.set(key, created)
+  return created
 }
 
 
 function callKind(options: GenerateOptions): QoderCallKind {
+  // Newer DSH hosts provide review attribution; older pinned host types do not
+  // yet include this purpose. Match only the explicit runtime value.
+  if (String(options.purpose) === 'auto-review') return 'auto-review'
   return options.purpose === undefined ? 'conversation' : 'auxiliary'
 }
 
@@ -118,15 +126,26 @@ export async function prepareQoderRequest(
       break
     }
   }
-  const sessionId = qoderSessionId(userId, options.sessionId === undefined ? undefined : String(options.sessionId))
   const requestId = crypto.randomUUID()
-  const sessionIdParam = options.sessionId === undefined ? undefined : String(options.sessionId)
-  const identity = tracker.resolveTurnIdentity(sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]), messages, callKind(options), requestId, modelKey, hostRun)
+  const sessionIdParam = String(options.sessionId ?? '') || undefined
+  const wireSessionId = sessionIdParam === undefined ? undefined : qoderSessionId(userId, sessionIdParam, identityScope)
+  const identity = tracker.resolveTurnIdentity(
+    sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]),
+    messages,
+    callKind(options),
+    requestId,
+    modelKey,
+    hostRun,
+    {
+      scope: JSON.stringify([identityScope, userId]),
+      ...wireSessionId === undefined ? {} : { sessionId: wireSessionId },
+    },
+  )
   return {
     requestId,
     requestSetId: identity.requestSetId,
     chatRecordId: identity.chatRecordId,
-    sessionId,
+    sessionId: identity.sessionId,
     taskId: 'common',
     modelKey,
     modelSource: model?.source || 'system',
@@ -144,7 +163,7 @@ export async function prepareQoderRequest(
       type: 'agent',
       stage: identity.businessStage,
       id: identity.businessId,
-      name: lastUserText.substring(0, 30),
+      name: identity.businessName,
       begin_at: identity.beginAt,
     },
   }

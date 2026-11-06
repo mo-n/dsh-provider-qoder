@@ -153,3 +153,7 @@ _Avoid_: consumption id, record key, session token
 **Qoder auxiliary model call**:
 A model request the host initiates for internal bookkeeping (such as session title generation or compaction summaries) with an independent lifecycle that does not displace subscriber turn records.
 _Avoid_: background request, internal call, hidden prompt
+
+**Qoder request aggregation window**:
+A bounded grouping of model calls used when their originating conversation is unavailable or their review lifecycle is tracked separately. It is distinct from an agent's execution of a subscriber turn.
+_Avoid_: recovered turn, shared conversation

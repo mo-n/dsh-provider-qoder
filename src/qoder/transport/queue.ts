@@ -114,6 +114,70 @@ export interface ModelQueueOptions {
   clock?: QueueClock
 }
 
+/**
+ * Coordinates queue-lease cleanup for requests without a host lease owner that share one
+ * upstream request set. DSH-owned turns use `onLease` and retain/release
+ * through their host run; hostless calls have no host owner, so their server
+ * lease must remain alive until every request using the set has finished.
+ */
+interface AnonymousLeaseScope {
+  references: number
+  elapsed: () => number
+  leases: Map<string, (elapsedMs: number) => Promise<void>>
+  cleanup?: Promise<void>
+}
+
+const anonymousLeaseScopes = new Map<string, AnonymousLeaseScope>()
+
+interface AnonymousLeaseHandle {
+  entered(model: string, release: (elapsedMs: number) => Promise<void>): void
+  ready(): Promise<void>
+  finish(): Promise<void>
+}
+
+function anonymousLeaseHandle(key: string, clock: QueueClock): AnonymousLeaseHandle {
+  let scope = anonymousLeaseScopes.get(key)
+  if (scope === undefined) {
+    scope = { references: 0, elapsed: () => 0, leases: new Map() }
+    anonymousLeaseScopes.set(key, scope)
+  }
+  if (scope.references === 0) {
+    const startedAt = clock.now()
+    scope.elapsed = () => Math.max(0, clock.now() - startedAt)
+  }
+  scope.references += 1
+  let finished = false
+  return {
+    ready: () => scope!.cleanup ?? Promise.resolve(),
+    entered(model, release) {
+      // Keep the first callback for a model. It owns the credentials and
+      // endpoint bound to this request set, while all callers share it.
+      if (!scope!.leases.has(model)) scope!.leases.set(model, release)
+    },
+    async finish() {
+      if (finished) return
+      finished = true
+      scope!.references -= 1
+      if (scope!.references > 0) return
+      const elapsedMs = scope!.elapsed()
+      const leases = [...scope!.leases.values()]
+      scope!.leases.clear()
+      const releaseCleanup = (): Promise<void> => Promise.allSettled(leases.map(release => release(elapsedMs))).then(() => undefined)
+      const cleanup = scope!.cleanup === undefined
+        ? releaseCleanup()
+        : scope!.cleanup.then(releaseCleanup)
+      scope!.cleanup = cleanup
+      await cleanup
+      if (scope!.cleanup === cleanup) {
+        scope!.cleanup = undefined
+        if (scope!.references === 0 && anonymousLeaseScopes.get(key) === scope) {
+          anonymousLeaseScopes.delete(key)
+        }
+      }
+    },
+  }
+}
+
 export class ModelQueue {
   private readonly callId = randomUUID()
   private readonly options: ModelQueueOptions
@@ -121,6 +185,7 @@ export class ModelQueue {
   private readonly maxWaitMs: number
   private readonly models = new Set<string>()
   private readonly deferred = new Set<string>()
+  private readonly anonymousLease: AnonymousLeaseHandle | undefined
   private waitMs = 0
   private recoveries = 0
 
@@ -131,6 +196,10 @@ export class ModelQueue {
     if (!Number.isSafeInteger(this.maxWaitMs) || this.maxWaitMs <= 0 || this.maxWaitMs > 2_147_483_647) {
       throw new Error('modelQueueMaxWaitMs must be a positive integer no greater than 2147483647')
     }
+    // Calls with no host lease owner share cleanup even if they have a session.
+    this.anonymousLease = !options.dshSessionId || options.onLease === undefined
+      ? anonymousLeaseHandle(JSON.stringify([options.region, options.subscriberId, options.requestSetId, options.model]), this.clock)
+      : undefined
   }
 
   private publish(update: QoderQueueUpdate): void {
@@ -143,11 +212,36 @@ export class ModelQueue {
     this.publish({ type: 'clear', callId: this.callId })
   }
 
+  /** Wait for a prior request-set lease release before reusing its identity. */
+  async ready(): Promise<void> {
+    const signal = this.options.signal
+    checkAbort(signal)
+    const barrier = this.anonymousLease?.ready()
+    if (signal === undefined || barrier === undefined) {
+      await barrier
+      return
+    }
+    let abort!: () => void
+    const interrupted = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(new QoderLlmError('Qoder request was aborted.', 'ABORTED'))
+      signal.addEventListener('abort', abort, { once: true })
+    })
+    try {
+      await Promise.race([barrier, interrupted])
+    } finally {
+      signal.removeEventListener('abort', abort)
+    }
+  }
+
   /** Register even a queue signal rejected by the output guard, so cleanup still runs. */
   entered(status: QoderQueueStatus): void {
     const model = status.modelKey ?? this.options.model
     if (this.models.has(model)) return
     this.models.add(model)
+    if (this.anonymousLease !== undefined) {
+      this.anonymousLease.entered(model, elapsedMs => this.release(model, elapsedMs))
+      return
+    }
     if (this.options.dshSessionId && this.options.onLease) {
       const key = JSON.stringify([this.options.region, this.options.subscriberId, this.options.requestSetId, model])
       if (this.options.onLease({
@@ -259,6 +353,11 @@ export class ModelQueue {
   /** Best-effort cleanup has an independent signal even after caller cancellation. */
   async finish(elapsedMs: number): Promise<void> {
     this.clear()
+    if (this.anonymousLease !== undefined) {
+      await this.anonymousLease.finish()
+      this.models.clear()
+      return
+    }
     const models = [...this.models].filter(model => !this.deferred.has(model))
     this.models.clear()
     await Promise.allSettled(models.map(model => this.release(model, elapsedMs)))

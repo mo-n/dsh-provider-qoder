@@ -382,13 +382,14 @@ export async function generateImage(request: QoderImageGenerationRequest, deps: 
   let imageUrl: string | undefined
   try {
     const credentials = await deps.resolveCredentials(signal)
-    const identity = qoderTurnTracker.resolveTurnIdentity(request.sessionId === undefined ? undefined : JSON.stringify([deps.region, credentials.userID, request.sessionId]), [], request.hostRun ? 'conversation' : 'auxiliary', requestId, undefined, request.hostRun)
-    const business = { product: 'cli', version: qoderIdeVersion, type: 'text2img', stage: identity.businessStage, id: identity.businessId, begin_at: identity.beginAt, name: request.prompt.slice(0, 30) }
+    const sessionId = qoderSessionId(credentials.userID, request.sessionId, deps.region)
+    const identity = qoderTurnTracker.resolveTurnIdentity(request.sessionId === undefined ? undefined : JSON.stringify([deps.region, credentials.userID, request.sessionId]), [], request.hostRun ? 'conversation' : 'auxiliary', requestId, undefined, request.hostRun, { sessionId, fallbackBusinessName: request.prompt })
+    const business = { product: 'cli', version: qoderIdeVersion, type: 'text2img', stage: identity.businessStage, id: identity.businessId, begin_at: identity.beginAt, name: identity.businessName }
     let parsed: Obj | undefined
     begin('generation')
     const generationTimeout = AbortSignal.timeout(deps.timeoutMs ?? 180_000)
     activeSignal = signal ? AbortSignal.any([signal, generationTimeout]) : generationTimeout
-    try { parsed = record(await post('generateImage', { payload: JSON.stringify({ model: 'ge3i', prompt: request.prompt, size: request.size ?? '1024x1024', metadata: { business } }), encodeVersion: '1', sessionId: qoderSessionId(credentials.userID, request.sessionId), requestId }, deps, activeSignal, identity.requestSetId, signal)) } catch (error) {
+    try { parsed = record(await post('generateImage', { payload: JSON.stringify({ model: 'ge3i', prompt: request.prompt, size: request.size ?? '1024x1024', metadata: { business } }), encodeVersion: '1', sessionId: identity.sessionId, requestId }, deps, activeSignal, identity.requestSetId, signal)) } catch (error) {
       failure(error)
       if (signal?.aborted || error instanceof QoderLlmError && error.code === 'ABORTED' || error instanceof Error && error.name === 'AbortError') {
         if (error instanceof QoderLlmError && error.code === 'ABORTED') throw error
