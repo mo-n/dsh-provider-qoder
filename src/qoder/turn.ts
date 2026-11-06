@@ -3,6 +3,8 @@
  */
 export interface QoderHostRun {
   readonly id: string
+  /** Reject dispatch after provider unload starts, even for a previously captured run. */
+  readonly assertDispatchAllowed?: () => void
   /** Register transport-owned finalization, including work prepared after the boundary closed. */
   readonly onEnd?: (finish: (end: QoderRunEnd) => Promise<void>) => void
 }

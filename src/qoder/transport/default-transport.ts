@@ -182,6 +182,7 @@ export class DefaultQoderTransport implements QoderTransport {
     return { fetch: this.fetchImpl, region: this.region, logger: this.logger,
       resolveCredentials: nextSignal => lease.resolve(nextSignal),
       refreshCredentials: (rejected, nextSignal) => lease.resolve(nextSignal, rejected.authToken),
+      assertDispatchAllowed: hostRun?.assertDispatchAllowed,
       onBusinessRequest: request => retainQoderBusiness(hostRun, request, {
         fetch: this.fetchImpl, region: this.region, logger: this.logger,
         resolveCredentials: (nextSignal, rejectedToken) => lease.resolve(nextSignal, rejectedToken),

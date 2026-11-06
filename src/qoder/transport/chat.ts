@@ -174,6 +174,7 @@ async function* streamAttempt(
             requestController.abort('response header timeout')
           }, dependencies.responseHeaderTimeoutMs)
           try {
+            dependencies.hostRun?.assertDispatchAllowed?.()
             const pending = dependencies.fetch(chatUrl, {
               method: 'POST', headers, body: wireBody, signal: requestController.signal,
             })

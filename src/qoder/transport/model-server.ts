@@ -115,6 +115,7 @@ export async function* streamModelServerChat(
           dispatch: async (wireBody, headers) => {
             headerTimer = setTimeout(() => { headerTimedOut = true; controller.abort('response header timeout') }, dependencies.responseHeaderTimeoutMs)
             try {
+              dependencies.hostRun?.assertDispatchAllowed?.()
               const pending = dependencies.fetch(getQoderModelServerUrl(dependencies.region), {
                 method: 'POST', headers, body: wireBody, signal: controller.signal,
               })

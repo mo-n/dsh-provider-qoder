@@ -61,6 +61,7 @@ export interface ImageToolDependencies {
   logger?: QoderLogger
   fetch: typeof fetch
   region: QoderRegion
+  assertDispatchAllowed?: () => void
   onBusinessRequest?: (request: QoderBusinessRequest) => void
   resolveCredentials: (signal?: AbortSignal) => Promise<CosyCredentials>
   refreshCredentials?: (rejected: CosyCredentials, signal?: AbortSignal) => Promise<CosyCredentials>
@@ -85,6 +86,7 @@ async function post(kind: 'imageSearch' | 'generateImage', outer: Obj, deps: Ima
   let credentials = await deps.resolveCredentials(activeSignal)
   for (let attempt = 0; attempt < 2; attempt++) {
     activeSignal.throwIfAborted()
+    deps.assertDispatchAllowed?.()
     const pending = deps.fetch(url, { method: 'POST', body, redirect: 'error', signal: activeSignal,
       headers: { ...buildAuthHeaders(body, url, credentials), 'Content-Type': 'application/json', Accept: 'application/json', 'Accept-Encoding': 'identity',
         ...requestSetId ? { 'X-RequestSet-ID': requestSetId } : {} } })

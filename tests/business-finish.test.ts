@@ -235,6 +235,40 @@ test('preparation completing after turn/end retains its original run and origina
   assert.equal(sent[1].event_data.business.id, asks[0].id)
 })
 
+for (const route of ['legacy', 'http', 'image'] as const) {
+  test(`unload blocks a captured ${route} request still resolving credentials`, async () => {
+    const runs = new QoderQueueLeases()
+    runs.start('finish-session', 1)
+    const resolving = deferred()
+    const resume = deferred()
+    let dispatched = 0
+    const transport = createQoderTransport({
+      ...transportOptions(runs, async () => {
+        dispatched++
+        return Response.json({})
+      }),
+      modelTransport: route === 'http' ? 'http' : 'legacy',
+      resolveCredential: async () => ({
+        key: 'browser',
+        resolve: async () => {
+          resolving.resolve()
+          await resume.promise
+          return credentials
+        },
+      }),
+    })
+    const call = route === 'image'
+      ? transport.generateImage!({ prompt: 'tool prompt', sessionId: 'finish-session' })
+      : collect(transport.stream(request()))
+    const rejected = assert.rejects(call, { code: 'ABORTED' })
+    await resolving.promise
+    await runs.dispose()
+    resume.resolve()
+    await rejected
+    assert.equal(dispatched, 0)
+  })
+}
+
 test('committed reasons, replacement and disposal map to Qoder terminal stages', async () => {
   const ctx = new Context()
   const runs = new QoderQueueLeases()

@@ -1,5 +1,6 @@
 /** Correlate transport-owned release actions with committed DSH turn boundaries. */
 import { randomUUID } from 'node:crypto'
+import { QoderLlmError } from '../qoder/errors.ts'
 import type { QoderQueueLease, QoderQueueOwner } from '../qoder/queue.ts'
 import type { QoderHostRun, QoderRunEnd } from '../qoder/turn.ts'
 import type { TurnEndReason } from '@deepseek-ai/dsh-session/types'
@@ -48,7 +49,9 @@ export class QoderQueueLeases {
     void this.end(sessionId)
     const owner: HostedRun = {
       turn, leases: new Map(), finishers: new Set(),
-      run: Object.freeze({ id: randomUUID(), onEnd: (finish: (end: QoderRunEnd) => Promise<void>) => {
+      run: Object.freeze({ id: randomUUID(), assertDispatchAllowed: () => {
+        if (this.disposed) throw new QoderLlmError('Qoder provider is unloading.', 'ABORTED')
+      }, onEnd: (finish: (end: QoderRunEnd) => Promise<void>) => {
         // A request may finish preparation after turn/end. Keep its original
         // terminal state rather than attaching its business to the current turn.
         if (owner.end) void this.cleanup([() => finish(owner.end!)])
