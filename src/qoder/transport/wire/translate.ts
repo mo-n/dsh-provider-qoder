@@ -289,6 +289,7 @@ function limitRequestImages(
   let remaining = removed
   const trim = (blocks: readonly ContentBlock[], toolResult: boolean): readonly ContentBlock[] => {
     if (remaining === 0 || blocks.length === 0) return blocks
+    const remainingBefore = remaining
     const kept: ContentBlock[] = []
     for (const block of blocks) {
       if (block.type === 'image' && remaining > 0) {
@@ -298,7 +299,10 @@ function limitRequestImages(
         kept.push(block)
       }
     }
-    return kept.length === 0 ? [omittedImage] : kept
+    if (!toolResult && remaining < remainingBefore && !kept.some(block =>
+      block.type === 'image' || (block.type === 'text' && block.text.length > 0),
+    )) return [omittedImage]
+    return kept
   }
 
   const limited = messages.map(message => {

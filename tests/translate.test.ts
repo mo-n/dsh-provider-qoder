@@ -765,34 +765,51 @@ for (const format of ['modern', 'legacy separate', 'legacy grouped', 'mixed'] as
 }
 
 test('request image limit keeps the latest 50 across user and tool messages before reading attachments', async () => {
-  const image = { type: 'image' as const, attachment: imageRef }
+  const images = Array.from({ length: 56 }, (_, index) => ({
+    type: 'image' as const,
+    attachment: { ...imageRef, attachmentId: `sha256:image-${index}` as typeof imageRef.attachmentId },
+  }))
+  const [first, withEmptyText, withReasoning, withText, modern, legacy, mixedSibling, ...recentImages] = images
+  const emptyText = { type: 'text' as const, text: '' }
+  const reasoning = { type: 'reasoning' as const, text: 'Ignored user reasoning' }
   const text = { type: 'text' as const, text: 'Keep this text' }
   const old = [
-    { role: 'user', content: [image] },
-    { role: 'user', content: [text, image] },
-    createToolResultMessage({ callId: ToolCallId('modern'), content: [image], isError: false }),
+    { role: 'user', content: [first] },
+    { role: 'user', content: [emptyText, withEmptyText] },
+    { role: 'user', content: [withReasoning, reasoning] },
+    { role: 'user', content: [text, withText] },
+    createToolResultMessage({ callId: ToolCallId('modern'), content: [modern], isError: false }),
   ]
-  const nested = { type: 'tool-result' as const, toolCallId: 'legacy', content: [image] }
+  const nested = { type: 'tool-result' as const, toolCallId: 'legacy', content: [legacy] }
   // The nested result precedes the sibling image on the wire even when its block comes later.
-  const mixed = { role: 'user', content: [image, nested] }
-  const recent = [20, 20, 9].map(count => ({ role: 'user', content: Array.from({ length: count }, () => image) }))
+  const mixed = { role: 'user', content: [mixedSibling, nested] }
+  const recent = [recentImages.slice(0, 20), recentImages.slice(20, 40), recentImages.slice(40)]
+    .map(content => ({ role: 'user', content }))
   const messages = [...old, mixed, ...recent]
   const original = structuredClone(messages)
   let reads = 0
   const logs: unknown[] = []
+  const imageUrl = (id: string) => `https://oss.qoder.sh/${id}`
   const result = await validateAndTranslateMessages(messages, undefined, imageAttachments(() => { reads++ }), undefined, {
     onImagesTrimmed: counts => logs.push(counts),
+    uploader: { resolveImageUrl: async image => imageUrl(image.attachment.attachmentId) },
+    credentials: stubCredentials,
   })
   const placeholder = '[media removed: request limit]'
-  assert.deepEqual(result.slice(0, 4), [
+  assert.deepEqual(result.slice(0, 6), [
+    { role: 'user', content: placeholder },
+    { role: 'user', content: placeholder },
     { role: 'user', content: placeholder },
     { role: 'user', content: text.text },
     { role: 'tool', tool_call_id: 'modern', content: placeholder },
     { role: 'tool', tool_call_id: 'legacy', content: placeholder },
   ])
-  assert.deepEqual(result.slice(4).map(message => Array.isArray(message.content) && message.content.length), [1, 20, 20, 9])
+  const retained = result.slice(6).map(message => message.content)
+  assert.deepEqual(retained, [[mixedSibling], ...recent.map(message => message.content)].map(group => group.map(image => ({
+    type: 'image_url', image_url: { url: imageUrl(image.attachment.attachmentId) },
+  }))))
   assert.equal(reads, 50)
-  assert.deepEqual(logs, [{ original: 54, retained: 50, removed: 4 }])
+  assert.deepEqual(logs, [{ original: 56, retained: 50, removed: 6 }])
   assert.deepEqual(messages, original)
 })
 
