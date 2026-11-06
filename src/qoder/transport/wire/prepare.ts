@@ -6,10 +6,9 @@ import crypto from 'node:crypto'
 import { type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { selectedContextTier, type QoderCatalogModel } from '../../catalog.ts'
 import { QoderLlmError } from '../../errors.ts'
-import type { QoderCredentials } from './credentials.ts'
 import { qoderIdeVersion } from './client-identity.ts'
-import { translateTools, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
-import type { QoderImageAttachments, QoderImageResolver } from './translate.ts'
+import { translateTools, userMessagesBeforeImageTrimming, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
+import type { QoderImageAttachments, QoderTranslationOptions } from './translate.ts'
 import { QoderTurnTracker, wireMessageText, type QoderCallKind } from './turn-identity.ts'
 import type { QoderBusiness, QoderContextConfig, QoderWireMessage, QoderWireTool } from './model-types.ts'
 
@@ -82,7 +81,7 @@ export function validateQoderRequestShape(options: GenerateOptions, model?: Qode
 export function translateQoderMessages(
   options: GenerateOptions,
   attachments?: QoderImageAttachments,
-  pipeline?: { uploader?: QoderImageResolver; credentials?: QoderCredentials; preserveThinking?: boolean },
+  pipeline?: QoderTranslationOptions,
 ): Promise<QoderWireMessage[]> {
   return validateAndTranslateMessages(options.messages, options.system, attachments, options.signal, pipeline)
 }
@@ -129,6 +128,7 @@ export async function prepareQoderRequest(
   const requestId = crypto.randomUUID()
   const sessionIdParam = String(options.sessionId ?? '') || undefined
   const wireSessionId = sessionIdParam === undefined ? undefined : qoderSessionId(userId, sessionIdParam, identityScope)
+  const standaloneMessages = userMessagesBeforeImageTrimming(messages)
   const identity = tracker.resolveTurnIdentity(
     sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]),
     messages,
@@ -139,6 +139,7 @@ export async function prepareQoderRequest(
     {
       scope: JSON.stringify([identityScope, userId]),
       ...wireSessionId === undefined ? {} : { sessionId: wireSessionId },
+      ...standaloneMessages === undefined ? {} : { standaloneMessages },
     },
   )
   return {

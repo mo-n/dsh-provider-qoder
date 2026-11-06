@@ -23,7 +23,15 @@
 
 import crypto from 'node:crypto'
 import type { QoderHostRun } from '../../turn.ts'
-import type { QoderWireMessage } from './model-types.ts'
+import type { QoderWireMessage, QoderWireTextPart } from './model-types.ts'
+
+export type QoderTurnMessagePart = QoderWireTextPart | { type: 'image_url' }
+
+/** Message shape used for identity, independent of resolved image URLs. */
+export interface QoderTurnMessage {
+  role: QoderWireMessage['role']
+  content: string | null | readonly QoderTurnMessagePart[]
+}
 
 /**
  * Resolved identity fields for a Qoder wire request.
@@ -84,6 +92,8 @@ export interface QoderTurnResolveOptions {
   sessionId?: string
   /** Opening label for a run first reached through image generation. */
   fallbackBusinessName?: string
+  /** User messages before the outgoing request's image limit was applied. */
+  standaloneMessages?: readonly QoderTurnMessage[]
 }
 
 interface SessionTurnState {
@@ -199,7 +209,7 @@ function isTimeContext(text: string): boolean {
 const syntheticMarkerTemplate = /^\[\d+ images? returned by the previous tool call\]/
 
 /** Wire text of one user message, used for injection classification and text extraction. */
-export function wireMessageText(message: QoderWireMessage): string {
+export function wireMessageText(message: QoderTurnMessage): string {
   const content = message.content
   if (typeof content === 'string') return content
   if (content === null) return ''
@@ -207,7 +217,7 @@ export function wireMessageText(message: QoderWireMessage): string {
 }
 
 /** Classify one user-role wire message. */
-function qoderMessageOrigin(message: QoderWireMessage): QoderMessageOrigin {
+function qoderMessageOrigin(message: QoderTurnMessage): QoderMessageOrigin {
   const text = wireMessageText(message).trimStart()
   if (syntheticMarkerTemplate.test(text)) return 'synthetic'
   if (hostNotificationTemplate.test(text) || isTimeContext(text)) return 'injected'
@@ -215,7 +225,7 @@ function qoderMessageOrigin(message: QoderWireMessage): QoderMessageOrigin {
 }
 
 /** First subscriber prompt used for the upstream business task label. */
-function firstPromptName(messages: readonly QoderWireMessage[], fallback = ''): string {
+function firstPromptName(messages: readonly QoderTurnMessage[], fallback = ''): string {
   // Hosted requests carry projected history. The latest prompt is the best
   // available boundary-local label when the host does not expose its message id.
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -235,7 +245,7 @@ function firstPromptName(messages: readonly QoderWireMessage[], fallback = ''): 
  * look like new input and split the record. Image count still separates a
  * message that carries images from one that does not.
  */
-function messageFingerprint(message: QoderWireMessage): string {
+function messageFingerprint(message: QoderTurnMessage): string {
   const hash = crypto.createHash('sha256')
   hash.update(message.role)
   hash.update('\0')
@@ -348,6 +358,7 @@ export class QoderTurnTracker {
       return this.resolveHosted(hostRun, sessionId, requestId, modelKey, now, resolveOptions, messages)
     }
 
+    const standaloneMessages = resolveOptions.standaloneMessages ?? messages
     let state = this.sessions.get(sessionId)
     if (state === undefined) {
       // Stamp the session before claiming it: the eviction pass must see this
@@ -381,7 +392,7 @@ export class QoderTurnTracker {
     // the wire shape; host-appended context and transport-synthesized markers
     // join the open record, and only newly seen subscriber input opens the next.
     const present = new Map<string, { count: number; host: QoderMessageOrigin; text: string }>()
-    for (const message of messages) {
+    for (const message of standaloneMessages) {
       if (message.role !== 'user') continue
       const fingerprint = messageFingerprint(message)
       const entry = present.get(fingerprint)
@@ -438,7 +449,7 @@ export class QoderTurnTracker {
       state.currentTurnId = crypto.randomUUID()
       state.currentBusinessId = crypto.randomUUID()
       state.turnOpenedAt = now
-      state.currentBusinessName = openingName || firstPromptName(messages)
+      state.currentBusinessName = openingName || firstPromptName(standaloneMessages)
     } else if (state.currentTurnId === '') {
       // A conversation whose first request carries no subscriber input still
       // belongs to a record; it keeps that record until a real prompt arrives.
@@ -447,7 +458,7 @@ export class QoderTurnTracker {
       state.currentTurnId = crypto.randomUUID()
       state.currentBusinessId = crypto.randomUUID()
       state.turnOpenedAt = now
-      state.currentBusinessName = firstPromptName(messages)
+      state.currentBusinessName = firstPromptName(standaloneMessages)
     }
 
     return {

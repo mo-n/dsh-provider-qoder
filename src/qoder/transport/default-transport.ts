@@ -236,6 +236,7 @@ export class DefaultQoderTransport implements QoderTransport {
       uploader: this.imageUploader,
       credentials,
       preserveThinking: this.preserveThinking,
+      onImagesTrimmed: counts => this.logger?.debug?.('[Qoder Stream] Trimmed request history images', counts),
     })
     // Image publication may have refreshed a rejected job token.
     const chatCredentials = await lease.resolve(options.signal)

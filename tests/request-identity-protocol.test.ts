@@ -6,6 +6,7 @@ import { qoderIdeVersion } from '../src/qoder/transport/wire/client-identity.ts'
 import { qoderEncodeBodyBytes } from '../src/qoder/transport/wire/encoding.ts'
 import { streamModelServerChat, modelServerBody } from '../src/qoder/transport/model-server.ts'
 import { streamQoderChat } from '../src/qoder/transport/chat.ts'
+import { createQoderTransport } from '../src/qoder/transport/index.ts'
 import { prepareQoderRequest } from '../src/qoder/transport/wire/prepare.ts'
 import { buildQoderRequestBody } from '../src/qoder/transport/wire/serialize.ts'
 import { QoderTurnTracker } from '../src/qoder/transport/wire/turn-identity.ts'
@@ -39,6 +40,7 @@ function decodeLegacy(value: Uint8Array | string): QoderWireRequest {
 }
 
 type HttpRequestBody = {
+  messages: QoderWireMessage[]
   metadata: {
     context: {
       request_id: string
@@ -48,6 +50,96 @@ type HttpRequestBody = {
     business: QoderWireRequest['business']
   }
 }
+
+test('tool result images can trim subscriber images without opening another Qoder agent run', async () => {
+  const image = (index: number) => ({
+    type: 'image' as const,
+    attachment: {
+      attachmentId: `sha256:fixture-${index}` as never, mediaType: 'image/png' as const,
+      bytes: 1, width: 1, height: 1,
+    },
+  })
+  const userHistory = [
+    { role: 'user', content: [image(0)] },
+    { role: 'user', content: [{ type: 'text', text: 'Historical text' }, image(1)] },
+    ...[20, 20, 8].map((count, group) => ({
+      role: 'user', content: Array.from({ length: count }, (_, index) => image(2 + group * 20 + index)),
+    })),
+  ]
+  const toolResult = { role: 'tool', toolCallId: 'call-1', content: [image(50), image(51)] }
+  for (const modelTransport of ['legacy', 'http'] as const) {
+    const bodies: Array<{
+      messages: QoderWireMessage[]
+      request_set_id: string
+      business: QoderWireRequest['business']
+    }> = []
+    const reads: string[] = []
+    let uploads = 0
+    const transport = createQoderTransport({
+      modelTransport, region: 'global',
+      resolvePat: async () => 'pt-fixture',
+      resolveMachineId: () => 'machine-fixture',
+      attachments: {
+        imageLimits: {
+          maxImagesPerMessage: 20, maxMessageImageBytes: 1024, maxImageBytes: 1024,
+          maxImagePixels: 1024, maxImageDimension: 1024, mediaTypes: ['image/png'],
+        },
+        async readImageRequest(attachment) {
+          reads.push(attachment.attachmentId)
+          return { attachment, variantId: attachment.attachmentId as never, data: Uint8Array.of(1),
+            mediaType: 'image/png', bytes: 1, width: 1, height: 1, depth: 'uchar', space: 'srgb', hasAlpha: true }
+        },
+      },
+      async fetch(input, init) {
+        const url = String(input)
+        if (url.includes('/jobToken/exchange')) return Response.json({ token: 'jt-fixture' })
+        if (url.includes('/userinfo')) return Response.json({ id: 'image-trim-fixture' })
+        if (url.includes('/image/upload')) {
+          return Response.json({ result: { oss_url: `https://oss.example.com/${++uploads}.png` } })
+        }
+        assert.match(url, modelTransport === 'legacy' ? /agent_chat_generation/u : /chat\/completions/u)
+        if (modelTransport === 'legacy') {
+          bodies.push(decodeLegacy(init?.body as Uint8Array))
+        } else {
+          const body = JSON.parse(String(init?.body)) as HttpRequestBody
+          bodies.push({ messages: body.messages, business: body.metadata.business, ...body.metadata.context })
+        }
+        return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
+      },
+    })
+    const request = options({
+      sessionId: `image-trim-${modelTransport}` as never,
+      messages: userHistory as GenerateOptions['messages'],
+    })
+    const model = { id: 'cmodel', name: 'Vision', supportsImages: true }
+    for await (const _chunk of transport.stream(request, model)) continue
+    assert.equal(reads.length, 50)
+    assert.equal(uploads, 50)
+    reads.length = 0
+    for await (const _chunk of transport.stream({
+      ...request, messages: [...userHistory, toolResult] as GenerateOptions['messages'],
+    }, model)) continue
+    assert.equal(reads.length, 50)
+    assert.ok(!reads.includes(image(0).attachment.attachmentId))
+    assert.ok(!reads.includes(image(1).attachment.attachmentId))
+    assert.equal(uploads, 52)
+    assert.equal(bodies[1]!.messages[0]?.content, '[media removed: request limit]')
+    assert.equal(bodies[1]!.messages[1]?.content, 'Historical text')
+    assert.equal(bodies[1]!.messages.at(-1)?.tool_call_id, 'call-1')
+    assert.equal(bodies[1]!.business.id, bodies[0]!.business.id)
+    assert.equal(bodies[1]!.request_set_id, bodies[0]!.request_set_id)
+    assert.equal(bodies[1]!.business.stage, 'processing')
+
+    const nextPrompt = { role: 'user', content: [{ type: 'text', text: 'Continue with the next task' }] }
+    for await (const _chunk of transport.stream({
+      ...request, messages: [...userHistory, toolResult, nextPrompt] as GenerateOptions['messages'],
+    }, model)) continue
+    assert.notEqual(bodies[2]!.business.id, bodies[1]!.business.id)
+    assert.notEqual(bodies[2]!.request_set_id, bodies[1]!.request_set_id)
+    assert.equal(bodies[2]!.business.stage, 'start')
+    assert.equal(bodies[2]!.business.name, 'Continue w')
+  }
+})
 
 function assertIdentity(identity: {
   request_id: string

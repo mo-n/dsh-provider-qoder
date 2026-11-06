@@ -496,6 +496,60 @@ test('a delayed old finish cannot release the next real turn lease after identic
   assert.equal(finishCalls, 2)
 })
 
+test('Auto Review waits for a shared request-set release across hosted turns', async t => {
+  const runs = new QoderQueueLeases()
+  t.after(() => runs.dispose())
+  const sessionId = 'review-queue-release' as NonNullable<GenerateOptions['sessionId']>
+  const otherSessionId = 'review-other-queue-release' as typeof sessionId
+  const input = { ...options(), sessionId, purpose: 'auto-review' as GenerateOptions['purpose'] }
+  const asks: QoderWireRequest[] = []
+  const releases: string[] = []
+  const releaseStarted = deferred()
+  const releaseResponse = deferred<Response>()
+  const transport = createQoderTransport({
+    region: 'global', resolvePat: async () => 'offline-pat', resolveMachineId: () => 'offline-machine',
+    captureQueueLeaseOwner: runs.capture,
+    fetch: async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/jobToken/exchange')) return Response.json({ token: 'offline-token' })
+      if (url.pathname.endsWith('/userinfo')) return Response.json({ id: 'offline-user' })
+      if (url.pathname.endsWith('/queue/status')) return Response.json({ isQueued: false })
+      if (url.pathname.endsWith('/ask/finish')) {
+        releases.push(JSON.parse(JSON.parse(String(init?.body)).payload).request_set_id)
+        releaseStarted.resolve()
+        return releaseResponse.promise
+      }
+      asks.push(decode(init))
+      return asks.length === 1 ? new Response(queueFrame) : success()
+    },
+  })
+
+  runs.start(sessionId, 1)
+  const first = collect(transport.stream(input))
+  const releaseBeforeTurnEnd = await Promise.race([releaseStarted.promise.then(() => true), first.then(() => false)])
+  const oldEnding = runs.end(sessionId, 1)
+  runs.start(sessionId, 2)
+  runs.start(otherSessionId, 1)
+  const sameReview = collect(transport.stream(input))
+  try {
+    assert.equal(releaseBeforeTurnEnd, true)
+    await collect(transport.stream({ ...input, sessionId: otherSessionId }))
+    await collect(transport.stream({ ...input, model: 'review-other-model' }))
+    assert.equal(asks.length, 4)
+    assert.equal(asks[0].request_set_id, asks[1].request_set_id)
+    assert.notEqual(asks[2].session_id, asks[0].session_id)
+    assert.notEqual(asks[2].request_set_id, asks[0].request_set_id)
+    assert.equal(asks[3].model_config.key, 'review-other-model')
+    assert.notEqual(asks[3].request_set_id, asks[0].request_set_id)
+    assert.deepEqual(releases, [asks[0].request_set_id])
+  } finally {
+    releaseResponse.resolve(Response.json({}))
+    await Promise.all([first, oldEnding, sameReview])
+  }
+  assert.equal(asks.length, 5)
+  assert.equal(asks[4].request_set_id, asks[0].request_set_id)
+})
+
 test('calls without a host lease owner release once and report the full shared span', async () => {
   const durations: number[] = []
   const fetch: typeof globalThis.fetch = async (input, init) => {
