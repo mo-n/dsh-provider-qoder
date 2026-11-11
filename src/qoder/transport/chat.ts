@@ -19,7 +19,7 @@ import { queuedError } from './wire/queue.ts'
 import { QoderLlmError, QoderModelQueuedError, qoderModelError, canRefreshModelCredentials, qoderRequestId } from '../errors.ts'
 import type { QoderRegion } from '../region.ts'
 import { getQoderChatUrl } from './endpoints.ts'
-import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
+import { readModelErrorBody } from './request.ts'
 import { redactLogValue, type QoderLogger } from './logging.ts'
 import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBodyBytes } from './wire/encoding.ts'
@@ -210,16 +210,11 @@ async function* streamAttempt(
         durationMs: Math.round(performance.now() - startedAt),
         ...reqId === undefined ? {} : { requestId: reqId },
       })
-      resetIdleTimer()
+      if (response.status !== 401 && response.status !== 403) resetIdleTimer()
       if (response.ok) break
 
-      let bodyText = ''
-      try {
-        bodyText = (await readLimitedText(response, defaultMaxErrorBytes, 'Qoder model error response')).trim()
-      } catch (error) {
-        if (requestController.signal.aborted) throw error
-        // Diagnostics are optional; the HTTP status still governs recovery and errors.
-      }
+      const bodyText = await readModelErrorBody(response, requestController.signal,
+        attempt === 0 && dependencies.refreshCredentials !== undefined)
       const queued = queuedError(bodyText)
       if (queued) throw queued
       const failure = qoderModelError(`Qoder upstream service returned HTTP ${response.status}`, {

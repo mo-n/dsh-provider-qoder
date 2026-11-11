@@ -99,8 +99,9 @@ test('explicit HTTP transport sends Bearer model-server request and reads direct
   assert.ok(!debug.some(entry => String(entry[0]).includes('capture')))
 })
 
-test('model-server HTTP 401 refreshes the rejected job token once and keeps request identity', async () => {
+test('model-server HTTP 401 refreshes before reading the error body and keeps request identity', { timeout: 2_000 }, async () => {
   let exchanges = 0
+  let cancellations = 0
   const requestIds: string[] = []
   const transport = createQoderTransport({
     modelTransport: 'http',
@@ -114,11 +115,18 @@ test('model-server HTTP 401 refreshes the rejected job token once and keeps requ
       assert.equal(url, 'https://gateway.qoder.com.cn/model/v1/chat/completions')
       const headers = init?.headers as Record<string, string>
       requestIds.push(headers['X-Request-ID'])
-      return requestIds.length === 1 ? new Response('{}', { status: 401 }) : sse('Recovered')
+      if (requestIds.length > 1) return sse('Recovered')
+      return new Response(new ReadableStream({
+        cancel() {
+          cancellations++
+          return new Promise<void>(() => {})
+        },
+      }), { status: 401 })
     }) as typeof fetch,
   })
   assert.equal(await collect(transport), 'Recovered')
   assert.equal(exchanges, 2)
+  assert.equal(cancellations, 1)
   assert.equal(requestIds.length, 2)
   assert.equal(requestIds[0], requestIds[1])
 })

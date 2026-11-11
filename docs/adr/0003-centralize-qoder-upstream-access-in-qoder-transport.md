@@ -10,15 +10,13 @@ Connection pools, timer-driven background refresh, circuit breakers, dynamic rat
 
 ## Authentication recovery before model generation
 
-Qoder transport may refresh subscriber credentials once after an HTTP 401/403
-rejection received before a model SSE stream starts, matching qodercli. This is a
-protocol authentication exchange: the prepared model body, request ID and turn
-identity are reused. Duplicate-request 403 responses (upstream code `103`) are
-not treated as expired credentials. Model business errors are decoded before
-recovery: known quota, queue and other non-authentication rejections, as well as
-explicit unknown business codes, do not refresh credentials. Explicit subscriber
-authentication expiry (`105`) or an unclassified HTTP 401/403 may refresh once;
-custom model authentication failures do not refresh subscriber credentials.
+Qoder transport may refresh subscriber credentials once after an HTTP rejection
+received before a model SSE stream starts, matching qodercli. An HTTP 401 starts
+recovery after initiating cancellation of the error response body. An HTTP 403
+starts recovery only when the decoded business code is `105` (subscriber
+authentication expiry). The transport allows up to one second to read the
+authentication error body when needed. This is a protocol authentication
+exchange. The prepared model body, request ID, and turn identity are reused.
 A second rejection is returned to DSH.
 Transport never replays an HTTP-successful model stream after an authentication or quota error. Queue recovery before any model output is owned by transport using turn-scoped leases; ordinary model-generation retries remain DSH-owned. This narrowly extends the original idempotent-read retry restriction.
 
