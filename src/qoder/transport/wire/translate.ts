@@ -23,6 +23,7 @@ interface ToolResultBlock {
 interface QoderMessage {
   role: string
   content: readonly (ContentBlock | ToolResultBlock)[]
+  id?: string
   source?: unknown
 }
 
@@ -237,17 +238,17 @@ const omittedImage = { type: 'text', text: '[media removed: request limit]' } as
 
 // Keep identity metadata off the serialized messages. The projection lives
 // only as long as the translated batch used by request preparation.
-const preTrimUserMessages = new WeakMap<QoderWireMessage[], QoderTurnMessage[]>()
+const turnMessages = new WeakMap<QoderWireMessage[], QoderTurnMessage[]>()
 
-export function userMessagesBeforeImageTrimming(messages: QoderWireMessage[]): QoderTurnMessage[] | undefined {
-  return preTrimUserMessages.get(messages)
+export function messagesForTurnIdentity(messages: QoderWireMessage[]): readonly QoderTurnMessage[] {
+  return turnMessages.get(messages) ?? messages
 }
 
-/** Mirror the user-role projection without reading or publishing images. */
+/** Retain host metadata and original image counts outside the outgoing body. */
 function projectUserMessages(messages: readonly QoderMessage[]): QoderTurnMessage[] {
   const users: QoderTurnMessage[] = []
   for (const message of messages) {
-    if (message.role === 'assistant' || message.role === 'tool') continue
+    if (message.role !== 'user') continue
     const parts: QoderTurnMessagePart[] = []
     let hasToolResults = false
     let hasImage = false
@@ -263,9 +264,12 @@ function projectUserMessages(messages: readonly QoderMessage[]): QoderTurnMessag
         parts.push({ type: 'image_url' })
       }
     }
-    if (hasToolResults ? hasImage || text.trim().length > 0 : message.role === 'user') {
-      users.push({ role: 'user', content: hasImage ? parts : text })
-    }
+    if (hasToolResults && !hasImage && text.trim().length === 0) continue
+    const source = message.source
+    const sourceKind = source && typeof source === 'object' && 'kind' in source && typeof source.kind === 'string'
+      ? source.kind
+      : undefined
+    users.push({ role: 'user', content: hasImage ? parts : text, id: message.id, sourceKind })
   }
   return users
 }
@@ -340,7 +344,7 @@ export async function validateAndTranslateMessages(
   }
   const preserveThinking = pipeline?.preserveThinking ?? true
   const output: QoderWireMessage[] = []
-  if (requestMessages !== messages) preTrimUserMessages.set(output, projectUserMessages(messages))
+  turnMessages.set(output, projectUserMessages(messages))
   let lastAssistantToolCallIds: string[] = []
 
   if (typeof systemPrompt === 'string' && systemPrompt.trim().length > 0) {

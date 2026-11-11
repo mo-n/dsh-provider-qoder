@@ -104,7 +104,11 @@ test('tool result images can trim subscriber images without opening another Qode
           const body = JSON.parse(String(init?.body)) as HttpRequestBody
           bodies.push({ messages: body.messages, business: body.metadata.business, ...body.metadata.context })
         }
-        return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
+        const chunk = { choices: [{ delta: { content: 'Answer' }, finish_reason: 'stop' }] }
+        const frame = modelTransport === 'legacy' ? { statusCodeValue: 200, body: JSON.stringify(chunk) } : chunk
+        return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
+          headers: { 'content-type': 'text/event-stream' },
+        })
       },
     })
     const request = options({

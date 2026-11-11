@@ -63,6 +63,54 @@ function transportOptions(runs: QoderQueueLeases, fetch: typeof globalThis.fetch
 }
 
 for (const protocol of ['legacy', 'http'] as const) {
+  test(`${protocol} keeps start through cancellation and first-step failure, then advances on a tool call`, async () => {
+    const runs = new QoderQueueLeases()
+    runs.start('finish-session', 1)
+    const aborted = new AbortController()
+    const attempts: Array<{ business: QoderBusiness; requestSetId: string; requestId: string }> = []
+    const transport = createQoderTransport({
+      ...transportOptions(runs, async (input, init) => {
+        if (String(input).includes('/business/finish')) return Response.json({})
+        const body = protocol === 'legacy' ? decode(String(init?.body)) : JSON.parse(String(init?.body))
+        const identity = protocol === 'legacy' ? body : body.metadata.context
+        attempts.push({
+          business: protocol === 'legacy' ? body.business : body.metadata.business,
+          requestSetId: identity.request_set_id,
+          requestId: identity.request_id,
+        })
+        if (attempts.length === 1) return new Response('data: [DONE]\n\n')
+        const chunk = { choices: [{ delta: { tool_calls: [{
+          index: 0, id: 'tool-call-1', type: 'function', function: { name: 'lookup', arguments: '{}' },
+        }] }, finish_reason: 'tool_calls' }] }
+        const frame = protocol === 'legacy' ? { statusCodeValue: 200, body: JSON.stringify(chunk) } : chunk
+        return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`)
+      }),
+      modelTransport: protocol,
+      logger: { debug: (message) => {
+        if (message === '[Qoder Stream] Request context' && attempts.length === 0) aborted.abort()
+      } },
+    })
+    try {
+      const input = request()
+      await assert.rejects(collect(transport.stream({ ...input, signal: aborted.signal })))
+      assert.equal(attempts.length, 0)
+      const finishes: string[] = []
+      for (let step = 0; step < 3; step++) {
+        for await (const chunk of transport.stream(input)) {
+          if (chunk.type === 'finish') finishes.push(chunk.reason.kind)
+        }
+      }
+      assert.deepEqual(finishes, ['error', 'tool-calls', 'tool-calls'])
+      assert.deepEqual(attempts.map(attempt => attempt.business.stage), ['start', 'start', 'processing'])
+      assert.equal(new Set(attempts.map(attempt => attempt.business.id)).size, 1)
+      assert.equal(new Set(attempts.map(attempt => attempt.requestSetId)).size, 1)
+      assert.equal(new Set(attempts.map(attempt => attempt.requestId)).size, 3)
+      assert.ok(attempts.every(attempt => attempt.business.model_key === 'model-a'))
+    } finally {
+      await runs.dispose()
+    }
+  })
+
   test(`${protocol} reports one encoded, signed business finish only after committed turn/end`, async () => {
     const ctx = new Context()
     const runs = new QoderQueueLeases()
@@ -167,30 +215,35 @@ test('auxiliary and standalone calls never finalize or displace a hosted subscri
   assert.deepEqual(sent.map(event => event.event_data.business.id), [asks[0].id])
 })
 
-for (const imageFirst of [false, true]) {
-  test(`ImageGen ${imageFirst ? 'before' : 'after'} the model shares one business finish with original agent metadata`, async () => {
+for (const imageOrder of ['after', 'before', 'failed before'] as const) {
+  test(`ImageGen ${imageOrder} the model shares one business finish with original agent metadata`, async () => {
     const runs = new QoderQueueLeases()
     runs.start('finish-session', 1)
     const sent: FinishEvent[] = []
-    const ids: string[] = []
+    const dispatched: QoderBusiness[] = []
     let agentName: string | undefined
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='
     const transport = createQoderTransport(transportOptions(runs, (async (input, init) => {
       if (String(input).includes('/business/finish')) { sent.push(finishEvent(init)); return Response.json({}) }
       const body = decode(String(init?.body))
       if (String(input).includes('/generateImage')) {
-        ids.push(JSON.parse(body.payload).metadata.business.id)
+        dispatched.push(JSON.parse(body.payload).metadata.business)
+        if (imageOrder === 'failed before') return Response.json({ data: [] })
         return Response.json({ data: [{ url: `data:image/png;base64,${png}` }] })
       }
-      ids.push(body.business.id)
+      dispatched.push(body.business)
       agentName = body.business.name
       return response('legacy')
     }) as typeof fetch))
     const image = () => transport.generateImage!({ prompt: 'tool prompt', sessionId: 'finish-session' })
-    if (imageFirst) await image()
+    if (imageOrder === 'before') await image()
+    if (imageOrder === 'failed before') await assert.rejects(image(), /returned no image URL/u)
     await collect(transport.stream(request()))
-    if (!imageFirst) await image()
-    assert.equal(ids[0], ids[1])
+    if (imageOrder === 'after') await image()
+    assert.equal(dispatched[0]!.id, dispatched[1]!.id)
+    assert.deepEqual(dispatched.map(business => business.stage), [
+      'start', imageOrder === 'failed before' ? 'start' : 'processing',
+    ])
     assert.equal(sent.length, 0)
     await runs.end('finish-session', 1)
     assert.equal(sent.length, 1)

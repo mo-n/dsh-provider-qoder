@@ -23,7 +23,8 @@ import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
 import { redactLogValue, type QoderLogger } from './logging.ts'
 import { buildAuthHeaders, type CosyCredentials } from './wire/cosy.ts'
 import { qoderEncodeBodyBytes } from './wire/encoding.ts'
-import { buildQoderRequestBody } from './wire/serialize.ts'
+import { prepareQoderRequest } from './wire/prepare.ts'
+import { encodeQoderRequest } from './wire/serialize.ts'
 import { parseQoderSse } from './wire/sse.ts'
 import type { QoderWireMessage, QoderWireRequest } from './wire/wire-types.ts'
 
@@ -60,7 +61,8 @@ export async function* streamQoderChat(
 ): AsyncGenerator<StreamChunk> {
   // The host boundary prevents a compacted, identical next turn from reusing a
   // queue key that an older asynchronous finish can still release.
-  const request = await buildQoderRequestBody(options, credentials.userID, messages, model, undefined, undefined, dependencies.region, dependencies.hostRun)
+  const prepared = await prepareQoderRequest(options, credentials.userID, messages, model, undefined, undefined, dependencies.region, dependencies.hostRun)
+  const request = encodeQoderRequest(prepared)
   request.session_type = dependencies.region === 'china' ? 'qoderclicn' : 'qodercli'
   const startedAt = performance.now()
   let activeCredentials = credentials
@@ -96,6 +98,9 @@ export async function* streamQoderChat(
         dispatched = true
         for await (const chunk of streamAttempt(options, model, activeCredentials, request, dependencies)) {
           if (chunk.type !== 'usage' && chunk.type !== 'finish') sawOutput = true
+          if (chunk.type === 'finish' && chunk.reason.kind !== 'error' && chunk.reason.kind !== 'aborted') {
+            prepared.markStepCompleted()
+          }
           yield chunk
         }
         return

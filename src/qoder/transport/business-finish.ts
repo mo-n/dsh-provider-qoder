@@ -119,6 +119,7 @@ async function expiredBusinessCredentials(response: Response, signal: AbortSigna
 
 /** One ten-second budget covers credentials, dispatch, response cleanup and recovery. */
 async function reportQoderBusinessFinish(request: QoderBusinessRequest, end: QoderRunEnd, deps: QoderBusinessFinishDependencies): Promise<void> {
+  const modelKey = request.business.model_key ?? request.modelKey
   const controller = new AbortController()
   let interrupt!: () => void
   const interrupted = new Promise<never>((_resolve, reject) => { interrupt = () => reject(new Error('deadline')) })
@@ -137,7 +138,7 @@ async function reportQoderBusinessFinish(request: QoderBusinessRequest, end: Qod
         business: {
           product: request.business.product, version: request.business.version,
           type: request.business.type, id: request.business.id,
-          ...request.modelKey === undefined ? {} : { model_key: request.modelKey },
+          ...modelKey === undefined ? {} : { model_key: modelKey },
           end_at: end.endedAt, stage: end.stage, name: request.business.name,
         },
       },
