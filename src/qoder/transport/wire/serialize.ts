@@ -5,7 +5,7 @@ import type { QoderHostRun } from '../../turn.ts'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { QoderCatalogModel } from '../../catalog.ts'
 import type { QoderImageAttachments } from './translate.ts'
-import { prepareQoderRequest } from './prepare.ts'
+import { prepareQoderRequest, type PreparedQoderRequest } from './prepare.ts'
 import type { QoderWireMessage, QoderWireRequest } from './wire-types.ts'
 import type { QoderTurnTracker } from './turn-identity.ts'
 
@@ -24,6 +24,10 @@ export async function buildQoderRequestBody(
   hostRun?: QoderHostRun,
 ): Promise<QoderWireRequest> {
   const prepared = await prepareQoderRequest(options, userId, translatedMessages, model, attachments, tracker, identityScope, hostRun)
+  return encodeQoderRequest(prepared)
+}
+
+export function encodeQoderRequest(prepared: PreparedQoderRequest): QoderWireRequest {
   return {
     request_id: prepared.requestId,
     request_set_id: prepared.requestSetId,

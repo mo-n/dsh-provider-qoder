@@ -205,7 +205,10 @@ export async function* streamModelServerChat(
             ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
           })
         }
-        if (chunk.type === 'finish') finishReason = chunk.reason.kind
+        if (chunk.type === 'finish') {
+          finishReason = chunk.reason.kind
+          if (finishReason !== 'error' && finishReason !== 'aborted') request.markStepCompleted()
+        }
         yield chunk
       }
       dependencies.logger?.debug?.('[Qoder Stream] Stream completed', {

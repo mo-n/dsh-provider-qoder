@@ -7,7 +7,7 @@ import { type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { selectedContextTier, type QoderCatalogModel } from '../../catalog.ts'
 import { QoderLlmError } from '../../errors.ts'
 import { qoderIdeVersion } from './client-identity.ts'
-import { translateTools, userMessagesBeforeImageTrimming, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
+import { messagesForTurnIdentity, translateTools, validateAndTranslateMessages, validateMessageShapes } from './translate.ts'
 import type { QoderImageAttachments, QoderTranslationOptions } from './translate.ts'
 import { QoderTurnTracker, wireMessageText, type QoderCallKind } from './turn-identity.ts'
 import type { QoderBusiness, QoderContextConfig, QoderWireMessage, QoderWireTool } from './model-types.ts'
@@ -29,6 +29,7 @@ export interface PreparedQoderRequest {
   contextConfig?: QoderContextConfig
   lastUserText: string
   business: QoderBusiness
+  markStepCompleted: () => void
 }
 
 /** One tracker preserves agent-run identity across both model protocols. */
@@ -128,18 +129,17 @@ export async function prepareQoderRequest(
   const requestId = crypto.randomUUID()
   const sessionIdParam = String(options.sessionId ?? '') || undefined
   const wireSessionId = sessionIdParam === undefined ? undefined : qoderSessionId(userId, sessionIdParam, identityScope)
-  const standaloneMessages = userMessagesBeforeImageTrimming(messages)
+  const kind = callKind(options)
   const identity = tracker.resolveTurnIdentity(
     sessionIdParam === undefined ? undefined : JSON.stringify([identityScope, userId, sessionIdParam]),
-    messages,
-    callKind(options),
+    kind === 'conversation' ? messagesForTurnIdentity(messages) : messages,
+    kind,
     requestId,
     modelKey,
     hostRun,
     {
       scope: JSON.stringify([identityScope, userId]),
       ...wireSessionId === undefined ? {} : { sessionId: wireSessionId },
-      ...standaloneMessages === undefined ? {} : { standaloneMessages },
     },
   )
   return {
@@ -158,12 +158,14 @@ export async function prepareQoderRequest(
     isReasoning,
     ...contextConfig === undefined ? {} : { contextConfig },
     lastUserText,
+    markStepCompleted: identity.markStepCompleted,
     business: {
       product: 'cli',
       version: qoderIdeVersion,
       type: 'agent',
       stage: identity.businessStage,
       id: identity.businessId,
+      model_key: modelKey,
       name: identity.businessName,
       begin_at: identity.beginAt,
     },

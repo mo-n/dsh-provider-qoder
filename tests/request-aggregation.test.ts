@@ -19,7 +19,9 @@ test('parallel no-session calls aggregate only within the same subscriber, regio
   assert.equal(first.requestSetId, same.requestSetId)
   assert.equal(first.business.id, same.business.id)
   assert.equal(first.business.stage, 'start')
-  assert.equal(same.business.stage, 'processing')
+  assert.equal(same.business.stage, 'start')
+  first.markStepCompleted()
+  assert.equal((await prepare()).business.stage, 'processing')
   assert.notEqual(first.requestId, same.requestId)
   assert.equal(first.chatRecordId, first.requestId)
   assert.equal(same.chatRecordId, same.requestId)
@@ -46,6 +48,7 @@ test('session-attributed auto review uses a separate fixed window without displa
       [{ role: 'user', content: text }], undefined, undefined, tracker, 'global', hostRun)
   const main = await prepare(undefined, 'Fix the source')
   const first = await prepare(reviewPurpose, 'Review read')
+  first.markStepCompleted()
   now += 60_000
   const same = await prepare(reviewPurpose, 'Review edit')
   assert.equal(first.business.id, same.business.id)

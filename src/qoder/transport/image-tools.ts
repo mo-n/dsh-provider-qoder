@@ -475,6 +475,7 @@ export async function generateImage(request: QoderImageGenerationRequest, deps: 
     begin('image-validation')
     const mediaType = imageMediaType(bytes)
     debug('Image validated', { mediaType, receivedBytes })
+    identity.markStepCompleted()
     return { bytes, mediaType, requestId, imageUrl }
   } catch (error) {
     // Generation errors already logged above retain their existing public message.

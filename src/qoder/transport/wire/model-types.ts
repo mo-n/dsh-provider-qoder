@@ -39,6 +39,7 @@ export interface QoderBusiness {
   id: string
   name: string
   begin_at: number
+  model_key?: string
 }
 
 export type QoderContextConfig = Record<string, { token_count?: number; is_default?: boolean }>

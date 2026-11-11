@@ -9,7 +9,14 @@ The transport aligns turn identity with Qoder's upstream aggregation model:
 - `request_set_id`: carries the same turn identity.
 - `chat_record_id` & `request_id`: assigned a unique per-request UUID.
 - `session_id`: identifies the conversation session. Wire session and request-set identifiers are UUID v4 values. Subscriber and service-region isolation remains internal to transport; provider prefixes and host session identifiers are not sent as the wire session ID.
-- `business.name`: the opening subscriber prompt truncated to ten JavaScript string characters, retained for the run. Recognized injected context does not replace it. If image generation opens the run before a subscriber prompt is available, its truncated prompt supplies the retained name.
+- `business.model_key`: the Qoder model key sent in the model request, also used in agent-run finalization.
+- `business.name`: the opening subscriber prompt's text, trimmed and truncated to ten JavaScript string units, retained for the run. An image-only model input uses an empty name. If image generation opens the run before a subscriber prompt is available, its trimmed and truncated prompt supplies the retained name.
+
+Model and image requests use `start` until the run's first successful step. A
+cancelled preparation or failed step leaves its retry on the same business and
+request set with `start`. A successful model result, including a tool call, or
+a successfully delivered image advances the run to `processing` for later
+requests. Terminal stages are reported separately on agent-run finalization.
 
 ## Turn Boundary Derivation
 
@@ -17,16 +24,22 @@ Hosted calls capture an immutable run handle from the committed DSH turn lifecyc
 
 This supersedes message-history inference within a hosted run. The previous combination of host scoping and text inference split real turns whenever the host introduced an unrecognized user-role context message, such as a time snapshot.
 
-Standalone calls without a host owner retain the multiset-based inference in `turn-identity.ts`:
-- An unaccounted subscriber message opens a new turn record.
-- Recognized step-level context, notifications, synthesized image markers, and trimmed history continue the active turn.
-- Repeated messages whose earlier occurrences were replaced by compaction can still share an open record until a distinct message arrives. Hosted calls do not have this ambiguity.
+Standalone calls with a session and without a host owner infer boundaries from
+DSH user-role messages. A message with a source is subscriber input when its
+source kind is `user`. A user-role input without a source is also accepted.
+Message IDs identify durable input. For inputs without an ID, the tracker
+counts matching text and image counts in the current projection. A newly
+observed subscriber message opens a run. When a conversation is first seen, the
+tracker accounts for the supplied history together and uses the latest
+subscriber message for its name. If compaction replaces an identity-free
+message with an identical occurrence, it can share the open record until
+distinct input arrives.
 
 ## Auxiliary Calls & Lifecycle Isolation
 
 - **Auxiliary host calls** (session titles and history compaction summaries marked by `GenerateOptions.purpose`) run under their own independent agent run. Explicit `auto-review` calls use a separate aggregation window described below. They never open, displace, or claim subscriber turn records.
 - **Hosted tracking**: Transport state is weakly keyed by the captured run handle, outside the standalone LRU cache. The host releases its handle at turn end; outstanding requests retain the old handle until they finish, without joining a newer turn. Completed runs therefore cannot evict active ones, and no global strong reference retains completed run state.
-- **Standalone tracking**: The history-inference cache remains bounded, preferring idle conversations when capacity is exceeded.
+- **Standalone tracking**: The history-inference cache remains bounded, preferring idle conversations when capacity is exceeded. Auxiliary calls do not refresh its timestamps.
 
 Wire session UUIDs are mapped in memory for the lifetime of the DSH process and shared by model and image requests. Restarting DSH creates a new upstream session; no credential or identity registry is persisted. Stable UUID mappings deliberately remain until process exit (or tracker clear for no-session scopes): evicting them would silently change session identity. This retains one small mapping per observed DSH conversation and per no-session subscriber/region/model scope, while expired aggregation windows are pruned lazily.
 

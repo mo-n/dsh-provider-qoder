@@ -10,9 +10,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { buildQoderRequestBody } from '../src/qoder/transport/wire/serialize.ts'
+import { prepareQoderRequest } from '../src/qoder/transport/wire/prepare.ts'
 import type { QoderWireMessage } from '../src/qoder/transport/wire/wire-types.ts'
 import { QoderQueueLeases } from '../src/dsh/queue-leases.ts'
-import { QoderTurnTracker } from '../src/qoder/transport/wire/turn-identity.ts'
+import { QoderTurnTracker, type QoderTurnMessage } from '../src/qoder/transport/wire/turn-identity.ts'
 
 function user(text: string) {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -37,9 +38,8 @@ function wireToolResult(id: string): QoderWireMessage {
   return { role: 'tool', content: [{ type: 'text', text: 'file body' }], tool_call_id: id }
 }
 
-/** Host-appended context, as observed in live DSH transcripts. */
-function injected(text: string): QoderWireMessage {
-  return wireUser(`<system-reminder>${text}</system-reminder>`)
+function injected(text: string): QoderTurnMessage {
+  return { ...wireUser(text), sourceKind: 'host-context' }
 }
 
 function options(messages: GenerateOptions['messages'], sessionId?: string): GenerateOptions {
@@ -66,7 +66,7 @@ test('every step of one turn shares a single consumption record', () => {
     prompt,
     wireToolCall('call-2'),
     injected('memory'),
-    wireUser('<openviking-context>Relevant memory</openviking-context>'),
+    injected('<openviking-context>Relevant memory</openviking-context>'),
   ])
 
   assert.equal(typeof first, 'string')
@@ -92,7 +92,7 @@ test('mid-turn messages that are not a new prompt stay in the open record', () =
   const tracker = new QoderTurnTracker()
   const session = 'identity-session-3'
   const prompt = wireUser('Review this change')
-  const parentMessage = wireUser('Agent 32b2b19f-2a36-4b22-95e1-98700c0fa5af sent a message: also check the retry path')
+  const parentMessage = injected('Agent 32b2b19f-2a36-4b22-95e1-98700c0fa5af sent a message: also check the retry path')
 
   const first = tracker.resolveTurnRecordId(session, [prompt])
   const second = tracker.resolveTurnRecordId(session, [prompt, injected('memory')])
@@ -120,26 +120,19 @@ test('a conversation without host context still splits per prompt', () => {
   assert.equal(tracker.resolveTurnRecordId(session, [firstPrompt, secondPrompt, thirdPrompt]), third)
 })
 
-test('host-injected context of every known shape stays inside the turn', () => {
+test('source identifies host-injected context independently of wording', () => {
   const tracker = new QoderTurnTracker()
   const session = 'identity-session-4'
   const prompt = wireUser('Audit the transport')
   const injections = [
-    wireUser('<system-reminder>Workspace instructions that are relevant</system-reminder>'),
-    wireUser('<openviking-context>Relevant memory from OpenViking</openviking-context>'),
-    wireUser('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.'),
-    wireUser('[model changed: provider/model]'),
-    wireUser('Background subagent 08842bb5-05d5-46a9-ba72-98555f48c4e2 finished'),
-    wireUser('background job pwsh-1 completed'),
-    wireUser('This is an automatically generated checkpoint condensing the session'),
-    wireUser('<goal_complete>Objective reached</goal_complete>'),
-    wireUser('[2 images returned by the previous tool call]'),
+    injected('<system-reminder>Workspace instructions that are relevant</system-reminder>'),
+    injected('New context wording'),
   ]
 
   const first = tracker.resolveTurnRecordId(session, [prompt])
   assert.equal(tracker.resolveTurnRecordId(session, [prompt, ...injections]), first)
   assert.equal(
-    tracker.resolveTurnRecordId(session, [prompt, ...injections, wireUser('<system-reminder>and more</system-reminder>')]),
+    tracker.resolveTurnRecordId(session, [prompt, ...injections, injected('More context')]),
     first,
   )
 })
@@ -226,28 +219,40 @@ test('an auxiliary host call never moves the open turn', async () => {
   assert.notEqual(continuation.business.id, titleBody.business.id)
 })
 
-test('a historical transport image marker keeps the same turn', async () => {
+test('an auxiliary call does not refresh the standalone cache eviction timestamp', () => {
+  let now = 0
+  const tracker = new QoderTurnTracker({ now: () => now, maxSessions: 2, idleSessionTtlMs: 10 })
+  const first = tracker.resolveTurnRecordId('first', [wireUser('First')])
+  now = 2
+  const second = tracker.resolveTurnRecordId('second', [wireUser('Second')])
+  now = 19
+  tracker.resolveTurnRecordId('first', [wireUser('Generate title')], 'auxiliary')
+  now = 20
+  tracker.resolveTurnRecordId('third', [wireUser('Third')])
+  assert.equal(tracker.resolveTurnRecordId('second', [wireUser('Second')]), second)
+  assert.notEqual(tracker.resolveTurnRecordId('first', [wireUser('First')]), first)
+})
+
+test('subscriber text that resembles a historical image marker opens a turn', async () => {
   const session = 'identity-session-image-marker'
   const prompt = user('Describe this screenshot')
   const first = await buildQoderRequestBody(options([prompt], session), 'user-42')
-  // Older transport versions materialized tool images as user-role markers.
-  // Retain compatibility when such a marker appears in historical input.
   const second = await buildQoderRequestBody(options([
     prompt,
     user('[1 image returned by the previous tool call]'),
   ], session), 'user-42')
 
-  assert.equal(second.business.id, first.business.id)
-  assert.equal(second.request_set_id, first.request_set_id)
+  assert.notEqual(second.business.id, first.business.id)
+  assert.notEqual(second.request_set_id, first.request_set_id)
 })
 
 test('a subscriber prompt that repeats host wording still opens a new turn', async () => {
   const session = 'identity-session-wording'
-  const first = await buildQoderRequestBody(options([user('Fix the build')], session), 'user-42')
-  // "Agent " prefixes host notifications, but a subscriber may write it too.
+  const prompt = user('Fix the build')
+  const first = await buildQoderRequestBody(options([prompt], session), 'user-42')
   const second = await buildQoderRequestBody(options([
-    user('Fix the build'),
-    user('Agent 请继续处理剩下的改动'),
+    prompt,
+    user('<system-reminder>Please keep this verbatim</system-reminder>'),
   ], session), 'user-42')
 
   assert.notEqual(second.business.id, first.business.id)
@@ -264,6 +269,45 @@ test('trimming history keeps the open turn', async () => {
 
   assert.equal(trimmed.business.id, first.business.id)
   assert.equal(trimmed.request_set_id, first.request_set_id)
+})
+
+test('DSH message IDs and sources guide standalone turns without reaching the wire', async () => {
+  const tracker = new QoderTurnTracker()
+  const build = (messages: GenerateOptions['messages']) =>
+    buildQoderRequestBody(options(messages, 'standalone-metadata'), 'user-42', undefined, undefined, undefined, tracker)
+  const prompt = user('Same input')
+  const context = createUserMessage({
+    content: [{ type: 'text', text: 'Unrecognized host wording' }],
+    source: { kind: 'system-prompt' },
+  })
+  const first = await build([prompt])
+  const projected = await build([{ ...prompt, content: [{ type: 'text', text: 'Projected input' }] }, context])
+  const repeated = await build([user('Same input'), context])
+
+  assert.equal(projected.business.id, first.business.id)
+  assert.notEqual(repeated.business.id, first.business.id)
+  assert.equal(projected.business.name, 'Same input')
+  assert.equal(repeated.business.name, 'Same input')
+  assert.deepEqual(projected.messages, [
+    { role: 'user', content: 'Projected input' },
+    { role: 'user', content: 'Unrecognized host wording' },
+  ])
+})
+
+test('cold standalone runs name the latest user input and keep image-only names empty', async () => {
+  const tracker = new QoderTurnTracker()
+  const image = { type: 'image_url', image_url: { url: 'https://example.test/image.png' } } as const
+  const build = (session: string, messages: QoderWireMessage[]) =>
+    buildQoderRequestBody(options([], session), 'user-42', messages, undefined, undefined, tracker)
+  const old = wireUser('Historical prompt')
+  const text = await build('cold-text', [old, wireUser('  帮我写一个快速排序算法  ')])
+  const mixed = await build('cold-mixed', [old, {
+    role: 'user', content: [image, { type: 'text', text: '请分析这张架构图的缺陷' }],
+  }])
+  const onlyImage = await build('cold-image', [old, { role: 'user', content: [image] }])
+  assert.equal(text.business.name, '帮我写一个快速排序算')
+  assert.equal(mixed.business.name, '请分析这张架构图的缺')
+  assert.equal(onlyImage.business.name, '')
 })
 
 test('repeating the same prompt still opens a distinct record per turn', () => {
@@ -399,10 +443,15 @@ test('history compaction with repeated prompt reconciles claimed counts and open
 test('business stage advances within a turn and resets for the next subscriber prompt', async () => {
   const tracker = new QoderTurnTracker()
   const prompt = wireUser('First')
-  const first = await buildQoderRequestBody(options([], 'stage-session'), 'offline-user', [prompt], undefined, undefined, tracker)
-  const second = await buildQoderRequestBody(options([], 'stage-session'), 'offline-user', [prompt, injected('context')], undefined, undefined, tracker)
-  const third = await buildQoderRequestBody(options([], 'stage-session'), 'offline-user', [prompt, wireUser('Next')], undefined, undefined, tracker)
+  const input = options([], 'stage-session')
+  const first = await prepareQoderRequest(input, 'offline-user', [prompt], undefined, undefined, tracker)
+  const retry = await prepareQoderRequest(input, 'offline-user', [prompt], undefined, undefined, tracker)
+  retry.markStepCompleted()
+  const second = await prepareQoderRequest(input, 'offline-user', [prompt], undefined, undefined, tracker)
+  const third = await prepareQoderRequest(input, 'offline-user', [prompt, wireUser('Next')], undefined, undefined, tracker)
   assert.equal(first.business.stage, 'start')
+  assert.equal(retry.business.stage, 'start')
+  assert.equal(retry.business.id, first.business.id)
   assert.equal(second.business.stage, 'processing')
   assert.equal(third.business.stage, 'start')
   assert.equal(first.business.id, second.business.id)
@@ -488,8 +537,9 @@ test('hosted turns survive injected context, projected history and steering, but
   const run = Object.freeze({ id: 'hosted-context' })
   const input = options([], 'hosted-context')
   const build = (messages: QoderWireMessage[], model = 'cmodel', purpose?: GenerateOptions['purpose']) =>
-    buildQoderRequestBody({ ...input, model, purpose }, 'user', messages, undefined, undefined, tracker, 'global', run)
+    prepareQoderRequest({ ...input, model, purpose }, 'user', messages, undefined, undefined, tracker, 'global', run)
   const first = await build([wireUser('Fix tests')])
+  first.markStepCompleted()
   for (const messages of [
     [wireUser('Fix tests'), wireUser('Time sampled while preparing turn 1, step 2: now')],
     [wireUser('Fix tests'), wireUser('Current runtime context: none. Earlier runtime-context snapshots no longer apply.')],
@@ -499,16 +549,16 @@ test('hosted turns survive injected context, projected history and steering, but
     const next = await build(messages)
     assert.equal(next.business.id, first.business.id)
     assert.equal(next.business.begin_at, first.business.begin_at)
-    assert.equal(next.request_set_id, first.request_set_id)
+    assert.equal(next.requestSetId, first.requestSetId)
     assert.equal(next.business.stage, 'processing')
-    assert.notEqual(next.request_id, first.request_id)
+    assert.notEqual(next.requestId, first.requestId)
   }
   const auxiliary = await build([wireUser('Title')], 'cmodel', 'session-title')
   assert.notEqual(auxiliary.business.id, first.business.id)
   assert.equal((await build([])).business.id, first.business.id)
   const switched = await build([], 'other-model')
   assert.notEqual(switched.business.id, first.business.id)
-  assert.notEqual(switched.request_set_id, first.request_set_id)
+  assert.notEqual(switched.requestSetId, first.requestSetId)
   assert.equal(switched.business.stage, 'start')
   assert.equal((await build([], 'other-model')).business.id, switched.business.id)
 })
@@ -532,7 +582,7 @@ test('completed host runs and standalone cache pressure cannot evict an active h
   assert.equal(continued.business.id, first.business.id)
   assert.equal(continued.business.begin_at, first.business.begin_at)
   assert.equal(continued.request_set_id, first.request_set_id)
-  assert.equal(continued.business.stage, 'processing')
+  assert.equal(continued.business.stage, 'start')
   const run = runs.capture('active')!.run
   assert.notEqual((await build('active', run, 'china')).business.id, first.business.id)
   assert.notEqual((await build('active', run, 'global', 'other-user')).business.id, first.business.id)
@@ -569,7 +619,7 @@ test('standalone tracking ignores a full time snapshot and accepts a similar sub
   const tracker = new QoderTurnTracker()
   const prompt = wireUser('First prompt')
   const first = tracker.resolveTurnIdentity('time-context', [prompt])
-  const timeSnapshot = wireUser(
+  const timeSnapshot = injected(
     'Time sampled while preparing turn 1, step 2: 2026-11-05T15:40:21+08:00[Asia/Singapore]\n'
     + 'Browser time zone for this request: Asia/Singapore. Interpret otherwise-unqualified dates and times in this zone.\n'
     + 'Elapsed since the preceding step context: 1m 2s.',
