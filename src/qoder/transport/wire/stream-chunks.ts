@@ -17,6 +17,8 @@ export interface QoderSseOptions {
   queueRecovery?: boolean
   onActivity?: () => void
   onControlFrame?: (kind: QoderControlFrameKind) => void
+  onRefusal?: () => void
+  onToolCall?: () => void
   onMalformedFrame?: (details: QoderMalformedFrameDetails) => void
   maxBufferChars?: number
   headers?: Pick<Headers, 'get'>
@@ -53,8 +55,6 @@ interface ToolCallState {
   id: string
   name: string
   arguments: string
-  emittedArguments: number
-  blockIndex?: number
 }
 
 type SuccessfulFinishKind = 'stop' | 'tool-calls' | 'max-tokens'
@@ -96,10 +96,14 @@ function finishKind(value: string | null | undefined): SuccessfulFinishKind | un
   if (value === 'length') return 'max-tokens'
   // Qoder CLI accepts this legacy OpenAI alias alongside "tool_calls".
   if (value === 'tool_calls' || value === 'toolUse' || value === 'function_call') return 'tool-calls'
-  if (value === 'content_filter') {
-    throw new QoderLlmError('Qoder blocked the response through its content filter.', 'PROVIDER_ERROR')
-  }
   throw malformed(`Qoder returned unknown finish reason "${value}".`)
+}
+
+function isRefusal(choice: NonNullable<QoderInnerChunk['choices']>[number]): boolean {
+  const reason = choice.finish_reason
+  const refusal = choice.delta?.refusal
+  return reason === 'content_filter' || reason === 'refusal' || reason === 'sensitive'
+    || refusal === true || (typeof refusal === 'string' && refusal.trim().length > 0)
 }
 
 type QoderInnerDelta = NonNullable<QoderInnerChunk['choices']>[number]['delta']
@@ -133,6 +137,7 @@ export async function* parseQoderChunks(
   let eventType: string | undefined
   let sourceEnded = false
   let sawDone = false
+  let refused = false
   let nextBlockIndex = 0
   let activeTextual: TextualBlockState | undefined
   let pendingUsage: TokenUsage | undefined
@@ -170,25 +175,8 @@ export async function* parseQoderChunks(
     return chunks
   }
 
-  const openToolCall = (state: ToolCallState): StreamChunk[] => {
-    if (!state.id || state.blockIndex !== undefined) return []
-    const chunks = closeTextual()
-    state.blockIndex = nextBlockIndex++
-    sawContent = true
-    chunks.push({ type: 'block-start', index: state.blockIndex, blockType: 'tool-call' })
-    const argumentsDelta = state.arguments.slice(state.emittedArguments)
-    state.emittedArguments = state.arguments.length
-    chunks.push({
-      type: 'tool-call-delta',
-      index: state.blockIndex,
-      id: ToolCallId(state.id),
-      ...state.name ? { name: state.name } : {},
-      argumentsDelta,
-    })
-    return chunks
-  }
-
   try {
+    readStream:
     while (!sourceEnded && !sawDone) {
       const { done, value } = await reader.read()
       if (done) {
@@ -313,6 +301,10 @@ export async function* parseQoderChunks(
           break
         }
         pendingUsage = tokenUsage(innerChunk) ?? pendingUsage
+        if (innerChunk.choices?.some(isRefusal)) {
+          refused = true
+          break readStream
+        }
 
         for (const choice of innerChunk.choices ?? []) {
           const kind = finishKind(choice.finish_reason)
@@ -348,7 +340,7 @@ export async function* parseQoderChunks(
               }
               let state = toolCalls.get(upstreamIndex)
               if (state === undefined) {
-                state = { id: '', name: '', arguments: '', emittedArguments: 0 }
+                state = { id: '', name: '', arguments: '' }
                 toolCalls.set(upstreamIndex, state)
               }
               if (rawCall.id !== undefined) {
@@ -362,7 +354,6 @@ export async function* parseQoderChunks(
                   state.id = rawCall.id
                 }
               }
-              let hasNewName = false
               if (rawCall.function?.name !== undefined) {
                 const name = rawCall.function.name
                 if (name === '' || name === null) {
@@ -372,10 +363,7 @@ export async function* parseQoderChunks(
                   throw malformed('Qoder tool call has an invalid name.')
                 } else {
                   if (state.name && state.name !== name) throw malformed('Qoder changed a streamed tool-call name.')
-                  if (state.name !== name) {
-                    state.name = name
-                    hasNewName = true
-                  }
+                  state.name = name
                 }
               }
               if (rawCall.function?.arguments !== undefined) {
@@ -384,36 +372,24 @@ export async function* parseQoderChunks(
                 }
                 state.arguments += rawCall.function.arguments
               }
-
-              const wasOpen = state.blockIndex !== undefined
-              for (const chunk of openToolCall(state)) yield chunk
-              if (wasOpen && state.blockIndex !== undefined && state.emittedArguments < state.arguments.length) {
-                const argumentsDelta = state.arguments.slice(state.emittedArguments)
-                state.emittedArguments = state.arguments.length
-                yield {
-                  type: 'tool-call-delta',
-                  index: state.blockIndex,
-                  id: ToolCallId(state.id),
-                  ...state.name ? { name: state.name } : {},
-                  argumentsDelta,
-                }
-              } else if (wasOpen && state.blockIndex !== undefined && hasNewName) {
-                yield {
-                  type: 'tool-call-delta',
-                  index: state.blockIndex,
-                  id: ToolCallId(state.id),
-                  name: state.name,
-                  argumentsDelta: '',
-                }
-              }
+              if (state.id) options.onToolCall?.()
             }
           }
         }
       }
     }
   } finally {
-    await reader.cancel().catch(() => undefined)
+    const cancelled = reader.cancel().catch(() => undefined)
+    if (!refused) await cancelled
     reader.releaseLock()
+  }
+
+  if (refused) {
+    options.onRefusal?.()
+    yield* closeTextual()
+    if (pendingUsage) yield { type: 'usage', usage: pendingUsage }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+    return
   }
 
   // Qoder does not always close the SSE body with a [DONE] sentinel. A terminal finish reason that
@@ -431,23 +407,17 @@ export async function* parseQoderChunks(
     } catch {
       throw malformed(`Qoder completed tool call "${state.name}" with malformed JSON arguments.`)
     }
-    for (const chunk of openToolCall(state)) yield chunk
-    if (state.blockIndex === undefined) throw malformed('Qoder failed to open a completed tool call.')
-    if (state.emittedArguments === 0 && normalizedArguments === '{}') {
-      yield {
-        type: 'tool-call-delta',
-        index: state.blockIndex,
-        id: ToolCallId(state.id),
-        name: state.name,
-        argumentsDelta: '{}',
-      }
-    }
+    const index = nextBlockIndex++
+    const id = ToolCallId(state.id)
+    sawContent = true
+    yield { type: 'block-start', index, blockType: 'tool-call' }
+    yield { type: 'tool-call-delta', index, id, name: state.name, argumentsDelta: normalizedArguments }
     yield {
       type: 'block-end',
-      index: state.blockIndex,
+      index,
       block: {
         type: 'tool-call',
-        id: ToolCallId(state.id),
+        id,
         name: state.name,
         arguments: normalizedArguments,
       },

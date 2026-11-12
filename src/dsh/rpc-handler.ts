@@ -21,6 +21,7 @@ interface QoderRpcHandlerOptions {
   authorization: Pick<QoderBrowserAuthorizationManager, 'begin' | 'cancel' | 'select' | 'describe'>
   adapter: Pick<QoderAdapter, 'setSessionTier' | 'readSessionTier'>
   readQueue: QoderQueueStatusStore['read']
+  readModelRefusal?(sessionId: string): boolean
   /** Join host restoration when needed; the host owns session publication. */
   restoreSession(sessionId: string): Promise<void>
   settingsNamespace?(): string
@@ -111,10 +112,13 @@ export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpc
       }, signal, logger)
     }
 
-    if (endpoint === 'queue') {
+    if (endpoint === 'queue' || endpoint === 'conversationStatus') {
       const sessionId = data.sessionId
       if (!validSessionId(sessionId)) return publicError('INVALID_REQUEST', 'A valid sessionId is required')
-      return { ok: true, value: readQueue(sessionId) }
+      const queue = readQueue(sessionId)
+      return { ok: true, value: endpoint === 'queue'
+        ? queue
+        : { queue, refused: options.readModelRefusal?.(sessionId) ?? false } }
     }
 
     if (endpoint === 'models') {

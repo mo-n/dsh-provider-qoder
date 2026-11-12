@@ -26,6 +26,7 @@ export interface QoderModelServerDependencies {
   /** Immutable host turn boundary captured before provider I/O. */
   hostRun?: QoderHostRun
   onBusinessRequest?: (request: QoderBusinessRequest) => void
+  onRefusal?: () => void
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   refreshCredentials: (rejected: QoderCredentials, signal?: AbortSignal) => Promise<QoderCredentials>
@@ -179,6 +180,7 @@ export async function* streamModelServerChat(
         headers: response.headers,
         httpStatus: response.status,
         onActivity: resetIdle,
+        onRefusal: dependencies.onRefusal,
         onControlFrame: kind => {
           if (kind !== 'done') dependencies.logger?.warn?.('[Qoder Stream] Control frame skipped', {
             transport: 'http',

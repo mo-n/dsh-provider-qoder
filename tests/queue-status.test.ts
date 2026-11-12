@@ -53,21 +53,23 @@ test('visible polling marks failures stale and recovers without retaining finish
   const views: QueueViewState[] = []
   let reads = 0
   const rpc = { call: async (endpoint: string, payload: unknown) => {
-    assert.equal(endpoint, 'queue')
+    assert.equal(endpoint, 'conversationStatus')
     assert.deepEqual(payload, { sessionId: 'session' })
     reads++
-    return reads === 2 ? { ok: false, error: { code: 'INTERNAL', message: 'offline' } } : { ok: true, value: reads === 1 ? [snapshot()] : [] }
+    return reads === 2 ? { ok: false, error: { code: 'INTERNAL', message: 'offline' } }
+      : { ok: true, value: { queue: reads === 1 ? [snapshot()] : [], refused: reads === 1 } }
   } } as QoderRpcCaller
   const stop = watchQueueStatus(rpc, 'session', visibility, state => views.push(state))
   t.after(stop)
   await setImmediate()
   assert.equal(views.at(-1)?.items.length, 1)
+  assert.equal(views.at(-1)?.refused, true)
   t.mock.timers.tick(1000)
   await setImmediate()
   assert.equal(views.at(-1)?.unavailable, true)
   t.mock.timers.tick(1000)
   await setImmediate()
-  assert.deepEqual(views.at(-1), { items: [], unavailable: false })
+  assert.deepEqual(views.at(-1), { items: [], unavailable: false, refused: false })
   visibility.setHidden(true)
   t.mock.timers.tick(10_000)
   await setImmediate()
@@ -94,12 +96,12 @@ test('hidden and disposed components cancel requests and ignore late responses',
   assert.equal(pending[0].signal.aborted, true)
   visibility.setHidden(false)
   assert.equal(pending.length, 2)
-  pending[0].resolve({ ok: true, value: [snapshot('obsolete')] })
+  pending[0].resolve({ ok: true, value: { queue: [snapshot('obsolete')], refused: true } })
   await setImmediate()
   assert.equal(views.length, 0)
   stop()
   assert.equal(pending[1].signal.aborted, true)
-  pending[1].resolve({ ok: true, value: [snapshot()] })
+  pending[1].resolve({ ok: true, value: { queue: [snapshot()], refused: true } })
   await setImmediate()
   assert.equal(views.length, 0)
 })

@@ -33,6 +33,7 @@ export interface QoderTransportOptions {
   region: QoderRegion
   modelQueueMaxWaitMs?: number
   onQueueUpdate?: (update: QoderQueueUpdate) => void
+  onModelRefusal?: (sessionId: string) => void
   /** Capture the current host run before I/O; reject late leases after its boundary closes. */
   captureQueueLeaseOwner?: (sessionId: string) => QoderQueueOwner | undefined
 

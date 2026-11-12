@@ -42,6 +42,7 @@ export interface QoderChatDependencies {
   hostRun?: QoderHostRun
   onBusinessRequest?: (request: QoderBusinessRequest) => void
   onQueueUpdate?: (update: QoderQueueUpdate) => void
+  onRefusal?: () => void
   onQueueLease?: (lease: QoderQueueLease) => boolean
   queueClock?: QueueClock
   resolveCredentials?: (refresh: boolean, signal: AbortSignal) => Promise<CosyCredentials>
@@ -96,7 +97,7 @@ export async function* streamQoderChat(
       if (options.signal?.aborted) throw aborted('Request was aborted.')
       try {
         dispatched = true
-        for await (const chunk of streamAttempt(options, model, activeCredentials, request, dependencies)) {
+        for await (const chunk of streamAttempt(options, model, activeCredentials, request, dependencies, () => { sawOutput = true })) {
           if (chunk.type !== 'usage' && chunk.type !== 'finish') sawOutput = true
           if (chunk.type === 'finish' && chunk.reason.kind !== 'error' && chunk.reason.kind !== 'aborted') {
             prepared.markStepCompleted()
@@ -128,6 +129,7 @@ async function* streamAttempt(
   credentials: CosyCredentials,
   request: QoderWireRequest,
   dependencies: QoderChatDependencies,
+  onToolCall: () => void,
 ): AsyncGenerator<StreamChunk> {
   const encodedBytes = qoderEncodeBodyBytes(JSON.stringify(request))
   const chatUrl = getQoderChatUrl(dependencies.region)
@@ -243,12 +245,19 @@ async function* streamAttempt(
     let firstChunkDurationMs: number | undefined
     let tokenUsage: TokenUsage | undefined
     let finishReason: string | undefined
+    let sawToolCall = false
     const streamStartedAt = performance.now()
 
     try {
       for await (const chunk of parseQoderSse(response.body, {
         queueRecovery: true,
         onActivity: resetIdleTimer,
+        onRefusal: dependencies.onRefusal,
+        onToolCall: () => {
+          // A buffered tool call still means upstream has started producing output.
+          sawToolCall = true
+          onToolCall()
+        },
         headers: response.headers,
         httpStatus: response.status,
         onControlFrame: kind => {
@@ -277,7 +286,7 @@ async function* streamAttempt(
         yield chunk
       }
     } catch (error) {
-      if (chunkCount === 0) compression.rejectLegacyError(error)
+      if (chunkCount === 0 && !sawToolCall) compression.rejectLegacyError(error)
       throw error
     }
 

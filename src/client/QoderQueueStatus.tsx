@@ -41,10 +41,12 @@ export function QoderQueueStatus({ sessionId, rpc, t }: PropsRuntime<'conversati
   const [view, setView] = useState<{ sessionId: string; state: QueueViewState }>()
   useEffect(() => watchQueueStatus(rpc, sessionId, document, state => setView({ sessionId, state })), [rpc, sessionId])
   const state = view?.sessionId === sessionId ? view.state : undefined
-  if (!state?.items.length) return null
-  return <div className={css.queues} aria-label={t('queueTitle')}>
-    <div className={css.panel}>
-      {state.items.map(item => <QueueRow key={item.callId} item={item} unavailable={state.unavailable} t={t} />)}
-    </div>
+  if (!state || (!state.refused && !state.items.length)) return null
+  return <div className={css.queues}>
+    {state.refused && <div className={css.panel} role="status"><div className={css.notice}>{t('modelRefusal')}</div></div>}
+    {state.items.length > 0 &&
+      <div className={css.panel} aria-label={t('queueTitle')}>
+        {state.items.map(item => <QueueRow key={item.callId} item={item} unavailable={state.unavailable} t={t} />)}
+      </div>}
   </div>
 }

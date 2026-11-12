@@ -38,14 +38,20 @@ export const inject = ['llm', 'credentials', 'connection', 'attachments']
 const providerQoder = QODER_PROVIDER_ID
 const fiberDisposed: FiberState = 4
 const fiberUnloading: FiberState = 5
+const modelRefusalNoticeMs = 10_000
 
 type QoderLogger = NonNullable<QoderTransportOptions['logger']>
 
 export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void {
   const leases = new QoderQueueLeases()
   const queueStatus = new QoderQueueStatusStore()
+  const modelRefusals = new Map<string, ReturnType<typeof setTimeout>>()
+  let disposed = false
   let authorization: QoderBrowserAuthorizationManager
   ctx.effect(() => async () => {
+    disposed = true
+    for (const timer of modelRefusals.values()) clearTimeout(timer)
+    modelRefusals.clear()
     queueStatus.dispose()
     // Cordis disposes separate effects concurrently. Preserve captured browser
     // credentials until the abandoned runs have finished their bounded reports.
@@ -72,6 +78,13 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     logger,
     attachments: ctx.attachments,
     onQueueUpdate: queueStatus.update,
+    onModelRefusal: sessionId => {
+      if (disposed) return
+      clearTimeout(modelRefusals.get(sessionId))
+      const expiry = setTimeout(() => modelRefusals.delete(sessionId), modelRefusalNoticeMs)
+      expiry.unref()
+      modelRefusals.set(sessionId, expiry)
+    },
     captureQueueLeaseOwner: leases.capture,
   })
   const resolveConfig = () => {
@@ -222,6 +235,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     authorization,
     adapter,
     readQueue: sessionId => queueStatus.read(sessionId),
+    readModelRefusal: sessionId => modelRefusals.has(sessionId),
     restoreSession: async sessionId => {
       const sessions = ctx.get('sessions')
       if (!sessions || sessions.get(SessionId(sessionId))) return

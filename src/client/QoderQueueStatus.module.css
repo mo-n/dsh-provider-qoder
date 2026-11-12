@@ -38,6 +38,7 @@
   pointer-events: none;
 }
 .row { min-width: 0; }
+.notice { padding: 7px 12px; }
 .row + .row { box-shadow: inset 0 1px 0 var(--dsw-alias-border-l1, #42454a); }
 .row[data-unavailable] { color: var(--dsw-alias-label-secondary); }
 .summary {

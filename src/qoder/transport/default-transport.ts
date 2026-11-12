@@ -61,11 +61,13 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly preserveThinking?: boolean
   private readonly modelQueueMaxWaitMs?: number
   private readonly onQueueUpdate: QoderTransportOptions['onQueueUpdate']
+  private readonly onModelRefusal: QoderTransportOptions['onModelRefusal']
   private readonly captureQueueLeaseOwner: QoderTransportOptions['captureQueueLeaseOwner']
 
   constructor(options: QoderTransportOptions) {
     this.modelQueueMaxWaitMs = options.modelQueueMaxWaitMs
     this.onQueueUpdate = options.onQueueUpdate
+    this.onModelRefusal = options.onModelRefusal
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
     this.requestCompression = options.requestCompression ?? false
@@ -252,6 +254,11 @@ export class DefaultQoderTransport implements QoderTransport {
       streamIdleTimeoutMs: this.streamIdleTimeoutMs,
       modelQueueMaxWaitMs: this.modelQueueMaxWaitMs,
       onQueueUpdate: this.onQueueUpdate,
+      onRefusal: () => {
+        if (options.purpose !== undefined || options.sessionId === undefined || options.signal?.aborted) return
+        try { this.onModelRefusal?.(String(options.sessionId)) }
+        catch { this.logger?.warn?.('[Qoder Stream] Could not publish model refusal') }
+      },
       hostRun: queueOwner?.run,
       onBusinessRequest: options.purpose === undefined ? request => retainQoderBusiness(queueOwner?.run, request, {
         fetch: this.fetchImpl, region: this.region, logger: this.logger,

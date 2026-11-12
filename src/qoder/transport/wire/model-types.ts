@@ -53,6 +53,7 @@ export interface QoderInnerChunk {
       content?: string
       role?: string
       reasoning_content?: string
+      refusal?: string | boolean | null
       tool_calls?: Array<{
         index?: number
         id?: string

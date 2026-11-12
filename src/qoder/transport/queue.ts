@@ -91,6 +91,7 @@ async function readBody(response: Response, signal: AbortSignal): Promise<string
 }
 
 export function queueInterval(seconds?: number): number {
+  if (seconds === 0) return 10_000
   return Math.min(30_000, Math.max(500, seconds !== undefined && Number.isFinite(seconds) ? seconds * 1000 : 30_000))
 }
 
@@ -289,7 +290,7 @@ export class ModelQueue {
           status = { ...next, modelKey: next.modelKey ?? status.modelKey, queueType: next.queueType ?? status.queueType }
           failures = 0
           this.entered(status)
-          if (status.isQueued === false) {
+          if (status.isQueued === false && status.serviceAvailable !== false) {
             if (status.retryAfterSeconds !== undefined && status.retryAfterSeconds > 0) {
               await this.clock.sleep(Math.min(queueInterval(status.retryAfterSeconds), remaining()), this.options.signal)
             }

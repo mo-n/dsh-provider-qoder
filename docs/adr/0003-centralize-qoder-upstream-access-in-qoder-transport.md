@@ -31,6 +31,13 @@ Other transport capabilities retain their own error protocols. DSH owns the
 existing retry and generic quota presentation, while transport diagnostics retain
 the concrete upstream code and distinguish HTTP status from SSE business status.
 
+Both model transports retain pending tool calls until normal stream completion.
+DSH can assemble a tool call from deltas without a closing block, so the
+transport publishes those deltas only after it can commit the call. A model
+refusal ends the stream with the text and usage already received and discards
+pending calls. DSH receives a transient notice scoped to the originating
+conversation. The provider notification control frames are skipped.
+
 ## Model-server HTTP and legacy model transport
 
 The model transport defaults to the COSY `/algo/` model protocol (`legacy`).
