@@ -49,7 +49,7 @@ export interface QoderTransportOptions {
   streamIdleTimeoutMs?: number
   responseHeaderTimeoutMs?: number
   metadataTimeoutMs?: number
-  resolveMachineId?: () => string
+  resolveMachineId?: () => string | Promise<string>
   attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
   /** Deadline for one center image publication attempt. */
   imageUploadTimeoutMs?: number

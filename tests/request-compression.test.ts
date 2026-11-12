@@ -366,7 +366,7 @@ test('HTTP failures report encoding metadata without request or response content
 test('legacy compresses WAF bytes and returns a DSH-retryable pre-output SSE rejection', async () => {
   const request: GenerateOptions = { provider: 'dsh-provider-qoder', model: 'cmodel', messages: [] }
   let calls = 0
-  const credentials = { userID: 'compression-user', authToken: 'test', name: '', email: '' }
+  const credentials = { userID: 'compression-user', authToken: 'test', name: '', email: '', machineID: 'offline-machine' }
   await assert.rejects(async () => {
     for await (const _chunk of streamQoderChat(request, undefined, credentials,
       [{ role: 'user', content: 'history '.repeat(2000) }], {

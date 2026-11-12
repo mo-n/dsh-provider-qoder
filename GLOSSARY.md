@@ -18,6 +18,10 @@ _Avoid_: second Qoder provider, official provider
 A user's existing Qoder entitlement that permits access to Qoder-hosted language models.
 _Avoid_: Qoder API key, generic model subscription
 
+**Qoder machine ID**:
+The UUID that identifies a client device in Qoder authorization and request attribution.
+_Avoid_: hardware GUID, machine token, device fingerprint
+
 **Managed Qoder PAT**:
 The single Qoder personal access token (PAT) stored and managed for a DSH instance through its credential store.
 _Avoid_: environment PAT, plugin API key

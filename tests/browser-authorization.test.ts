@@ -74,7 +74,7 @@ test('browser device flow binds PKCE to the website, polls 404, verifies identit
   for (const region of ['global', 'china'] as const) {
     let website!: URL
     let polls = 0
-    const auth = new QoderBrowserAuthorization({ region, pollIntervalMs: 1000, resolveMachineId: () => 'bound-machine',
+    const auth = new QoderBrowserAuthorization({ region, pollIntervalMs: 1000, resolveMachineId: async () => 'bound-machine',
       fetch: (async (input: RequestInfo | URL) => {
         const url = new URL(String(input))
         assert.equal(url.hostname, region === 'china' ? 'openapi.qoder.com.cn' : 'openapi.qoder.sh')
@@ -109,6 +109,28 @@ test('browser device flow binds PKCE to the website, polls 404, verifies identit
     assert.ok(result.refreshExpiresAt! > Date.now() + 29 * 86_400_000, 'multi-day refresh lifetimes are seconds, not milliseconds')
     assert.equal(polls, 2)
   }
+})
+
+test('browser refresh keeps the bound machine ID and fills it for an older grant', async () => {
+  let resolutions = 0
+  const requestIds: string[] = []
+  const authorization = new QoderBrowserAuthorization({
+    region: 'china',
+    resolveMachineId: async () => { resolutions++; return 'china-machine' },
+    fetch: async (_input, init) => {
+      requestIds.push(JSON.parse(String(init?.body)).machine_id)
+      return json({ token: 'new-device', refresh_token: 'new-refresh' })
+    },
+  })
+  const existing = grant('china')
+  const refreshed = await authorization.refresh(existing, undefined, existing.credentials.authToken)
+  assert.equal(refreshed.credentials.machineID, 'test-machine')
+  assert.equal(resolutions, 0)
+  const legacy = { ...existing, credentials: { ...existing.credentials, machineID: undefined } }
+  const upgraded = await authorization.refresh(legacy, undefined, legacy.credentials.authToken)
+  assert.equal(upgraded.credentials.machineID, 'china-machine')
+  assert.equal(resolutions, 1)
+  assert.deepEqual(requestIds, ['test-machine', 'china-machine'])
 })
 
 test('browser polling cancellation, timeout and malformed responses never expose verifier or provider bodies', async t => {

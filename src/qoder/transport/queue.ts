@@ -91,8 +91,10 @@ async function readBody(response: Response, signal: AbortSignal): Promise<string
 }
 
 export function queueInterval(seconds?: number): number {
-  if (seconds === 0) return 10_000
-  return Math.min(30_000, Math.max(500, seconds !== undefined && Number.isFinite(seconds) ? seconds * 1000 : 30_000))
+  if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(30_000, Math.max(500, seconds * 1000))
+  }
+  return 10_000
 }
 
 export interface ModelQueueOptions {

@@ -1,19 +1,8 @@
 import crypto from 'node:crypto'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync, rmSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { buildAuthHeaders, qoderMachineOs, qoderIdeVersion } from '../src/qoder/transport/wire/cosy.ts'
 import { getQoderChatUrl } from '../src/qoder/transport/endpoints.ts'
-import { getMachineId, qoderMachineIdPaths } from '../src/qoder/transport/machine-id.ts'
-
-test('getMachineId accepts an isolated storage location', () => {
-  const path = join(tmpdir(), `qoder-machine-${crypto.randomUUID()}`, 'machine_id')
-  const machineId = getMachineId([path])
-  assert.ok(machineId.length > 0)
-  assert.equal(getMachineId([path]), machineId)
-})
 
 test('buildAuthHeaders creates the required bounded COSY headers', () => {
   const body = Buffer.from('encoded-body')
@@ -69,7 +58,7 @@ test('COSY carries organization and privacy context in both headers and encrypte
   assert.equal(headers['Cosy-Machinetoken'], 'offline-machine')
 })
 
-test('COSY metadata requests use the CLI Machine ID fallback and explicit privacy choice', () => {
+test('COSY metadata requests carry the credential machine ID and explicit privacy choice', () => {
   const headers = buildAuthHeaders(null, 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1', {
     userID: 'offline-user', authToken: 'jt-offline', name: '', email: '', machineID: 'offline-machine', dataPolicyAgreed: true,
   })
@@ -77,25 +66,4 @@ test('COSY metadata requests use the CLI Machine ID fallback and explicit privac
   assert.equal(headers['Cosy-Machinetoken'], 'offline-machine')
   assert.equal(headers['Cosy-Data-Policy'], 'agree')
   assert.equal(headers['Cosy-Organization-Id'], undefined)
-})
-
-
-test('Machine ID lookup honors CLI config overrides and China branding', () => {
-  const home = join(tmpdir(), 'offline-home')
-  const configDir = join(tmpdir(), 'offline-cli')
-  const cliHome = join(tmpdir(), 'offline-cn')
-  assert.equal(qoderMachineIdPaths('global', { QODER_CONFIG_DIR: configDir }, home)[0],
-    join(configDir, '.auth', 'machine_id'))
-  assert.equal(qoderMachineIdPaths('china', { QODERCN_CLI_HOME: cliHome }, home)[0],
-    join(cliHome, '.qoder-cn', '.auth', 'machine_id'))
-  assert.equal(qoderMachineIdPaths('global', {}, home)[0], join(home, '.qoder', '.auth', 'machine_id'))
-})
-
-test('an unwritable Machine ID fallback remains stable across authentication refreshes', () => {
-  const path = join(tmpdir(), `qoder-unwritable-${crypto.randomUUID()}`, 'machine_id')
-  // A file as the parent makes persistence fail without changing local CLI state.
-  const parent = dirname(path)
-  writeFileSync(parent, 'offline')
-  try { assert.equal(getMachineId([path]), getMachineId([path])) }
-  finally { rmSync(parent) }
 })

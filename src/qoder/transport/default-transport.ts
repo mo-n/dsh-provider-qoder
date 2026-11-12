@@ -30,6 +30,7 @@ import type { CosyCredentials } from './wire/cosy.ts'
 import { streamModelServerChat } from './model-server.ts'
 import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
 import { retainQoderBusiness } from './business-finish.ts'
+import { getMachineId, qoderMachineIdPaths } from './machine-id.ts'
 import type { QoderHostRun } from '../turn.ts'
 
 export const defaultStreamIdleTimeoutMs = 5 * 60 * 1000
@@ -41,6 +42,7 @@ function aborted(message: string): QoderLlmError {
 export class DefaultQoderTransport implements QoderTransport {
   readonly authorization: QoderBrowserAuthorization
   private readonly resolveCredential: QoderTransportOptions['resolveCredential']
+  private readonly resolveMachineId: NonNullable<QoderTransportOptions['resolveMachineId']>
   private readonly region: QoderRegion
   private readonly requestCompression: boolean
   private readonly requestCompressionMinChars: number
@@ -76,6 +78,7 @@ export class DefaultQoderTransport implements QoderTransport {
     this.modelTransport = options.modelTransport ?? 'legacy'
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
+    this.resolveMachineId = options.resolveMachineId ?? (() => getMachineId(qoderMachineIdPaths(this.region)))
     this.authorization = new QoderBrowserAuthorization(options)
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.logger = options.logger
@@ -94,7 +97,7 @@ export class DefaultQoderTransport implements QoderTransport {
       fetch: this.fetchImpl,
       logger: this.logger,
       region: this.region,
-      resolveMachineId: options.resolveMachineId,
+      resolveMachineId: this.resolveMachineId,
     })
     this.usage = new QoderUsageReader({
       authService: this.auth,
@@ -208,14 +211,23 @@ export class DefaultQoderTransport implements QoderTransport {
   private async lease(signal?: AbortSignal): Promise<QoderCredentialLease> {
     if (signal?.aborted) throw aborted('Qoder request was aborted.')
     const managed = await this.resolveCredential?.(signal)
-    if (managed) return managed
+    if (managed) return { key: managed.key, resolve: async (nextSignal, rejectedToken) => {
+      const credentials = await managed.resolve(nextSignal, rejectedToken)
+      if (credentials.machineID) return credentials
+      const machineID = await this.resolveMachineId() || await getMachineId(qoderMachineIdPaths(this.region))
+      if (nextSignal?.aborted) throw aborted('Qoder request was aborted.')
+      return { ...credentials, machineID }
+    } }
     const pat = await this.requirePat(signal)
     return { key: opaqueCredentialKey(pat), resolve: async (nextSignal, rejectedToken) => {
       const current = await this.auth.getCredentials(pat, nextSignal)
-      if (rejectedToken !== undefined && current.authToken === rejectedToken) {
-        return this.auth.refreshCredentials(pat, current, nextSignal)
-      }
-      return current
+      const credentials = rejectedToken !== undefined && current.authToken === rejectedToken
+        ? await this.auth.refreshCredentials(pat, current, nextSignal)
+        : current
+      if (credentials.machineID) return credentials
+      const machineID = await getMachineId(qoderMachineIdPaths(this.region))
+      if (nextSignal?.aborted) throw aborted('Qoder request was aborted.')
+      return { ...credentials, machineID }
     } }
   }
 

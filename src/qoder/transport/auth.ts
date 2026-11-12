@@ -66,7 +66,7 @@ export interface QoderAuthServiceOptions {
   timeoutMs?: number
   /** Independent budget for optional organization metadata, including retries. */
   organizationTagsTimeoutMs?: number
-  resolveMachineId?: () => string
+  resolveMachineId?: () => string | Promise<string>
   region?: QoderRegion
   logger?: QoderLogger
 }
@@ -98,7 +98,7 @@ export class QoderAuthManager {
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
   private readonly organizationTagsTimeoutMs: number
-  private readonly resolveMachineId: () => string
+  private readonly resolveMachineId: () => string | Promise<string>
   private readonly region: QoderRegion
   private readonly logger?: QoderLogger
 
@@ -209,7 +209,8 @@ export class QoderAuthManager {
     onAuthenticated: () => void,
     epoch: number,
   ): Promise<QoderCredentialSnapshot> {
-    const machineID = this.resolveMachineId().trim()
+    const machineID = (await this.resolveMachineId()).trim()
+    if (signal.aborted) throw abortedError()
     const data = await openApiJsonRequest<QoderTokenExchange>(
       this.fetchImpl,
       {
