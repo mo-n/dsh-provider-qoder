@@ -268,7 +268,7 @@ export class DefaultQoderTransport implements QoderTransport {
       onQueueUpdate: this.onQueueUpdate,
       onRefusal: () => {
         if (options.purpose !== undefined || options.sessionId === undefined || options.signal?.aborted) return
-        try { this.onModelRefusal?.(String(options.sessionId)) }
+        try { this.onModelRefusal?.(String(options.sessionId), queueOwner?.run) }
         catch { this.logger?.warn?.('[Qoder Stream] Could not publish model refusal') }
       },
       hostRun: queueOwner?.run,

@@ -46,7 +46,10 @@ export interface QoderRpcContract {
   account: { input: { force?: boolean }; output: QoderAccountInfo }
   models: { input: Record<string, never>; output: readonly QoderCatalogModel[] }
   queue: { input: { sessionId: string }; output: QoderQueueSnapshot[] }
-  conversationStatus: { input: { sessionId: string }; output: { queue: QoderQueueSnapshot[]; refused: boolean } }
+  conversationStatus: {
+    input: { sessionId: string; dismissedRefusalId?: string }
+    output: { queue: QoderQueueSnapshot[]; refused: boolean; refusalId?: string }
+  }
   sessionTier: { input: QoderSessionTierPayload; output: QoderSessionTierSelection }
   readSessionTier: { input: QoderSessionTierScope; output: QoderSessionTierSelection }
   authorization: { input: { region: QoderRegion }; output: QoderAuthorizationView }

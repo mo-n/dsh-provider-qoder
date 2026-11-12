@@ -21,7 +21,8 @@ interface QoderRpcHandlerOptions {
   authorization: Pick<QoderBrowserAuthorizationManager, 'begin' | 'cancel' | 'select' | 'describe'>
   adapter: Pick<QoderAdapter, 'setSessionTier' | 'readSessionTier'>
   readQueue: QoderQueueStatusStore['read']
-  readModelRefusal?(sessionId: string): boolean
+  readModelRefusal?(sessionId: string): string | undefined
+  dismissModelRefusal?(sessionId: string, id: string): void
   /** Join host restoration when needed; the host owns session publication. */
   restoreSession(sessionId: string): Promise<void>
   settingsNamespace?(): string
@@ -115,10 +116,17 @@ export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpc
     if (endpoint === 'queue' || endpoint === 'conversationStatus') {
       const sessionId = data.sessionId
       if (!validSessionId(sessionId)) return publicError('INVALID_REQUEST', 'A valid sessionId is required')
-      const queue = readQueue(sessionId)
-      return { ok: true, value: endpoint === 'queue'
-        ? queue
-        : { queue, refused: options.readModelRefusal?.(sessionId) ?? false } }
+      if (endpoint === 'queue') return { ok: true, value: readQueue(sessionId) }
+      const dismissedRefusalId = data.dismissedRefusalId
+      if (dismissedRefusalId !== undefined) {
+        if (typeof dismissedRefusalId !== 'string' || !dismissedRefusalId || dismissedRefusalId.length > 64) {
+          return publicError('INVALID_REQUEST', 'Invalid dismissedRefusalId')
+        }
+        options.dismissModelRefusal?.(sessionId, dismissedRefusalId)
+      }
+      const refusalId = options.readModelRefusal?.(sessionId)
+      return { ok: true, value: { queue: readQueue(sessionId), refused: refusalId !== undefined,
+        ...refusalId === undefined ? {} : { refusalId } } }
     }
 
     if (endpoint === 'models') {

@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { setImmediate } from 'node:timers/promises'
 import { QoderQueueStatusStore } from '../src/dsh/queue-status.ts'
+import { QoderModelRefusals } from '../src/dsh/model-refusals.ts'
+import { createQoderRpcHandler } from '../src/dsh/rpc-handler.ts'
 import { formatQueueDuration, parseQueueSnapshots, watchQueueStatus, type QueueViewState } from '../src/client/queue-status.ts'
 import { zh, en } from '../src/client/locales.ts'
 import type { QoderRpcCaller } from '../src/client/rpc-client.ts'
@@ -57,13 +59,12 @@ test('visible polling marks failures stale and recovers without retaining finish
     assert.deepEqual(payload, { sessionId: 'session' })
     reads++
     return reads === 2 ? { ok: false, error: { code: 'INTERNAL', message: 'offline' } }
-      : { ok: true, value: { queue: reads === 1 ? [snapshot()] : [], refused: reads === 1 } }
+      : { ok: true, value: { queue: reads === 1 ? [snapshot()] : [], refused: false } }
   } } as QoderRpcCaller
   const stop = watchQueueStatus(rpc, 'session', visibility, state => views.push(state))
   t.after(stop)
   await setImmediate()
   assert.equal(views.at(-1)?.items.length, 1)
-  assert.equal(views.at(-1)?.refused, true)
   t.mock.timers.tick(1000)
   await setImmediate()
   assert.equal(views.at(-1)?.unavailable, true)
@@ -71,14 +72,14 @@ test('visible polling marks failures stale and recovers without retaining finish
   await setImmediate()
   assert.deepEqual(views.at(-1), { items: [], unavailable: false, refused: false })
   visibility.setHidden(true)
-  t.mock.timers.tick(10_000)
+  t.mock.timers.tick(3000)
   await setImmediate()
   assert.equal(reads, 3)
   visibility.setHidden(false)
   await setImmediate()
   assert.equal(reads, 4)
   stop()
-  t.mock.timers.tick(10_000)
+  t.mock.timers.tick(3000)
   assert.equal(reads, 4)
 })
 
@@ -96,12 +97,67 @@ test('hidden and disposed components cancel requests and ignore late responses',
   assert.equal(pending[0].signal.aborted, true)
   visibility.setHidden(false)
   assert.equal(pending.length, 2)
-  pending[0].resolve({ ok: true, value: { queue: [snapshot('obsolete')], refused: true } })
+  pending[0].resolve({ ok: true, value: { queue: [snapshot('obsolete')], refused: false } })
   await setImmediate()
   assert.equal(views.length, 0)
   stop()
   assert.equal(pending[1].signal.aborted, true)
-  pending[1].resolve({ ok: true, value: { queue: [snapshot()], refused: true } })
+  pending[1].resolve({ ok: true, value: { queue: [snapshot()], refused: false } })
   await setImmediate()
   assert.equal(views.length, 0)
+})
+
+test('a refusal survives a hidden tab and clears on the poll after toast dismissal', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const visibility = new Visibility()
+  visibility.setHidden(true)
+  const refusals = new QoderModelRefusals()
+  const unexpected = () => assert.fail('conversation status should not need other dependencies')
+  const handle = createQoderRpcHandler({
+    region: () => 'global', resolveTransport: unexpected, discoverModels: unexpected,
+    authorization: { begin: unexpected, cancel: unexpected, select: unexpected, describe: unexpected },
+    adapter: { setSessionTier: unexpected, readSessionTier: unexpected },
+    restoreSession: unexpected, readQueue: () => [],
+    readModelRefusal: id => refusals.read(id),
+    dismissModelRefusal: (session, id) => refusals.dismiss(session, id),
+  })
+  let reads = 0
+  const rpc = { call: (endpoint: string, payload: unknown, signal: AbortSignal) => {
+    reads++
+    return handle(endpoint, payload, signal)
+  } } as QoderRpcCaller
+  let view: QueueViewState | undefined
+  let dismissedRefusalId: string | undefined
+  const stop = watchQueueStatus(rpc, 'session', visibility, state => { view = state }, () => dismissedRefusalId)
+  t.after(stop)
+  refusals.report('session')
+  t.mock.timers.tick(60_000)
+  assert.equal(reads, 0)
+
+  visibility.setHidden(false)
+  await setImmediate()
+  assert.equal(view?.refused, true)
+  const refusalId = view?.refusalId
+  assert.ok(refusalId)
+  t.mock.timers.tick(1000)
+  await setImmediate()
+  assert.equal(refusals.read('session'), refusalId)
+  dismissedRefusalId = refusalId
+  t.mock.timers.tick(1000)
+  await setImmediate()
+  assert.equal(view?.refused, false)
+  assert.equal(refusals.read('session'), undefined)
+})
+
+test('dismissing an old refusal leaves a newer one pending', () => {
+  const refusals = new QoderModelRefusals()
+  refusals.report('session')
+  const previous = refusals.read('session')!
+  refusals.clear('session')
+  assert.equal(refusals.read('session'), undefined)
+  refusals.report('session')
+  const current = refusals.read('session')
+  assert.ok(current && current !== previous)
+  refusals.dismiss('session', previous)
+  assert.equal(refusals.read('session'), current)
 })

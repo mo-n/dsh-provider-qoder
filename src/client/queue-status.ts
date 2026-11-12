@@ -18,6 +18,7 @@ export interface QueueViewState {
   items: readonly QoderQueueSnapshot[]
   unavailable: boolean
   refused: boolean
+  refusalId?: string
 }
 
 export function parseQueueSnapshots(value: unknown, sessionId: string): QoderQueueSnapshot[] {
@@ -40,6 +41,7 @@ export function watchQueueStatus(
   sessionId: string,
   visibility: Pick<Document, 'hidden' | 'addEventListener' | 'removeEventListener'>,
   changed: (state: QueueViewState) => void,
+  readDismissedRefusalId?: () => string | undefined,
 ): () => void {
   let disposed = false
   let generation = 0
@@ -53,11 +55,18 @@ export function watchQueueStatus(
     active = controller
     const timeout = setTimeout(() => controller.abort(), 5000)
     try {
-      const result = await rpc.call('conversationStatus', { sessionId }, controller.signal)
+      const dismissedRefusalId = readDismissedRefusalId?.()
+      const result = await rpc.call('conversationStatus', {
+        sessionId, ...dismissedRefusalId === undefined ? {} : { dismissedRefusalId },
+      }, controller.signal)
       if (disposed || revision !== generation) return
       if (!result.ok) throw new Error('Queue status unavailable')
       items = parseQueueSnapshots(result.value.queue, sessionId)
-      changed({ items, unavailable: false, refused: result.value.refused === true })
+      const { refusalId } = result.value
+      const refused = result.value.refused === true
+        && (refusalId === undefined || refusalId !== readDismissedRefusalId?.())
+      changed({ items, unavailable: false, refused,
+        ...refused && typeof refusalId === 'string' ? { refusalId } : {} })
     } catch {
       if (!disposed && revision === generation) changed({ items, unavailable: true, refused: false })
     } finally {

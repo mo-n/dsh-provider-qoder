@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { QoderQueueLeases, bindQoderQueueLeases } from './queue-leases.ts'
 import { QoderQueueStatusStore } from './queue-status.ts'
+import { QoderModelRefusals } from './model-refusals.ts'
 import { bindQoderImageTools } from './image-tools.ts'
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
@@ -38,26 +39,27 @@ export const inject = ['llm', 'credentials', 'connection', 'attachments']
 const providerQoder = QODER_PROVIDER_ID
 const fiberDisposed: FiberState = 4
 const fiberUnloading: FiberState = 5
-const modelRefusalNoticeMs = 10_000
 
 type QoderLogger = NonNullable<QoderTransportOptions['logger']>
 
 export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void {
   const leases = new QoderQueueLeases()
   const queueStatus = new QoderQueueStatusStore()
-  const modelRefusals = new Map<string, ReturnType<typeof setTimeout>>()
+  const modelRefusals = new QoderModelRefusals()
   let disposed = false
   let authorization: QoderBrowserAuthorizationManager
   ctx.effect(() => async () => {
     disposed = true
-    for (const timer of modelRefusals.values()) clearTimeout(timer)
-    modelRefusals.clear()
+    modelRefusals.dispose()
     queueStatus.dispose()
     // Cordis disposes separate effects concurrently. Preserve captured browser
     // credentials until the abandoned runs have finished their bounded reports.
     try { await leases.dispose() } finally { await authorization?.dispose() }
   }, 'provider-qoder: run and authorization lifecycle')
   bindQoderQueueLeases(ctx, leases)
+  ctx.on('session/event', (session, event) => {
+    if (event.type === 'turn/start') modelRefusals.clear(session.id)
+  })
   const config = readConfig(input)
   const settingsNamespace = qoderSettingsNamespace(ctx)
   const logger = (ctx as Context & { logger?: QoderLogger }).logger
@@ -78,12 +80,9 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     logger,
     attachments: ctx.attachments,
     onQueueUpdate: queueStatus.update,
-    onModelRefusal: sessionId => {
-      if (disposed) return
-      clearTimeout(modelRefusals.get(sessionId))
-      const expiry = setTimeout(() => modelRefusals.delete(sessionId), modelRefusalNoticeMs)
-      expiry.unref()
-      modelRefusals.set(sessionId, expiry)
+    onModelRefusal: (sessionId, run) => {
+      if (disposed || (run && leases.capture(sessionId)?.run !== run)) return
+      modelRefusals.report(sessionId)
     },
     captureQueueLeaseOwner: leases.capture,
   })
@@ -134,7 +133,10 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     agents: ctx.get('agents'),
   })
 
-  ctx.on('session/disposed', session => adapter.forgetSession(session.id))
+  ctx.on('session/disposed', session => {
+    adapter.forgetSession(session.id)
+    modelRefusals.clear(session.id)
+  })
 
   const registration = ctx.llm.registerAdapter([providerQoder], adapter)
   const refreshAuthentication = (): void => {
@@ -235,7 +237,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     authorization,
     adapter,
     readQueue: sessionId => queueStatus.read(sessionId),
-    readModelRefusal: sessionId => modelRefusals.has(sessionId),
+    readModelRefusal: sessionId => modelRefusals.read(sessionId),
+    dismissModelRefusal: (sessionId, id) => modelRefusals.dismiss(sessionId, id),
     restoreSession: async sessionId => {
       const sessions = ctx.get('sessions')
       if (!sessions || sessions.get(SessionId(sessionId))) return
