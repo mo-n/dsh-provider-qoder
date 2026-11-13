@@ -10,15 +10,13 @@ Connection pools, timer-driven background refresh, circuit breakers, dynamic rat
 
 ## Authentication recovery before model generation
 
-Qoder transport may refresh subscriber credentials once after an HTTP 401/403
-rejection received before a model SSE stream starts, matching qodercli. This is a
-protocol authentication exchange: the prepared model body, request ID and turn
-identity are reused. Duplicate-request 403 responses (upstream code `103`) are
-not treated as expired credentials. Model business errors are decoded before
-recovery: known quota, queue and other non-authentication rejections, as well as
-explicit unknown business codes, do not refresh credentials. Explicit subscriber
-authentication expiry (`105`) or an unclassified HTTP 401/403 may refresh once;
-custom model authentication failures do not refresh subscriber credentials.
+Qoder transport may refresh subscriber credentials once after an HTTP rejection
+received before a model SSE stream starts, matching qodercli. An HTTP 401 starts
+recovery after initiating cancellation of the error response body. An HTTP 403
+starts recovery only when the decoded business code is `105` (subscriber
+authentication expiry). The transport allows up to one second to read the
+authentication error body when needed. This is a protocol authentication
+exchange. The prepared model body, request ID, and turn identity are reused.
 A second rejection is returned to DSH.
 Transport never replays an HTTP-successful model stream after an authentication or quota error. Queue recovery before any model output is owned by transport using turn-scoped leases; ordinary model-generation retries remain DSH-owned. This narrowly extends the original idempotent-read retry restriction.
 
@@ -32,6 +30,13 @@ Ordinary failure delay hints still follow DSH's retry policy.
 Other transport capabilities retain their own error protocols. DSH owns the
 existing retry and generic quota presentation, while transport diagnostics retain
 the concrete upstream code and distinguish HTTP status from SSE business status.
+
+Both model transports retain pending tool calls until normal stream completion.
+DSH can assemble a tool call from deltas without a closing block, so the
+transport publishes those deltas only after it can commit the call. A model
+refusal ends the stream with the text and usage already received and discards
+pending calls. DSH receives a transient notice scoped to the originating
+conversation. The provider notification control frames are skipped.
 
 ## Model-server HTTP and legacy model transport
 

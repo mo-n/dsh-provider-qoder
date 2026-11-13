@@ -23,19 +23,24 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
   private readonly options: {
     region: QoderRegion
     fetch?: typeof fetch
-    resolveMachineId?: () => string
+    resolveMachineId?: () => string | Promise<string>
     pollIntervalMs?: number
     loginTimeoutMs?: number
   }
 
   constructor(options: QoderBrowserAuthorization['options']) { this.options = options }
 
+  private async resolveMachineId(): Promise<string> {
+    return await this.options.resolveMachineId?.() || getMachineId(qoderMachineIdPaths(this.options.region))
+  }
+
   async begin(signal: AbortSignal): Promise<QoderBrowserLoginFlow> {
     signal.throwIfAborted()
     const verifier = randomBytes(48).toString('base64url')
     const challenge = createHash('sha256').update(verifier).digest('base64url')
     const nonce = randomUUID()
-    const machineID = (this.options.resolveMachineId ?? (() => getMachineId(qoderMachineIdPaths(this.options.region))))()
+    const machineID = await this.resolveMachineId()
+    signal.throwIfAborted()
     const query = new URLSearchParams({ challenge, challenge_method: 'S256', nonce, machine_id: machineID,
       client_id: 'e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb' })
     const origin = this.options.region === 'china' ? 'https://qoder.cn' : 'https://qoder.com'
@@ -91,9 +96,11 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
     if (grant.refreshExpiresAt !== undefined && grant.refreshExpiresAt <= Date.now()) {
       throw new QoderLlmError('Qoder browser authorization expired. Sign in again.', 'AUTH')
     }
+    const machineID = grant.credentials.machineID || await this.resolveMachineId()
+    signal?.throwIfAborted()
     const raw = await openApiJsonRequest<DeviceTokenResponse>(this.options.fetch ?? fetch, {
       url: `${resolveQoderEndpoints(this.options.region).openApiUrl}/api/v1/deviceToken/refresh`,
-      body: { refresh_token: grant.refreshToken, machine_id: grant.credentials.machineID }, signal,
+      body: { refresh_token: grant.refreshToken, machine_id: machineID }, signal,
       operation: 'BrowserRefresh',
     })
     const token = raw.device_token ?? raw.token
@@ -101,7 +108,7 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
       throw new QoderLlmError('Qoder refresh returned incomplete credentials.', 'MALFORMED_RESPONSE')
     }
     // Rotation must be saved even if a subsequent optional profile lookup would fail.
-    return { ...grant, credentials: { ...grant.credentials, authToken: token }, refreshToken: raw.refresh_token,
+    return { ...grant, credentials: { ...grant.credentials, authToken: token, machineID }, refreshToken: raw.refresh_token,
       expiresAt: deviceExpiry(raw.expires_at, raw.expires_in) ?? Date.now() + 86_400_000,
       refreshExpiresAt: refreshExpiry(raw) ?? grant.refreshExpiresAt }
   }

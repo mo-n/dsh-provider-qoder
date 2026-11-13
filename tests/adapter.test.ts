@@ -20,6 +20,7 @@ interface TestAdapterOptions extends Omit<QoderTransportOptions, 'region'> {
 function testAdapter(options: TestAdapterOptions): QoderAdapter {
   const { models, sessions, agents, ...transportOptions } = options
   const transport = createQoderTransport({
+    resolveMachineId: () => 'offline-machine',
     ...transportOptions,
     region: options.region ?? 'global',
     modelTransport: options.modelTransport ?? 'legacy',

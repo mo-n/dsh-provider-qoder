@@ -9,7 +9,6 @@
 
 import crypto from 'node:crypto'
 import { hostname } from 'node:os'
-import { getMachineId } from '../machine-id.ts'
 import { qoderClientType, qoderIdeVersion, qoderMachineOs } from './client-identity.ts'
 import type { QoderCredentials } from './credentials.ts'
 
@@ -79,6 +78,10 @@ export function buildAuthHeaders(
   if (!creds.authToken) {
     throw new Error('cosy: auth token is empty')
   }
+  const machineID = creds.machineID
+  if (!machineID) {
+    throw new Error('cosy: Qoder machine ID is empty')
+  }
 
   const aesKey = crypto.randomUUID().replace(/-/g, '').slice(0, 16)
   const userInfo: UserInfo = {
@@ -109,8 +112,6 @@ export function buildAuthHeaders(
   const bodyStr = body ? (Buffer.isBuffer(body) ? body.toString('utf8') : body) : ''
   const sigInput = `${payloadB64}\n${cosyKey}\n${timestamp}\n${bodyStr}\n${sigPath}`
   const sig = crypto.createHash('md5').update(sigInput).digest('hex')
-
-  const machineID = creds.machineID || getMachineId()
 
   const isModelRequest = sigPath === '/api/v2/service/pro/sse/agent_chat_generation'
   const machineHostname = hostname().replace(/[^\x20-\x7e]/gu, '').trim()

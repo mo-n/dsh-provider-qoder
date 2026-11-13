@@ -96,7 +96,7 @@ test('unknown explicit model codes suppress credential recovery and text guesses
     assert.equal(canRefreshModelCredentials(error), false)
   }
   for (const cause of ['forbidden', '{invalid', { code: 403, message: 'forbidden' }]) {
-    assert.equal(canRefreshModelCredentials(qoderModelError('rejected', { status: 403, source: 'http', cause })), true)
+    assert.equal(canRefreshModelCredentials(qoderModelError('rejected', { status: 403, source: 'http', cause })), false)
   }
 })
 

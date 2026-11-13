@@ -128,7 +128,7 @@ async function reportQoderBusinessFinish(request: QoderBusinessRequest, end: Qod
   let reason = 'transport'
   const operation = async (): Promise<void> => {
     const identity = request.credentials
-    const mid = identity.machineID || getMachineId(qoderMachineIdPaths(deps.region))
+    const mid = identity.machineID || await getMachineId(qoderMachineIdPaths(deps.region))
     const rid = randomUUID()
     const event = {
       event_time: Date.now(), event_type: 'BUSINESS_FINISH', mid,

@@ -1,7 +1,8 @@
 import { deferred, mockTime } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, createUserMessage, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { Config } from '../src/dsh/config.ts'
 import { QoderAuthService } from '../src/qoder/transport/auth.ts'
 import { createQoderTransport } from '../src/qoder/transport/index.ts'
@@ -21,6 +22,56 @@ function sse(text: string): Response {
   return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`, {
     headers: { 'content-type': 'text/event-stream' },
   })
+}
+
+for (const modelTransport of ['legacy', 'http'] as const) {
+  const cases = [
+    { label: 'first-frame content filter', frames: [{ finish_reason: 'content_filter' }], text: '' },
+    { label: 'sensitive finish after text', frames: [{ delta: { content: 'Prefix' } }, { finish_reason: 'sensitive' }], text: 'Prefix' },
+    {
+      label: 'refusal after complete tool arguments',
+      frames: [
+        { delta: { content: 'Prefix', tool_calls: [{ id: 'call-1', function: { name: 'read', arguments: '{}' } }] } },
+        { finish_reason: 'refusal' },
+      ],
+      text: 'Prefix',
+    },
+    { label: 'refusal delta', frames: [{ delta: { refusal: 'Upstream refusal text' } }], text: '' },
+  ]
+  for (const scenario of cases) {
+    test(`${modelTransport} ends normally on ${scenario.label}`, { timeout: 2_000 }, async () => {
+      const sessionId = SessionId('refused-session')
+      const notices: string[] = []
+      let cancelled = false
+      const transport = createQoderTransport({
+        modelTransport,
+        region: 'global',
+        resolvePat: async () => 'pt-offline',
+        resolveMachineId: () => 'offline-machine',
+        onModelRefusal: id => notices.push(id),
+        fetch: async input => {
+          const url = String(input)
+          if (url.includes('/exchange')) return Response.json({ token: 'jt-offline' })
+          if (url.includes('/userinfo')) return Response.json({ id: 'offline-user' })
+          const body = scenario.frames.map(choice => {
+            const frame = { choices: [choice] }
+            const payload = modelTransport === 'legacy' ? { statusCodeValue: 200, body: JSON.stringify(frame) } : frame
+            return `data: ${JSON.stringify(payload)}\n\n`
+          }).join('')
+          return new Response(new ReadableStream({
+            start(controller) { controller.enqueue(new TextEncoder().encode(body)) },
+            cancel() { cancelled = true; return new Promise<void>(() => {}) },
+          }))
+        },
+      })
+      const assembled = new BlockAssembler()
+      for await (const chunk of transport.stream({ ...request(), sessionId })) assembled.push(chunk)
+      assert.deepEqual(assembled.finish, { kind: 'stop' })
+      assert.deepEqual(assembled.blocks(), scenario.text ? [{ type: 'text', text: scenario.text }] : [])
+      assert.deepEqual(notices, [sessionId])
+      assert.equal(cancelled, true)
+    })
+  }
 }
 
 async function collect(transport: ReturnType<typeof createQoderTransport>): Promise<string> {
@@ -99,8 +150,9 @@ test('explicit HTTP transport sends Bearer model-server request and reads direct
   assert.ok(!debug.some(entry => String(entry[0]).includes('capture')))
 })
 
-test('model-server HTTP 401 refreshes the rejected job token once and keeps request identity', async () => {
+test('model-server HTTP 401 refreshes before reading the error body and keeps request identity', { timeout: 2_000 }, async () => {
   let exchanges = 0
+  let cancellations = 0
   const requestIds: string[] = []
   const transport = createQoderTransport({
     modelTransport: 'http',
@@ -114,11 +166,18 @@ test('model-server HTTP 401 refreshes the rejected job token once and keeps requ
       assert.equal(url, 'https://gateway.qoder.com.cn/model/v1/chat/completions')
       const headers = init?.headers as Record<string, string>
       requestIds.push(headers['X-Request-ID'])
-      return requestIds.length === 1 ? new Response('{}', { status: 401 }) : sse('Recovered')
+      if (requestIds.length > 1) return sse('Recovered')
+      return new Response(new ReadableStream({
+        cancel() {
+          cancellations++
+          return new Promise<void>(() => {})
+        },
+      }), { status: 401 })
     }) as typeof fetch,
   })
   assert.equal(await collect(transport), 'Recovered')
   assert.equal(exchanges, 2)
+  assert.equal(cancellations, 1)
   assert.equal(requestIds.length, 2)
   assert.equal(requestIds[0], requestIds[1])
 })

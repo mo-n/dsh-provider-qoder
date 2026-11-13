@@ -21,7 +21,7 @@ export const qoderRpcChannel = '/qoder-subscription'
 export const qoderRpcApiPath = `/api${qoderRpcChannel}`
 
 /** Endpoints the account card, the model catalog, and the composer context select call. */
-export const qoderRpcEndpoints = ['account', 'models', 'queue', 'sessionTier', 'readSessionTier', 'sessionTierEvents', 'authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization', 'bootstrap'] as const
+export const qoderRpcEndpoints = ['account', 'models', 'queue', 'conversationStatus', 'sessionTier', 'readSessionTier', 'sessionTierEvents', 'authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization', 'bootstrap'] as const
 
 export type QoderRpcEndpoint = (typeof qoderRpcEndpoints)[number]
 
@@ -46,6 +46,10 @@ export interface QoderRpcContract {
   account: { input: { force?: boolean }; output: QoderAccountInfo }
   models: { input: Record<string, never>; output: readonly QoderCatalogModel[] }
   queue: { input: { sessionId: string }; output: QoderQueueSnapshot[] }
+  conversationStatus: {
+    input: { sessionId: string; dismissedRefusalId?: string }
+    output: { queue: QoderQueueSnapshot[]; refused: boolean; refusalId?: string }
+  }
   sessionTier: { input: QoderSessionTierPayload; output: QoderSessionTierSelection }
   readSessionTier: { input: QoderSessionTierScope; output: QoderSessionTierSelection }
   authorization: { input: { region: QoderRegion }; output: QoderAuthorizationView }

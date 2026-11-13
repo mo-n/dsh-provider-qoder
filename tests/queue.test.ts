@@ -177,7 +177,7 @@ test('queue polls immediately, retries three consecutive failures, and aborts 40
   const queue = pollQueue(t, queueOptions((async () => { polls++; throw new Error('offline') }) as typeof fetch, { clock: fakeClock }))
   await assert.rejects(queue.wait({}, 'attempt'), { code: 'QODER_QUEUE_FAILED' })
   assert.equal(polls, 3)
-  assert.deepEqual(fakeClock.sleeps, [30_000, 30_000])
+  assert.deepEqual(fakeClock.sleeps, [10_000, 10_000])
   polls = 0
   const unavailable = pollQueue(t, queueOptions((async () => { polls++; return new Response('', { status: 404 }) }) as typeof fetch))
   await assert.rejects(unavailable.wait({}, 'attempt'), { code: 'QODER_QUEUE_UNAVAILABLE' })
@@ -267,9 +267,9 @@ test('invalid states and subscriber changes are terminal queue errors', async t 
   await assert.rejects(collect(streamQoderChat(options(), undefined, credentials, [], deps((async () => new Response(queueFrame)) as typeof fetch, {
     resolveCredentials: async () => ({ ...credentials, userID: 'another-subscriber' }),
   }))), { code: 'QODER_QUEUE_IDENTITY' })
-  assert.equal(queueInterval(0), 500)
+  assert.equal(queueInterval(0), 10_000)
   assert.equal(queueInterval(100), 30_000)
-  assert.equal(queueInterval(), 30_000)
+  assert.equal(queueInterval(), 10_000)
 })
 
 test('queue waiting outlives the completed ask attempt header and idle timers', async t => {

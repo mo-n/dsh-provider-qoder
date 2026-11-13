@@ -8,7 +8,7 @@ import { QoderRequestCompression } from './request-compression.ts'
 import type { QoderCatalogModel } from '../catalog.ts'
 import { canRefreshModelCredentials, qoderModelServerError, qoderRequestId, QoderLlmError } from '../errors.ts'
 import { getQoderModelServerUrl, type QoderRegion } from './endpoints.ts'
-import { defaultMaxErrorBytes, readLimitedText } from './request.ts'
+import { readModelErrorBody } from './request.ts'
 import { type QoderLogger } from './logging.ts'
 import { prepareQoderRequest, type PreparedQoderRequest } from './wire/prepare.ts'
 import { parseModelServerSse } from './wire/model-server-sse.ts'
@@ -26,6 +26,7 @@ export interface QoderModelServerDependencies {
   /** Immutable host turn boundary captured before provider I/O. */
   hostRun?: QoderHostRun
   onBusinessRequest?: (request: QoderBusinessRequest) => void
+  onRefusal?: () => void
   responseHeaderTimeoutMs: number
   streamIdleTimeoutMs: number
   refreshCredentials: (rejected: QoderCredentials, signal?: AbortSignal) => Promise<QoderCredentials>
@@ -148,19 +149,16 @@ export async function* streamModelServerChat(
         ...responseRequestId === undefined ? {} : { requestId: responseRequestId },
       })
       if (!response.ok) {
-        let cause: unknown
-        resetIdle()
-        try { cause = await readLimitedText(response, defaultMaxErrorBytes, 'Qoder model-server error') }
-        catch { cause = undefined }
+        if (response.status !== 401 && response.status !== 403) resetIdle()
+        const cause = await readModelErrorBody(response, controller.signal, attempt === 0)
         if (idleTimer) clearTimeout(idleTimer)
-        if (controller.signal.aborted) throw new QoderLlmError('Qoder model-server error body was interrupted.', 'ABORTED')
         dependencies.logger?.warn?.('[Qoder Stream] HTTP request rejected', {
           requestId: request.requestId,
           status: response.status,
           contentType: response.headers.get('content-type'),
           serverRequestId: responseRequestId,
           request: compression.diagnostics,
-          bodyAvailable: typeof cause === 'string',
+          bodyAvailable: cause.length > 0,
         })
         const error = qoderModelServerError(response.status, cause, 'http', response.headers)
         if (attempt === 0 && canRefreshModelCredentials(error)) {
@@ -182,6 +180,7 @@ export async function* streamModelServerChat(
         headers: response.headers,
         httpStatus: response.status,
         onActivity: resetIdle,
+        onRefusal: dependencies.onRefusal,
         onControlFrame: kind => {
           if (kind !== 'done') dependencies.logger?.warn?.('[Qoder Stream] Control frame skipped', {
             transport: 'http',

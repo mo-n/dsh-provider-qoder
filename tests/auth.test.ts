@@ -26,7 +26,7 @@ test('QoderAuthService exchanges once, resolves identity, and caches credentials
   }
   const service = new QoderAuthService({
     fetch: fetchMock as typeof fetch,
-    resolveMachineId: () => 'machine-test',
+    resolveMachineId: async () => 'machine-test',
   })
 
   const first = await service.getCredentials('pt-test-token')
@@ -72,15 +72,18 @@ test('QoderAuthService shares one exchange between concurrent callers', async ()
 
 test('QoderAuthService aborts a caller and the unobserved exchange', async () => {
   let providerAborted = false
+  const started = deferred()
   const fetchMock = (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => new Promise((_, reject) => {
     init?.signal?.addEventListener('abort', () => {
       providerAborted = true
       reject(new DOMException('aborted', 'AbortError'))
     }, { once: true })
+    started.resolve()
   })
-  const service = new QoderAuthService({ fetch: fetchMock as typeof fetch })
+  const service = new QoderAuthService({ fetch: fetchMock as typeof fetch, resolveMachineId: () => 'offline-machine' })
   const controller = new AbortController()
   const request = service.getCredentials('pt-abort', controller.signal)
+  await started.promise
   controller.abort()
   await assert.rejects(request, (error: Error) => {
     assert.ok(error instanceof QoderLlmError)

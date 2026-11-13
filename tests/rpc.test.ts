@@ -49,6 +49,7 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
     '/api/qoder-subscription/queue',
+    '/api/qoder-subscription/conversationStatus',
     '/api/qoder-subscription/sessionTier',
     '/api/qoder-subscription/readSessionTier',
     '/api/qoder-subscription/sessionTierEvents',

@@ -12,6 +12,7 @@ export const defaultMaxJsonBytes = 2 * 1024 * 1024
 export const defaultMaxErrorBytes = 16 * 1024
 const metadataRetryBaseDelayMs = 200
 const maxProviderRetryDelayMs = 10_000
+const modelAuthErrorBodyTimeoutMs = 1_000
 
 export function opaqueCredentialKey(value: string): string {
   return createHash('sha256').update(value).digest('hex')
@@ -69,21 +70,27 @@ export async function readLimitedText(
   response: Response,
   maxBytes: number,
   label: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const declaredLength = Number(response.headers.get('content-length'))
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    await response.body?.cancel().catch(() => undefined)
+    const cancelled = response.body?.cancel().catch(() => undefined)
+    if (!signal) await cancelled
     throw new QoderLlmError(`${label} exceeded its response size limit.`, 'MALFORMED_RESPONSE')
   }
   if (!response.body) return ''
 
   const reader = response.body.getReader()
+  const cancel = () => { void reader.cancel().catch(() => undefined) }
+  signal?.addEventListener('abort', cancel, { once: true })
   const decoder = new TextDecoder()
   let bytes = 0
   let text = ''
   try {
+    signal?.throwIfAborted()
     while (true) {
       const { done, value } = await reader.read()
+      signal?.throwIfAborted()
       if (done) break
       bytes += value.byteLength
       if (bytes > maxBytes) {
@@ -93,8 +100,32 @@ export async function readLimitedText(
     }
     return text + decoder.decode()
   } finally {
-    await reader.cancel().catch(() => undefined)
+    signal?.removeEventListener('abort', cancel)
+    if (signal) cancel()
+    else await reader.cancel().catch(() => undefined)
     reader.releaseLock()
+  }
+}
+
+export async function readModelErrorBody(
+  response: Response,
+  signal: AbortSignal,
+  retryUnauthorized: boolean,
+): Promise<string> {
+  if (response.status === 401 && retryUnauthorized) {
+    // Release the rejected response without delaying credential recovery.
+    void response.body?.cancel().catch(() => undefined)
+    signal.throwIfAborted()
+    return ''
+  }
+  const diagnosticSignal = response.status === 401 || response.status === 403
+    ? withDeadline(signal, modelAuthErrorBodyTimeoutMs).signal
+    : signal
+  try {
+    return (await readLimitedText(response, defaultMaxErrorBytes, 'Qoder model error response', diagnosticSignal)).trim()
+  } catch {
+    signal.throwIfAborted()
+    return ''
   }
 }
 

@@ -298,7 +298,7 @@ test('legacy authentication recovery repeats the complete prepared identity', as
   const clock = mockTime(t)
   const seen: QoderWireRequest[] = []
   let calls = 0
-  const credentials = { userID: 'subscriber-legacy-auth', authToken: 'initial', name: '', email: '' }
+  const credentials = { userID: 'subscriber-legacy-auth', authToken: 'initial', name: '', email: '', machineID: 'offline-machine' }
   const response = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     seen.push(decodeLegacy(init?.body as string))
     calls += 1

@@ -383,8 +383,9 @@ async function collectStream(transport: ReturnType<typeof createQoderTransport>)
 }
 
 for (const status of [401, 403]) {
-  test(`model HTTP ${status} refreshes once and preserves the prepared request identity`, async () => {
+  test(`model HTTP ${status} refreshes once and preserves the prepared request identity`, { timeout: 2_000 }, async () => {
     let exchanges = 0
+    let cancellations = 0
     const bodies: string[] = []
     const authorizations: string[] = []
     const transport = createQoderTransport({ modelTransport: 'legacy',
@@ -395,20 +396,27 @@ for (const status of [401, 403]) {
         if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user' }))
         bodies.push(String(init?.body))
         authorizations.push(new Headers(init?.headers).get('authorization')!)
-        return bodies.length === 1 ? new Response('{"code":"105"}', { status })
-          : new Response('data: [DONE]\n\n')
+        if (bodies.length > 1) return new Response('data: [DONE]\n\n')
+        if (status === 403) return new Response('{"code":"105"}', { status })
+        return new Response(new ReadableStream({
+          cancel() {
+            cancellations++
+            return new Promise<void>(() => {})
+          },
+        }), { status })
       }) as typeof fetch,
     })
     await collectStream(transport)
     assert.equal(exchanges, 2)
     assert.equal(bodies.length, 2)
+    assert.equal(cancellations, status === 401 ? 1 : 0)
     assert.equal(bodies[0], bodies[1])
     assert.notEqual(authorizations[0], authorizations[1])
   })
 }
 
 for (const [status, body, attempts] of [
-  [403, '{"code":103}', 1], [429, 'limited', 1], [503, 'unavailable', 1], [401, 'expired', 2],
+  [403, '{"code":103}', 1], [403, '', 1], [429, 'limited', 1], [503, 'unavailable', 1], [401, 'expired', 2],
 ] as const) {
   test(`model rejection ${status}/${body} has bounded authentication recovery`, async () => {
     let exchanges = 0
@@ -513,7 +521,7 @@ for (const bodyFailure of ['oversized', 'interrupted'] as const) {
         assert.equal(error.failure.requestId, 'upstream-id')
         return true
       })
-      const attempts = code === 'AUTH' ? 2 : 1
+      const attempts = status === 401 ? 2 : 1
       assert.equal(exchanges, attempts)
       assert.equal(bodies.length, attempts)
       if (attempts === 2) assert.equal(bodies[0], bodies[1])
@@ -521,43 +529,69 @@ for (const bodyFailure of ['oversized', 'interrupted'] as const) {
   }
 }
 
-for (const cancellation of ['caller', 'timeout'] as const) {
-  test(`${cancellation} cancellation while reading authentication diagnostics prevents recovery`, async t => {
+for (const modelTransport of ['legacy', 'http'] as const) {
+  test(`${modelTransport} returns a stalled HTTP 403 after the diagnostics deadline without refreshing`, async t => {
     const time = mockTime(t)
-    const caller = new AbortController()
     let exchanges = 0
     let chats = 0
-    const transport = createQoderTransport({ modelTransport: 'legacy',
+    let cancellations = 0
+    const transport = createQoderTransport({ modelTransport,
       region: 'global', resolvePat: async () => 'pt-offline', resolveMachineId: () => 'offline-machine',
-      streamIdleTimeoutMs: 10,
-      fetch: (async (input, init) => {
+      fetch: (async input => {
         const url = String(input)
         if (url.includes('/exchange')) return new Response(JSON.stringify({ token: `jt-${++exchanges}` }))
         if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'offline-user' }))
         chats++
         return new Response(new ReadableStream({
-          start(controller) {
-            init!.signal!.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true })
-            if (cancellation === 'caller') caller.abort()
+          cancel() {
+            cancellations++
+            return new Promise<void>(() => {})
           },
-        }), { status: 401 })
+        }), { status: 403, headers: { 'x-request-id': 'forbidden-id' } })
       }) as typeof fetch,
     })
-    const rejected = assert.rejects(async () => {
-      for await (const _chunk of transport.stream({ ...textRequest(), signal: caller.signal })) continue
-    }, (error: unknown) => error instanceof QoderLlmError && error.code === (cancellation === 'caller' ? 'ABORTED' : 'TIMEOUT'))
-    if (cancellation === 'timeout') {
-      await nextTurn() // Drain header handling so the idle timer is armed.
-      time.tick(9)
-      assert.equal(chats, 1)
-      assert.equal(exchanges, 1)
-      time.tick(1)
-    }
+    const rejected = assert.rejects(() => collectStream(transport), (error: unknown) => {
+      assert.ok(error instanceof QoderLlmError)
+      assert.equal(error.code, 'AUTH')
+      assert.equal(error.httpStatus, 403)
+      assert.equal(error.failure.requestId, 'forbidden-id')
+      return true
+    })
+    await nextTurn()
+    time.tick(999)
+    assert.equal(chats, 1)
+    assert.equal(cancellations, 0)
+    time.tick(1)
     await rejected
     assert.equal(chats, 1)
     assert.equal(exchanges, 1)
+    assert.equal(cancellations, 1)
   })
 }
+
+test('caller cancellation while reading HTTP 403 prevents recovery', async () => {
+  const caller = new AbortController()
+  let exchanges = 0
+  let cancellations = 0
+  const transport = createQoderTransport({
+    modelTransport: 'legacy', region: 'global', resolvePat: async () => 'pt-offline',
+    resolveMachineId: () => 'offline-machine',
+    fetch: async input => {
+      const url = String(input)
+      if (url.includes('/exchange')) return Response.json({ token: `jt-${++exchanges}` })
+      if (url.includes('/userinfo')) return Response.json({ id: 'offline-user' })
+      return new Response(new ReadableStream({ cancel() { cancellations++ } }), { status: 403 })
+    },
+  })
+  const rejected = assert.rejects(async () => {
+    for await (const _chunk of transport.stream({ ...textRequest(), signal: caller.signal })) continue
+  }, (error: unknown) => error instanceof QoderLlmError && error.code === 'ABORTED')
+  await nextTurn()
+  caller.abort()
+  await rejected
+  assert.equal(exchanges, 1)
+  assert.equal(cancellations, 1)
+})
 
 for (const source of ['http', 'sse'] as const) {
   for (const [businessCode, expected] of [['112', 'QUOTA'], ['99999', 'PROVIDER_ERROR'], ['105', 'AUTH']] as const) {

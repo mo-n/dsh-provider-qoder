@@ -9,6 +9,7 @@ import type { QoderRegion } from '../region.ts'
 import { DefaultQoderTransport, defaultStreamIdleTimeoutMs } from './default-transport.ts'
 import { defaultResponseHeaderTimeoutMs } from './request.ts'
 import type { QoderQueueOwner, QoderQueueUpdate } from '../queue.ts'
+import type { QoderHostRun } from '../turn.ts'
 import type { QoderLogger } from './logging.ts'
 import type { QoderAuthorizationTransport, QoderCredentialLease } from '../authorization.ts'
 
@@ -33,6 +34,7 @@ export interface QoderTransportOptions {
   region: QoderRegion
   modelQueueMaxWaitMs?: number
   onQueueUpdate?: (update: QoderQueueUpdate) => void
+  onModelRefusal?: (sessionId: string, run?: QoderHostRun) => void
   /** Capture the current host run before I/O; reject late leases after its boundary closes. */
   captureQueueLeaseOwner?: (sessionId: string) => QoderQueueOwner | undefined
 
@@ -48,7 +50,7 @@ export interface QoderTransportOptions {
   streamIdleTimeoutMs?: number
   responseHeaderTimeoutMs?: number
   metadataTimeoutMs?: number
-  resolveMachineId?: () => string
+  resolveMachineId?: () => string | Promise<string>
   attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
   /** Deadline for one center image publication attempt. */
   imageUploadTimeoutMs?: number

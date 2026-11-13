@@ -135,8 +135,8 @@ export function qoderModelError(
 }
 
 export function canRefreshModelCredentials(error: QoderLlmError): boolean {
-  return error.source === 'http' && (error.failure.status === 401 || error.failure.status === 403)
-    && error.code === 'AUTH' && (error.upstreamCode === undefined || error.upstreamCode === '105')
+  return error.source === 'http' && (error.httpStatus === 401
+    || (error.httpStatus === 403 && error.upstreamCode === '105'))
 }
 
 /** Model-server errors have their own wire contract; do not apply legacy business codes. */
