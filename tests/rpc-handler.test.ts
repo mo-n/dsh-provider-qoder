@@ -30,6 +30,7 @@ function options(): Parameters<typeof createQoderRpcHandler>[0] {
     region: () => 'global',
     resolveTransport: unused,
     discoverModels: unused,
+    readModels: unused,
     authorization: { describe: unused, begin: unused, cancel: unused, select: unused },
     adapter: { readSessionTier: unused, setSessionTier: unused },
     readQueue: unused,

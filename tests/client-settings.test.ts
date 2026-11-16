@@ -6,6 +6,9 @@ import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { CSSProperties, ReactElement } from 'react'
+import type { ModelLabelOwner } from '../src/client/QoderModelLabel.tsx'
+import type { createModelRates } from '../src/client/model-rates.ts'
+import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import { nextTurn } from './helpers/timing.ts'
 
 const loadClientPlugin = async (send: typeof fetch = async (input) => {
@@ -13,7 +16,7 @@ const loadClientPlugin = async (send: typeof fetch = async (input) => {
     return Response.json({ ok: true, value: { settingsNamespace: 'provider-qoder' } })
   }
   throw new Error('Unexpected network request')
-}) => {
+}, reactOverrides?: object) => {
   let plugin!: { apply(ctx: unknown): Promise<void>; inject: string[] }
   const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   runInNewContext(source, {
@@ -26,8 +29,13 @@ const loadClientPlugin = async (send: typeof fetch = async (input) => {
         load: ({ factory }: { factory: (require: unknown) => typeof plugin }) => {
           const require = createRequire(import.meta.url)
           // DSH's browser shell supplies this static shared module. Node does not load its CSS entry.
-          plugin = factory((id: string) => id === '@deepseek-ai/dsh-client-ui-primitives'
-            ? { TextShimmer: () => null, IconQueueOutlineRegular: () => null, Input: () => null } : require(id))
+          plugin = factory((id: string) => {
+            if (id === 'react' && reactOverrides) return { ...require(id), ...reactOverrides }
+            if (id === '@deepseek-ai/dsh-client-ui-primitives') {
+              return { TextShimmer: () => null, IconQueueOutlineRegular: () => null, Input: () => null, Tag: () => null }
+            }
+            return require(id)
+          })
         },
       },
     },
@@ -112,6 +120,90 @@ test('client registers the Qoder navigation icon only when the host declares its
   assert.equal(icon.props.style.height, 20)
   assert.equal(icon.props.style.backgroundColor, 'currentColor')
   assert.match(String(icon.props.style.mask), /data:image\/svg\+xml,/u)
+})
+
+test('the model label slot shows a crossed-out original rate and a current-rate tag only in options', async () => {
+  const context = bootstrapContext()
+  const slot = 'conversation.input.model.label'
+  let reads = 0
+  const plugin = await loadClientPlugin(async input => {
+    if (String(input).endsWith('/bootstrap')) return Response.json({ ok: true, value: { settingsNamespace: 'provider-qoder' } })
+    assert.equal(input, '/api/qoder-subscription/modelRates')
+    reads++
+    return Response.json({ ok: true, value: [
+      { id: 'standard', priceFactor: 0.5 },
+      { id: 'promo', priceFactor: 0.1, originalPriceFactor: 0.5 },
+      { id: 'free', priceFactor: 0, originalPriceFactor: 0.5 },
+    ] })
+  }, { useSyncExternalStore: (_subscribe: unknown, read: () => unknown) => read() })
+
+  type Store = ReturnType<typeof createModelRates>
+  type Option = ReactElement<{ model: ModelLabelOwner['model']; rates: Store }>
+  let render!: (props: ModelLabelOwner & { rates: Store }) => string | ReactElement<any>
+  let options!: { inject(): { rates: Store } }
+  await plugin.apply({
+    ...context,
+    locale: { ...context.locale, bind: () => (key: string) => key === 'modelRateFree' ? '免费' : key, resolveText: (text: string) => text },
+    remote: { ...context.remote, $on: () => () => {} },
+    slots: {
+      inject(name: string, effect: () => Iterable<unknown>) {
+        if (name === slot) Array.from(effect())
+      },
+      register(config: typeof options, component: typeof render) {
+        options = config
+        render = component
+        return () => {}
+      },
+    },
+  })
+
+  const injected = options.inject()
+  const owner = { provider: { id: QODER_PROVIDER_ID, name: 'Qoder' }, selected: true }
+  const promo = { id: 'promo', name: 'Promo' }
+  assert.equal(render({ ...injected, ...owner, model: promo, placement: 'trigger' }), 'Promo')
+  assert.equal(reads, 0)
+
+  const unsubscribe = injected.rates.subscribe(() => {})
+  const unsubscribeSecond = injected.rates.subscribe(() => {})
+  await nextTurn()
+  assert.equal(reads, 1)
+  const option = render({ ...injected, ...owner, model: promo, placement: 'option' }) as Option
+  const result = (option.type as (props: Option['props']) => ReactElement)(option.props)
+  const [, visual] = result.props.children
+  const [previous, badge] = visual.props.children
+  assert.equal(previous.props.children[1].type, 'del')
+  assert.equal(previous.props.children[1].props.children, '0.5×')
+  assert.equal(badge.props.children, '0.1×')
+
+  const standard = render({ ...injected, ...owner, model: { id: 'standard', name: 'Standard' }, placement: 'option' }) as Option
+  const standardLabel = (standard.type as (props: Option['props']) => ReactElement)(standard.props)
+  assert.equal(standardLabel.props.children.join(''), 'Standard · 0.5×')
+  const free = render({ ...injected, ...owner, model: { id: 'free', name: 'Efficient' }, placement: 'option' }) as Option
+  const freeLabel = (free.type as (props: Option['props']) => ReactElement)(free.props)
+  assert.equal(freeLabel.props.children.join(''), 'Efficient · 免费')
+
+  // Background refresh revalidates without clearing the active snapshot to prevent UI flicker.
+  injected.rates.refresh()
+  assert.equal(injected.rates.getSnapshot().get('promo')?.priceFactor, 0.1)
+  await nextTurn()
+  assert.equal(reads, 2)
+  assert.equal(injected.rates.getSnapshot().get('promo')?.priceFactor, 0.1)
+
+  // Non-Qoder models preserve badges without injecting loose whitespace into the flex container.
+  const badged = render({
+    ...injected,
+    provider: { id: 'other', name: 'Other' },
+    selected: false,
+    model: { id: 'm1', name: 'Other Model', badge: { text: 'Beta', tone: 'neutral' } },
+    placement: 'trigger',
+  }) as ReactElement<{ children: [ReactElement<{ tone: string }>, ReactElement<{ children: string }>, null] }>
+  assert.equal(badged.props.children[0].props.tone, 'neutral')
+  assert.equal(badged.props.children[1].props.children, 'Other Model')
+  assert.equal(badged.props.children[2], null)
+
+  unsubscribeSecond()
+  unsubscribe()
+  assert.equal(injected.rates.getSnapshot().size, 0)
 })
 
 for (const [label, envelope] of [

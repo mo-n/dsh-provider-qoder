@@ -25,6 +25,8 @@ import { createSessionTierEvents } from './session-tier-events.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
 import { QoderSettingsNavIcon } from './QoderSettingsNavIcon.tsx'
 import { readQoderSettingsNamespace } from './settings-bootstrap.ts'
+import { QoderModelLabel, type ModelLabelOwner } from './QoderModelLabel.tsx'
+import { createModelRates } from './model-rates.ts'
 
 const localeNamespace = 'settings.qoderCredential'
 const settingsSectionId = 'dsh-provider-qoder'
@@ -32,6 +34,11 @@ const settingsSectionId = 'dsh-provider-qoder'
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     'settings.qoderCredential': QoderCredentialCopy
+  }
+
+  // The slot is optional on hosts older than the model-label extension.
+  interface SlotMap {
+    'conversation.input.model.label': { kind: 'single'; scope: 'session'; inline: true; owner: ModelLabelOwner }
   }
 }
 
@@ -119,6 +126,20 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
    */
   const activeLocale = (): string => ctx.locale.getLocale().active
 
+  ctx.slots.inject('conversation.input.model.label', function* () {
+    const rates = createModelRates(rpc)
+    yield ctx.remote.$on('llm/adapters-updated', rates.refresh)
+    yield ctx.slots.register({
+      name: 'conversation.input.model.label',
+      priority: 100,
+      locale: localeNamespace,
+      inject: () => ({
+        rates,
+        t,
+        resolveBadgeText: ctx.locale.resolveText.bind(ctx.locale),
+      }),
+    }, QoderModelLabel)
+  })
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
     name: 'conversation.input.dock', id: 'qoder-model-queue', order: 30,
     locale: localeNamespace,

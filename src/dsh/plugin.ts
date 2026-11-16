@@ -234,6 +234,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     region: () => resolveConfig().region,
     resolveTransport: () => runtime.transport,
     discoverModels,
+    readModels: () => catalog.models(),
     authorization,
     adapter,
     readQueue: sessionId => queueStatus.read(sessionId),
