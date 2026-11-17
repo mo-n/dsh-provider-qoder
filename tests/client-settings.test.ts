@@ -122,7 +122,9 @@ test('client registers the Qoder navigation icon only when the host declares its
   assert.match(String(icon.props.style.mask), /data:image\/svg\+xml,/u)
 })
 
-test('the model label slot shows a crossed-out original rate and a current-rate tag only in options', async () => {
+test('the model label slot renders rate badges in options and respects showModelRates setting', async () => {
+  let showModelRates = true
+  let settingsListener: (() => void) | undefined
   const context = bootstrapContext()
   const slot = 'conversation.input.model.label'
   let reads = 0
@@ -143,6 +145,16 @@ test('the model label slot shows a crossed-out original rate and a current-rate 
   let options!: { inject(): { rates: Store } }
   await plugin.apply({
     ...context,
+    configForms: {
+      get: () => ({
+        getSnapshot: () => ({ value: { modelsByRegion: {}, showModelRates } }),
+        subscribe: (listener: () => void) => {
+          settingsListener = listener
+          return () => {}
+        },
+        set: async () => true,
+      }),
+    },
     locale: { ...context.locale, bind: () => (key: string) => key === 'modelRateFree' ? '免费' : key, resolveText: (text: string) => text },
     remote: { ...context.remote, $on: () => () => {} },
     slots: {
@@ -200,6 +212,17 @@ test('the model label slot shows a crossed-out original rate and a current-rate 
   assert.equal(badged.props.children[0].props.tone, 'neutral')
   assert.equal(badged.props.children[1].props.children, 'Other Model')
   assert.equal(badged.props.children[2], null)
+
+  // Disabling showModelRates empties the active snapshot, falls back to plain names, and skips RPC reads.
+  showModelRates = false
+  settingsListener?.()
+  assert.equal(injected.rates.getSnapshot().size, 0)
+  const disabledOption = render({ ...injected, ...owner, model: promo, placement: 'option' }) as Option
+  const plainName = (disabledOption.type as (props: Option['props']) => string)(disabledOption.props)
+  assert.equal(plainName, 'Promo')
+  injected.rates.refresh()
+  await nextTurn()
+  assert.equal(reads, 2)
 
   unsubscribeSecond()
   unsubscribe()

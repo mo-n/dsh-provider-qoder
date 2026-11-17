@@ -41,6 +41,7 @@ export interface QoderModelSettingsSection {
   webSearchMode?: QoderWebSearchMode
   imageSearchEnabled?: boolean
   imageGenEnabled?: boolean
+  showModelRates?: boolean
 }
 
 export function regionOf(value: unknown): QoderRegion {

@@ -127,7 +127,8 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
   const activeLocale = (): string => ctx.locale.getLocale().active
 
   ctx.slots.inject('conversation.input.model.label', function* () {
-    const rates = createModelRates(rpc)
+    const rates = createModelRates(rpc, modelScope)
+    yield () => rates.dispose()
     yield ctx.remote.$on('llm/adapters-updated', rates.refresh)
     yield ctx.slots.register({
       name: 'conversation.input.model.label',
