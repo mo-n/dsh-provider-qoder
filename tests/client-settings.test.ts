@@ -7,9 +7,11 @@ import { runInNewContext } from 'node:vm'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { CSSProperties, ReactElement } from 'react'
 import type { ModelLabelOwner } from '../src/client/QoderModelLabel.tsx'
-import type { createModelRates } from '../src/client/model-rates.ts'
+import { createModelRates } from '../src/client/model-rates.ts'
+import { createQoderRpcCaller } from '../src/client/rpc-client.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
-import { nextTurn } from './helpers/timing.ts'
+import type { QoderRegion } from '../src/qoder/region.ts'
+import { deferred, nextTurn } from './helpers/timing.ts'
 
 const loadClientPlugin = async (send: typeof fetch = async (input) => {
   if (String(input).endsWith('/bootstrap')) {
@@ -122,21 +124,17 @@ test('client registers the Qoder navigation icon only when the host declares its
   assert.match(String(icon.props.style.mask), /data:image\/svg\+xml,/u)
 })
 
-test('the model label slot renders rate badges in options and respects showModelRates setting', async () => {
-  let showModelRates = true
-  let settingsListener: (() => void) | undefined
+test('the model label slot renders rates in Qoder options and preserves other provider badges', async (t) => {
   const context = bootstrapContext()
   const slot = 'conversation.input.model.label'
-  let reads = 0
   const plugin = await loadClientPlugin(async input => {
     if (String(input).endsWith('/bootstrap')) return Response.json({ ok: true, value: { settingsNamespace: 'provider-qoder' } })
     assert.equal(input, '/api/qoder-subscription/modelRates')
-    reads++
-    return Response.json({ ok: true, value: [
-      { id: 'standard', priceFactor: 0.5 },
+    return Response.json({ ok: true, value: { region: 'global', rates: [
+      { id: 'standard', priceFactor: 0.5, isFree: true },
       { id: 'promo', priceFactor: 0.1, originalPriceFactor: 0.5 },
       { id: 'free', priceFactor: 0, originalPriceFactor: 0.5 },
-    ] })
+    ] } })
   }, { useSyncExternalStore: (_subscribe: unknown, read: () => unknown) => read() })
 
   type Store = ReturnType<typeof createModelRates>
@@ -145,16 +143,6 @@ test('the model label slot renders rate badges in options and respects showModel
   let options!: { inject(): { rates: Store } }
   await plugin.apply({
     ...context,
-    configForms: {
-      get: () => ({
-        getSnapshot: () => ({ value: { modelsByRegion: {}, showModelRates } }),
-        subscribe: (listener: () => void) => {
-          settingsListener = listener
-          return () => {}
-        },
-        set: async () => true,
-      }),
-    },
     locale: { ...context.locale, bind: () => (key: string) => key === 'modelRateFree' ? '免费' : key, resolveText: (text: string) => text },
     remote: { ...context.remote, $on: () => () => {} },
     slots: {
@@ -172,36 +160,28 @@ test('the model label slot renders rate badges in options and respects showModel
   const injected = options.inject()
   const owner = { provider: { id: QODER_PROVIDER_ID, name: 'Qoder' }, selected: true }
   const promo = { id: 'promo', name: 'Promo' }
-  assert.equal(render({ ...injected, ...owner, model: promo, placement: 'trigger' }), 'Promo')
-  assert.equal(reads, 0)
+  const renderOption = (model: ModelLabelOwner['model']) => {
+    const option = render({ ...injected, ...owner, model, placement: 'option' }) as Option
+    return (option.type as (props: Option['props']) => string | ReactElement)(option.props)
+  }
 
-  const unsubscribe = injected.rates.subscribe(() => {})
-  const unsubscribeSecond = injected.rates.subscribe(() => {})
+  t.after(injected.rates.subscribe(() => {}))
   await nextTurn()
-  assert.equal(reads, 1)
-  const option = render({ ...injected, ...owner, model: promo, placement: 'option' }) as Option
-  const result = (option.type as (props: Option['props']) => ReactElement)(option.props)
-  const [, visual] = result.props.children
+  assert.equal(render({ ...injected, ...owner, model: promo, placement: 'trigger' }), 'Promo')
+  assert.equal(render({ ...injected, ...owner, model: promo, placement: 'menu' }), 'Promo')
+  const promotion = renderOption(promo) as ReactElement
+  const [, visual] = promotion.props.children
   const [previous, badge] = visual.props.children
   assert.equal(previous.props.children[1].type, 'del')
   assert.equal(previous.props.children[1].props.children, '0.5×')
   assert.equal(badge.props.children, '0.1×')
 
-  const standard = render({ ...injected, ...owner, model: { id: 'standard', name: 'Standard' }, placement: 'option' }) as Option
-  const standardLabel = (standard.type as (props: Option['props']) => ReactElement)(standard.props)
+  const standardLabel = renderOption({ id: 'standard', name: 'Standard' }) as ReactElement
   assert.equal(standardLabel.props.children.join(''), 'Standard · 0.5×')
-  const free = render({ ...injected, ...owner, model: { id: 'free', name: 'Efficient' }, placement: 'option' }) as Option
-  const freeLabel = (free.type as (props: Option['props']) => ReactElement)(free.props)
+  const freeLabel = renderOption({ id: 'free', name: 'Efficient' }) as ReactElement
   assert.equal(freeLabel.props.children.join(''), 'Efficient · 免费')
+  assert.equal(renderOption({ id: 'unknown', name: 'Unknown' }), 'Unknown')
 
-  // Background refresh revalidates without clearing the active snapshot to prevent UI flicker.
-  injected.rates.refresh()
-  assert.equal(injected.rates.getSnapshot().get('promo')?.priceFactor, 0.1)
-  await nextTurn()
-  assert.equal(reads, 2)
-  assert.equal(injected.rates.getSnapshot().get('promo')?.priceFactor, 0.1)
-
-  // Non-Qoder models preserve badges without injecting loose whitespace into the flex container.
   const badged = render({
     ...injected,
     provider: { id: 'other', name: 'Other' },
@@ -212,21 +192,120 @@ test('the model label slot renders rate badges in options and respects showModel
   assert.equal(badged.props.children[0].props.tone, 'neutral')
   assert.equal(badged.props.children[1].props.children, 'Other Model')
   assert.equal(badged.props.children[2], null)
+})
 
-  // Disabling showModelRates empties the active snapshot, falls back to plain names, and skips RPC reads.
-  showModelRates = false
-  settingsListener?.()
-  assert.equal(injected.rates.getSnapshot().size, 0)
-  const disabledOption = render({ ...injected, ...owner, model: promo, placement: 'option' }) as Option
-  const plainName = (disabledOption.type as (props: Option['props']) => string)(disabledOption.props)
-  assert.equal(plainName, 'Promo')
-  injected.rates.refresh()
+function modelRatesFixture(settingsReady = true) {
+  const settings: { region: QoderRegion; showModelRates: boolean } = { region: 'global', showModelRates: true }
+  let settingsChanged!: () => void
+  const pending: Array<{ signal: AbortSignal; response: ReturnType<typeof deferred<Response>> }> = []
+  const rpc = createQoderRpcCaller({ fetch: (_input, init) => {
+    assert.ok(init?.signal)
+    const response = deferred<Response>()
+    pending.push({ signal: init.signal, response })
+    return response.promise
+  } })
+  const rates = createModelRates(rpc, {
+    getSnapshot: () => ({ value: settingsReady ? settings : undefined }),
+    subscribe: listener => { settingsChanged = listener; return () => {} },
+  })
+  const reply = (index: number, serviceRegion: QoderRegion, priceFactor: number) => {
+    pending[index].response.resolve(Response.json({
+      ok: true, value: { region: serviceRegion, rates: [{ id: 'shared', priceFactor }] },
+    }))
+  }
+  const loadSettings = () => {
+    settingsReady = true
+    settingsChanged()
+  }
+  return { settings, rates, pending, reply, settingsChanged, loadSettings }
+}
+
+test('visible model options share rates and refresh them while enabled', async (t) => {
+  const { settings, rates, pending, reply, settingsChanged, loadSettings } = modelRatesFixture(false)
+  t.after(rates.dispose)
+  const unsubscribeFirst = rates.subscribe(() => {})
+  const unsubscribeSecond = rates.subscribe(() => {})
+  rates.refresh()
+  assert.equal(pending.length, 0)
+  settings.showModelRates = false
+  loadSettings()
+  assert.equal(pending.length, 0)
+
+  settings.showModelRates = true
+  settingsChanged()
+  settingsChanged() // A settings update that leaves the rate preference and region unchanged.
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].signal.aborted, false)
+  reply(0, 'global', 0.1)
   await nextTurn()
-  assert.equal(reads, 2)
+  assert.equal(rates.getSnapshot().get('shared')?.priceFactor, 0.1)
 
+  unsubscribeFirst()
+  rates.refresh()
+  assert.equal(rates.getSnapshot().get('shared')?.priceFactor, 0.1)
+  reply(1, 'global', 0.2)
+  await nextTurn()
+  assert.equal(rates.getSnapshot().get('shared')?.priceFactor, 0.2)
+
+  rates.refresh()
+  settings.showModelRates = false
+  settingsChanged()
+  assert.equal(pending[2].signal.aborted, true)
+  assert.equal(rates.getSnapshot().size, 0)
+  rates.refresh()
+  reply(2, 'global', 0.3)
+  await nextTurn()
+  assert.equal(pending.length, 3)
+  assert.equal(rates.getSnapshot().size, 0)
+
+  settings.showModelRates = true
+  settingsChanged()
+  reply(3, 'global', 0.4)
+  await nextTurn()
+  assert.equal(rates.getSnapshot().get('shared')?.priceFactor, 0.4)
   unsubscribeSecond()
+  assert.equal(rates.getSnapshot().size, 0)
+})
+
+test('model rates discard old catalog data when the Qoder service region changes', async (t) => {
+  const { settings, rates, pending, reply, settingsChanged } = modelRatesFixture()
+  t.after(rates.dispose)
+
+  const unsubscribe = rates.subscribe(() => {})
+  reply(0, 'global', 0.1)
+  await nextTurn()
+  assert.equal(rates.getSnapshot().get('shared')?.priceFactor, 0.1)
+
+  rates.refresh()
+  settings.region = 'china'
+  settingsChanged()
+  assert.equal(pending[1].signal.aborted, true)
+  assert.equal(rates.getSnapshot().size, 0)
+  reply(1, 'global', 0.2)
+  pending[2].response.resolve(new Response(null, { status: 503 }))
+  await nextTurn()
+  assert.equal(rates.getSnapshot().size, 0)
+
+  rates.refresh()
+  reply(3, 'global', 0.3) // Host has not applied the new region yet.
+  await nextTurn()
+  assert.equal(rates.getSnapshot().size, 0)
+  rates.refresh()
+  reply(4, 'china', 2)
+  await nextTurn()
+  assert.equal(rates.getSnapshot().get('shared')?.priceFactor, 2)
+
+  rates.refresh()
+  reply(5, 'global', 0.4) // Host changes region before the settings update arrives.
+  await nextTurn()
+  assert.equal(rates.getSnapshot().size, 0)
+  settings.region = 'global'
+  settingsChanged()
+  reply(6, 'global', 0.4)
+  await nextTurn()
+  assert.equal(rates.getSnapshot().get('shared')?.priceFactor, 0.4)
+
   unsubscribe()
-  assert.equal(injected.rates.getSnapshot().size, 0)
 })
 
 for (const [label, envelope] of [

@@ -25,7 +25,7 @@ import { QoderLlmError } from '../src/qoder/errors.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
-import { qoderRpcPath, type QoderRpcResult, type QoderModelRate } from '../src/dsh/rpc-channel.ts'
+import { qoderRpcPath, type QoderRpcOutput, type QoderRpcResult } from '../src/dsh/rpc-channel.ts'
 
 interface MemorySection {
   value: plugin.Config
@@ -382,14 +382,15 @@ async function modelRuntime(config: plugin.Config) {
     return () => {}
   } } } as Context['connection'])
   applyWithSettings(ctx, config)
-  const readRate = async () => {
+  const readRates = async () => {
     assert.ok(rateRoute)
     const response = await rateRoute.fetch(new Request(`http://127.0.0.1${ratePath}`, { method: 'POST' }))
-    const result = await response.json() as QoderRpcResult<readonly QoderModelRate[]>
+    const result = await response.json() as QoderRpcResult<QoderRpcOutput<'modelRates'>>
     assert.ok(result.ok)
-    return result.value.find(model => model.id === 'chosen')
+    return result.value
   }
-  return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace, readRate }
+  const readRate = async () => (await readRates()).rates.find(model => model.id === 'chosen')
+  return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace, readRate, readRates }
 }
 
 /** Let background settings writes and their revision retries settle. */
@@ -425,7 +426,7 @@ test('automatic discovery persists rates without changing selection and refreshe
   const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => advertised)
   const chosen = { id: 'chosen', name: 'Chosen name', contextWindow: 100_000, maxTokens: 4_096, priceFactor: 1 }
   const china = [{ id: 'china-model', name: 'China model', priceFactor: 7 }]
-  const { ctx, settings, ns, readRate } = await modelRuntime({ modelsByRegion: { global: [chosen], china } })
+  const { ctx, settings, ns, readRate, readRates } = await modelRuntime({ modelsByRegion: { global: [chosen], china } })
   const stored = () => (memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion!
 
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
@@ -468,6 +469,10 @@ test('automatic discovery persists rates without changing selection and refreshe
   assert.equal(discovery.mock.callCount(), 4)
   assert.equal(settings.writes.length, 3)
   assert.deepEqual(stored().china, normalizedCatalog(china))
+  await ctx.settings.update(ns, { region: 'china' })
+  await drain()
+  assert.deepEqual(await readRates(), { region: 'china', rates: [{ id: 'china-model', priceFactor: 7 }] })
+  assert.equal(discovery.mock.callCount(), 4)
 })
 
 test('automatic discovery returns the catalog before settings persistence finishes', async (t) => {

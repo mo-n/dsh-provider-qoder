@@ -10,6 +10,7 @@ Web profile 配置文件：`~/.dsh/profiles/web/cordis.patch.yml`。使用其他
 - id: provider-qoder
   name: dsh-provider-qoder
   config:
+    showModelRates: true
     modelTransport: legacy
     requestCompression: false
     requestCompressionMinChars: 4096
@@ -24,6 +25,7 @@ Web profile 配置文件：`~/.dsh/profiles/web/cordis.patch.yml`。使用其他
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
+| `showModelRates` | `true` | 在会话模型下拉列表中显示计费倍率和促销标签。设为 `false` 可隐藏。需要 DSH `0.2.1-alpha.5` 或更高版本。 |
 | `modelTransport` | `legacy` | 模型传输渠道，支持 `legacy` 和 `http` |
 | `requestCompression` | `false` | 设置为 `true` 开启 Zstd 请求体压缩 |
 | `requestCompressionMinChars` | `4096` | 触发压缩尝试的请求体字符数阈值 |
@@ -34,7 +36,6 @@ Web profile 配置文件：`~/.dsh/profiles/web/cordis.patch.yml`。使用其他
 | `preserveThinking` | `true` | 请求是否携带历史推理内容 |
 
 - 时间单位均为毫秒，要求正整数；排队上限最大为 `2147483647`。`0` 不表示无限等待。
-- `preserveThinking` 与 `requestCompression` 使用布尔值 `true` / `false`，不加引号。
 
 ## 模型传输渠道
 

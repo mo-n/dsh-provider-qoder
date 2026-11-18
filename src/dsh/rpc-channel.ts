@@ -45,7 +45,7 @@ export interface QoderRpcContract {
   bootstrap: { input: Record<string, never>; output: { settingsNamespace: string } }
   account: { input: { force?: boolean }; output: QoderAccountInfo }
   models: { input: Record<string, never>; output: readonly QoderCatalogModel[] }
-  modelRates: { input: Record<string, never>; output: readonly QoderModelRate[] }
+  modelRates: { input: Record<string, never>; output: { region: QoderRegion; rates: readonly QoderModelRate[] } }
   queue: { input: { sessionId: string }; output: QoderQueueSnapshot[] }
   conversationStatus: {
     input: { sessionId: string; dismissedRefusalId?: string }
