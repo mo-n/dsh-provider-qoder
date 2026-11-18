@@ -24,6 +24,7 @@ export interface Config {
   webSearchMode?: QoderWebSearchMode
   imageSearchEnabled?: boolean
   imageGenEnabled?: boolean
+  showModelRates?: boolean
   requestCompression?: boolean
   requestCompressionMinChars?: number
   requestCompressionLevel?: number
@@ -70,6 +71,8 @@ export const Config: z<Config> = z.object({
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
   imageSearchEnabled: z.boolean().default(true),
   imageGenEnabled: z.boolean().default(true),
+  showModelRates: z.boolean().default(true)
+    .description('Display billing rates and promotion tags in model options; false hides them'),
   requestCompression: z.boolean().default(false),
   requestCompressionMinChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(defaultRequestCompressionMinChars),
   requestCompressionLevel: z.number().step(1).min(1).max(22).default(defaultRequestCompressionLevel),

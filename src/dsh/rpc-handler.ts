@@ -18,6 +18,7 @@ interface QoderRpcHandlerOptions {
   region(): QoderRegion
   resolveTransport(): Pick<QoderTransport, 'readAccount'>
   discoverModels(signal?: AbortSignal): Promise<readonly QoderCatalogModel[]>
+  readModels(): { region: QoderRegion; models: readonly QoderCatalogModel[] }
   authorization: Pick<QoderBrowserAuthorizationManager, 'begin' | 'cancel' | 'select' | 'describe'>
   adapter: Pick<QoderAdapter, 'setSessionTier' | 'readSessionTier'>
   readQueue: QoderQueueStatusStore['read']
@@ -131,6 +132,16 @@ export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpc
 
     if (endpoint === 'models') {
       return await executeRpc(endpoint, 'discover Qoder models', () => discoverModels(signal), signal, logger)
+    }
+
+    if (endpoint === 'modelRates') {
+      return await executeRpc(endpoint, 'read Qoder model rates', async () => {
+        const { region, models } = options.readModels()
+        const rates = models.map(({ id, priceFactor, originalPriceFactor, isFree }) => ({
+          id, priceFactor, originalPriceFactor, isFree,
+        }))
+        return { region, rates }
+      }, signal, logger)
     }
 
     if (endpoint === 'sessionTier' || endpoint === 'readSessionTier') {

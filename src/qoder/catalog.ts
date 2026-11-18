@@ -255,28 +255,6 @@ export function formatRateFactor(value: number): string {
 }
 
 /**
- * Format model price factor / rate string.
- * - Price factor 0, or free models without a price factor: '免费' or 'Free'
- * - Promotional models: '0.5x（原 1x）' or '0.5x (was 1x)'
- * - Standard models: '1x'
- */
-export function formatModelRate(
-  model: Pick<QoderCatalogModel, 'priceFactor' | 'originalPriceFactor' | 'isFree'>,
-  isZh = true,
-): string | undefined {
-  if (model.priceFactor === 0 || (model.priceFactor === undefined && model.isFree)) {
-    return isZh ? '免费' : 'Free'
-  }
-  if (model.priceFactor === undefined) return undefined
-  const current = `${formatRateFactor(model.priceFactor)}x`
-  if (model.originalPriceFactor !== undefined && model.originalPriceFactor > model.priceFactor) {
-    const orig = `${formatRateFactor(model.originalPriceFactor)}x`
-    return isZh ? `${current}（原 ${orig}）` : `${current} (was ${orig})`
-  }
-  return current
-}
-
-/**
  * The provider-advertised context tier the subscriber selected, when the
  * provider still advertises that tier with a usable capacity.
  */

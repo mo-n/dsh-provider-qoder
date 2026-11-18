@@ -8,7 +8,6 @@ import {
   contextTiersOf,
   effectiveContextWindow,
   formatContextTokens,
-  formatModelRate,
   hasSameQoderDiscoveryMetadata,
   mergeQoderDiscoveryMetadata,
   normalizeQoderModels,
@@ -427,20 +426,6 @@ test('formatContextTokens formats thousands and millions cleanly', () => {
   assert.equal(formatContextTokens(1_000_000), '1M')
   assert.equal(formatContextTokens(1_500_000), '1.5M')
   assert.equal(formatContextTokens(500), '500')
-})
-
-test('formatModelRate formats free, promotional, and standard rates in zh and en', () => {
-  assert.equal(formatModelRate({ isFree: true }, true), '免费')
-  assert.equal(formatModelRate({ isFree: true }, false), 'Free')
-  assert.equal(formatModelRate({ priceFactor: 0 }, true), '免费')
-  assert.equal(formatModelRate({ priceFactor: 0 }, false), 'Free')
-  // Remembered catalogs may still contain conflicting metadata from older versions.
-  assert.equal(formatModelRate({ priceFactor: 0.1, isFree: true }, true), '0.1x')
-  assert.equal(formatModelRate({ priceFactor: 1 }, true), '1x')
-  assert.equal(formatModelRate({ priceFactor: 1.6 }, true), '1.6x')
-  assert.equal(formatModelRate({ priceFactor: 0.5, originalPriceFactor: 1 }, true), '0.5x（原 1x）')
-  assert.equal(formatModelRate({ priceFactor: 0.5, originalPriceFactor: 1 }, false), '0.5x (was 1x)')
-  assert.equal(formatModelRate({}), undefined)
 })
 
 test('mergeQoderDiscoveryMetadata detaches deeply frozen models with contextOptions before Config validation', () => {

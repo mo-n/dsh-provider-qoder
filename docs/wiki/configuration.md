@@ -10,6 +10,7 @@ Add options under the existing Qoder entry's `config`, preserving other fields:
 - id: provider-qoder
   name: dsh-provider-qoder
   config:
+    showModelRates: true
     modelTransport: legacy
     requestCompression: false
     requestCompressionMinChars: 4096
@@ -24,6 +25,7 @@ These options are configured through YAML and have no editor in the plugin setti
 
 | Field | Default | Description |
 | --- | --- | --- |
+| `showModelRates` | `true` | Show billing rates and promotion tags in the conversation model dropdown. Set to `false` to hide them. Requires DSH `0.2.1-alpha.5` or later. |
 | `modelTransport` | `legacy` | Model transport channel, supports `legacy` and `http` |
 | `requestCompression` | `false` | Set to `true` to enable Zstd request-body compression |
 | `requestCompressionMinChars` | `4096` | Character threshold for attempting request-body compression |
@@ -34,7 +36,6 @@ These options are configured through YAML and have no editor in the plugin setti
 | `preserveThinking` | `true` | Whether requests include historical reasoning content |
 
 - Time values are positive integers in milliseconds; the queue wait limit must not exceed `2147483647`. `0` does not mean unlimited waiting.
-- Use unquoted booleans `true` / `false` for `preserveThinking` and `requestCompression`.
 
 ## Model transport
 

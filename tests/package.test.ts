@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Context, Service } from '@deepseek-ai/cordis'
+import type { ConnectionFetchRoute } from '@deepseek-ai/dsh-client-connection'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type {
   CredentialInfo,
@@ -24,6 +25,7 @@ import { QoderLlmError } from '../src/qoder/errors.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
+import { qoderRpcPath, type QoderRpcOutput, type QoderRpcResult } from '../src/dsh/rpc-channel.ts'
 
 interface MemorySection {
   value: plugin.Config
@@ -373,8 +375,22 @@ async function modelRuntime(config: plugin.Config) {
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(RecordingSettings).await()
+  const ratePath = qoderRpcPath('modelRates')
+  let rateRoute: ConnectionFetchRoute | undefined
+  ctx.provide('connection', { fetch: { register(route: ConnectionFetchRoute) {
+    if (route.path === ratePath) rateRoute = route
+    return () => {}
+  } } } as Context['connection'])
   applyWithSettings(ctx, config)
-  return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace }
+  const readRates = async () => {
+    assert.ok(rateRoute)
+    const response = await rateRoute.fetch(new Request(`http://127.0.0.1${ratePath}`, { method: 'POST' }))
+    const result = await response.json() as QoderRpcResult<QoderRpcOutput<'modelRates'>>
+    assert.ok(result.ok)
+    return result.value
+  }
+  const readRate = async () => (await readRates()).rates.find(model => model.id === 'chosen')
+  return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace, readRate, readRates }
 }
 
 /** Let background settings writes and their revision retries settle. */
@@ -404,20 +420,21 @@ test('browser credential updates rediscover models without waiting for a model-l
 test('automatic discovery persists rates without changing selection and refreshes after five minutes', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 })
   let advertised: QoderCatalogModel[] = [
-    { id: 'chosen', name: 'Remote name', priceFactor: 2, contextWindow: 200_000, maxTokens: 32_768 },
+    { id: 'chosen', name: 'Remote name', priceFactor: 2, originalPriceFactor: 3, contextWindow: 200_000, maxTokens: 32_768 },
     { id: 'disabled', name: 'Disabled', priceFactor: 8 },
   ]
   const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => advertised)
   const chosen = { id: 'chosen', name: 'Chosen name', contextWindow: 100_000, maxTokens: 4_096, priceFactor: 1 }
   const china = [{ id: 'china-model', name: 'China model', priceFactor: 7 }]
-  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: { global: [chosen], china } })
+  const { ctx, settings, ns, readRate, readRates } = await modelRuntime({ modelsByRegion: { global: [chosen], china } })
   const stored = () => (memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion!
 
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
-    ['chosen', 'Chosen name （2x）'],
+    ['chosen', 'Chosen name'],
   ])
+  assert.deepEqual(await readRate(), { id: 'chosen', priceFactor: 2, originalPriceFactor: 3 })
   await drain()
-  assert.deepEqual(stored().global, normalizedCatalog([{ ...chosen, priceFactor: 2 }]))
+  assert.deepEqual(stored().global, normalizedCatalog([{ ...chosen, priceFactor: 2, originalPriceFactor: 3 }]))
   assert.deepEqual(stored().china, normalizedCatalog(china))
   assert.equal((settings.writes[0] as plugin.Config).modelsByRegion?.global?.[0].priceFactor, 2)
   assert.equal(settings.writes.length, 1)
@@ -431,15 +448,19 @@ test('automatic discovery persists rates without changing selection and refreshe
   advertised = [{ ...advertised[0], priceFactor: 0 }]
   // The five-minute entry is stale but still accepted for the synchronous
   // model switch; the new discovery is revalidated in the background.
-  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /2x/u)
+  assert.equal((await readRate())?.priceFactor, 2)
+  assert.equal(discovery.mock.callCount(), 1)
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
   await drain()
   assert.equal(stored().global?.[0].priceFactor, 0)
 
   t.mock.timers.tick(300_000)
   advertised = [{ id: 'chosen', name: 'Remote name', contextWindow: 200_000 }]
-  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
+  assert.equal((await readRate())?.priceFactor, 0)
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
   await drain()
   assert.equal((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, chosen.name)
+  assert.equal((await readRate())?.priceFactor, undefined)
   assert.equal(Object.hasOwn(stored().global![0], 'priceFactor'), false)
   assert.equal(settings.writes.length, 3)
   t.mock.timers.tick(300_000)
@@ -448,6 +469,10 @@ test('automatic discovery persists rates without changing selection and refreshe
   assert.equal(discovery.mock.callCount(), 4)
   assert.equal(settings.writes.length, 3)
   assert.deepEqual(stored().china, normalizedCatalog(china))
+  await ctx.settings.update(ns, { region: 'china' })
+  await drain()
+  assert.deepEqual(await readRates(), { region: 'china', rates: [{ id: 'china-model', priceFactor: 7 }] })
+  assert.equal(discovery.mock.callCount(), 4)
 })
 
 test('automatic discovery returns the catalog before settings persistence finishes', async (t) => {
@@ -455,7 +480,7 @@ test('automatic discovery returns the catalog before settings persistence finish
   t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
     { id: 'chosen', name: 'Remote name', priceFactor: 3 },
   ])
-  const { ctx, settings } = await modelRuntime({ modelsByRegion: {
+  const { ctx, settings, readRate } = await modelRuntime({ modelsByRegion: {
     global: [{ id: 'chosen', name: 'Chosen name', priceFactor: 1 }],
   } })
   let release!: () => void
@@ -475,7 +500,8 @@ test('automatic discovery returns the catalog before settings persistence finish
   await started
   await new Promise<void>(resolve => setImmediate(resolve))
   assert.equal(listed, true)
-  assert.match((await reading)[0].name, /3x/u)
+  assert.equal((await reading)[0].name, 'Chosen name')
+  assert.equal((await readRate())?.priceFactor, 3)
   release()
   await drain()
 })
@@ -511,10 +537,11 @@ test('automatic discovery and settings persistence failures remain advisory', as
     return [{ id: 'chosen', name: 'Chosen', priceFactor: 3 }]
   })
   const chosen = { id: 'chosen', name: 'Chosen', priceFactor: 1 }
-  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: { global: [chosen] } })
+  const { ctx, settings, ns, readRate } = await modelRuntime({ modelsByRegion: { global: [chosen] } })
   settings.onPersist = async () => { throw new Error('storage unavailable') }
 
-  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal((await readRate())?.priceFactor, 3)
   await drain()
   assert.equal(settings.writes.length, 1)
   assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
@@ -524,7 +551,8 @@ test('automatic discovery and settings persistence failures remain advisory', as
   assert.equal(settings.writes.length, 1)
   offline = true
   t.mock.timers.tick(300_000)
-  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal((await readRate())?.priceFactor, 3)
   await drain()
   assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
   assert.equal(settings.writes.length, 1)
@@ -581,7 +609,7 @@ test('automatic discovery cannot overwrite a settings save already awaiting pers
   assert.deepEqual(stored.modelsByRegion?.china, normalizedCatalog(china))
   assert.equal(stored.webSearchMode, 'disabled')
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => [model.id, model.name]), [
-    ['chosen', 'User renamed （4x）'],
+    ['chosen', 'User renamed'],
   ])
 })
 
@@ -826,14 +854,14 @@ test('explicit discovery retains fresh metadata when storage fails and settings 
   t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
     { id: 'chosen', name: 'Remote name', priceFactor: 4, supportsImages: true },
   ])
-  const { ctx, settings, ns } = await modelRuntime({ modelsByRegion: {
+  const { ctx, settings, ns, readRate } = await modelRuntime({ modelsByRegion: {
     global: [{ id: 'chosen', name: 'User name', priceFactor: 1 }],
   } })
   settings.onPersist = async () => { throw new Error('Storage unavailable') }
   const discovered = await ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID })
   assert.equal(discovered.length, 1)
   await drain()
-  assert.match((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
+  assert.equal((await readRate())?.priceFactor, 4)
   assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
   settings.onPersist = undefined
   await ctx.settings.update(ns, { webSearchMode: 'always' })

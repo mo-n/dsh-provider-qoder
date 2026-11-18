@@ -160,7 +160,7 @@ test('QoderAdapter resolves only explicitly advertised reasoning efforts', async
   })
 })
 
-test('QoderAdapter appends the advertised price factor to model display names', async () => {
+test('QoderAdapter keeps billing rates out of model display names', async () => {
   const adapter = testAdapter({
     resolvePat: () => Promise.resolve('pt-token'),
     models: [
@@ -173,12 +173,12 @@ test('QoderAdapter appends the advertised price factor to model display names', 
   })
 
   assert.deepEqual((await adapter.listModels(QODER_PROVIDER_ID)).map(model => model.name), [
-    'Priced （1.6x）',
-    'Free （免费）',
-    'Discounted （0.5x（原 1x））',
+    'Priced',
+    'Free',
+    'Discounted',
     'Plain',
   ])
-  assert.equal((await adapter.resolveModel(QODER_PROVIDER_ID, 'priced')).name, 'Priced （1.6x）')
+  assert.equal((await adapter.resolveModel(QODER_PROVIDER_ID, 'priced')).name, 'Priced')
 })
 
 test('disabled reasoning does not expose an effort default that DSH would automatically select', async () => {

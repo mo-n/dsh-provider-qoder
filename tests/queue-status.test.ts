@@ -114,7 +114,7 @@ test('a refusal survives a hidden tab and clears on the poll after toast dismiss
   const refusals = new QoderModelRefusals()
   const unexpected = () => assert.fail('conversation status should not need other dependencies')
   const handle = createQoderRpcHandler({
-    region: () => 'global', resolveTransport: unexpected, discoverModels: unexpected,
+    region: () => 'global', resolveTransport: unexpected, discoverModels: unexpected, readModels: unexpected,
     authorization: { begin: unexpected, cancel: unexpected, select: unexpected, describe: unexpected },
     adapter: { setSessionTier: unexpected, readSessionTier: unexpected },
     restoreSession: unexpected, readQueue: () => [],

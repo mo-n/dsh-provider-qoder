@@ -5,6 +5,7 @@ import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { QODER_PROVIDER_ID } from '../src/dsh/provider.ts'
 import type { QoderTransport } from '../src/qoder/transport/index.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
+import { nextTurn } from './helpers/timing.ts'
 
 function transport(discoverModels: () => Promise<readonly QoderCatalogModel[]>): QoderTransport {
   return { discoverModels } as QoderTransport
@@ -48,10 +49,11 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
   const resolved = await adapter.resolveModel(QODER_PROVIDER_ID, 'chosen')
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
   assert.equal(resolved.reasoning?.efforts[0].id, 'high')
-  assert.match(resolved.name, /4x/u)
+  assert.equal(catalog.models()[0].priceFactor, 4)
   complete(old)
-  assert.match((await pending)[0].name, /2x/u)
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
+  assert.deepEqual((await pending)[0].inputModalities, ['text'])
+  await nextTurn()
+  assert.equal(catalog.models()[0].priceFactor, 4)
   assert.equal(calls, 2)
   assert.deepEqual(published, [old, fresh])
 })
@@ -65,22 +67,24 @@ test('model reads share discovery, cache for five minutes, and preserve enabled 
     return new Promise(resolve => { complete = resolve })
   })
   const published: Array<readonly QoderCatalogModel[]> = []
-  const adapter = new QoderAdapter({
+  const catalog = new QoderCatalogLifecycle({
     resolveTransport: () => remote,
-    models: [{ id: 'chosen', name: 'Chosen' }],
-    onModelsDiscovered: (source, models) => {
+    region: () => 'global',
+    configuredModels: () => [{ id: 'chosen', name: 'Chosen' }],
+    onDiscovered: (source, models) => {
       assert.equal(source, remote)
       published.push(models)
     },
   })
+  const adapter = new QoderAdapter({ resolveTransport: () => remote, catalog })
   const first = adapter.listModels(QODER_PROVIDER_ID)
   const concurrent = adapter.listModels(QODER_PROVIDER_ID)
   await Promise.resolve()
   assert.equal(calls, 1)
   complete([{ id: 'chosen', name: 'Chosen', priceFactor: 2 }, { id: 'disabled', name: 'Disabled' }])
-  assert.deepEqual((await first).map(model => model.id), ['chosen'])
-  assert.deepEqual(await concurrent, await first)
-  assert.match((await adapter.resolveModel(QODER_PROVIDER_ID, 'chosen')).name, /2x/u)
+  const initialModels = await first
+  assert.deepEqual(initialModels.map(model => model.id), ['chosen'])
+  assert.deepEqual(await concurrent, initialModels)
   t.mock.timers.tick(299999)
   await adapter.listModels(QODER_PROVIDER_ID)
   assert.equal(calls, 1)
@@ -90,10 +94,11 @@ test('model reads share discovery, cache for five minutes, and preserve enabled 
   assert.equal(calls, 2)
   // The accepted discovery remains usable while the expired entry is
   // revalidated. Model selection must not wait for this network read.
-  assert.match((await refreshed)[0].name, /2x/u)
+  assert.deepEqual(await withDeadline(refreshed, 'model read waited for revalidation'), initialModels)
+  assert.equal(catalog.models()[0].priceFactor, 2)
   complete([{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
-  await Promise.resolve()
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  await nextTurn()
+  assert.equal(catalog.models()[0].priceFactor, 3)
   assert.deepEqual(published.map(models => models[0].priceFactor), [2, 3])
 })
 
@@ -113,17 +118,21 @@ test('failed refresh retains metadata and a changed transport ignores the old in
   await adapter.listModels(QODER_PROVIDER_ID)
   fail = true
   t.mock.timers.tick(300000)
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /2x/u)
+  await adapter.listModels(QODER_PROVIDER_ID)
+  await nextTurn()
+  assert.equal(catalog.models()[0].priceFactor, 2)
   let complete!: (models: readonly QoderCatalogModel[]) => void
   active = transport(() => new Promise(resolve => { complete = resolve }))
   const stale = adapter.listModels(QODER_PROVIDER_ID)
   await Promise.resolve()
-  active = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 4 }])
+  active = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 4, supportsImages: true }])
   const fresh = catalog.discover()
-  complete([{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
-  assert.match((await stale)[0].name, /2x/u)
+  const staleModels = await withDeadline(stale, 'model read waited for the old transport')
+  assert.deepEqual(staleModels[0].inputModalities, ['text'])
   await fresh
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /4x/u)
+  complete([{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
+  await nextTurn()
+  assert.equal(catalog.models()[0].priceFactor, 4)
 })
 
 test('a replaced transport cannot publish its late discovery', async () => {
@@ -137,42 +146,47 @@ test('a replaced transport cannot publish its late discovery', async () => {
   })
   const pending = adapter.listModels(QODER_PROVIDER_ID)
   await Promise.resolve()
-  active = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 4 }])
+  active = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 4, supportsImages: true }])
   complete([{ id: 'chosen', name: 'Chosen', priceFactor: 2 }])
-  assert.match((await pending)[0].name, /4x/u)
+  assert.deepEqual((await pending)[0].inputModalities, ['text', 'image'])
   assert.deepEqual(published, [4])
 })
 
 test('a failed discovery notification does not discard fresh runtime metadata', async () => {
   let notifications = 0
   const remote = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 0 }])
-  const adapter = new QoderAdapter({
+  const catalog = new QoderCatalogLifecycle({
     resolveTransport: () => remote,
-    models: [{ id: 'chosen', name: 'Chosen', priceFactor: 2 }],
-    onModelsDiscovered: async () => {
+    region: () => 'global',
+    configuredModels: () => [{ id: 'chosen', name: 'Chosen', priceFactor: 2 }],
+    onDiscovered: async () => {
       notifications++
       throw new Error('settings unavailable')
     },
   })
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /免费/u)
+  const adapter = new QoderAdapter({ resolveTransport: () => remote, catalog })
+  await adapter.listModels(QODER_PROVIDER_ID)
+  await adapter.listModels(QODER_PROVIDER_ID)
+  assert.equal(catalog.models()[0].priceFactor, 0)
   assert.equal(notifications, 1)
 })
 
 test('catalog reads do not wait for a pending discovery notification', async () => {
-  const remote = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 3 }])
+  const remote = transport(async () => [{ id: 'chosen', name: 'Chosen', priceFactor: 3, supportsImages: true }])
   let notified!: () => void
   const notificationStarted = new Promise<void>(resolve => { notified = resolve })
-  const adapter = new QoderAdapter({
+  const catalog = new QoderCatalogLifecycle({
     resolveTransport: () => remote,
-    models: [{ id: 'chosen', name: 'Chosen', priceFactor: 1 }],
-    onModelsDiscovered: () => new Promise<void>(() => { notified() }),
+    region: () => 'global',
+    configuredModels: () => [{ id: 'chosen', name: 'Chosen', priceFactor: 1 }],
+    onDiscovered: () => new Promise<void>(() => { notified() }),
   })
+  const adapter = new QoderAdapter({ resolveTransport: () => remote, catalog })
   const models = await withDeadline(
     adapter.listModels(QODER_PROVIDER_ID),
     'catalog read waited for the discovery notification',
   )
   await notificationStarted
-  assert.match(models[0].name, /3x/u)
-  assert.match((await adapter.listModels(QODER_PROVIDER_ID))[0].name, /3x/u)
+  assert.deepEqual(models[0].inputModalities, ['text', 'image'])
+  assert.equal(catalog.models()[0].priceFactor, 3)
 })

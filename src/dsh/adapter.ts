@@ -15,7 +15,6 @@ import {
   resolveContextTier,
   defaultModels,
   effectiveContextWindow,
-  formatModelRate,
   type QoderCatalogModel,
 } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
@@ -56,13 +55,10 @@ export interface QoderAdapterOptions {
 }
 
 function modelInfo(provider: string, model: QoderCatalogModel): LlmModelInfo {
-  const rate = formatModelRate(model, true)
   return {
     provider,
     id: model.id,
-    name: rate === undefined
-      ? model.name
-      : `${model.name} （${rate}）`,
+    name: model.name,
     description: model.description,
     inputModalities: model.supportsImages === true ? ['text', 'image'] : ['text'],
   }
