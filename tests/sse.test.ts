@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
+import { parseModelServerSse } from '../src/qoder/transport/wire/model-server-sse.ts'
 import { parseQoderSse } from '../src/qoder/transport/wire/sse.ts'
 
 function streamOf(lines: readonly string[]): ReadableStream<Uint8Array> {
@@ -149,6 +150,90 @@ test('parseQoderSse assembles interleaved parallel tool calls', async () => {
   ])
   assert.equal((chunks.at(-1) as { reason: { kind: string } }).reason.kind, 'tool-calls')
 })
+
+function toolDelta(index: number | undefined, id: string | undefined, name: string | undefined, args?: string) {
+  return { index, id, function: { name, arguments: args } }
+}
+
+function toolFrame(...toolCalls: ReturnType<typeof toolDelta>[]) {
+  return { choices: [{ delta: { tool_calls: toolCalls } }] }
+}
+
+const toolFinish = { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }
+
+test('both SSE transports preserve calls when a named start reuses an index', async () => {
+  const frames = [
+    toolFrame(toolDelta(1, 'call-other', 'ping', '{}')),
+    toolFrame(toolDelta(0, 'toolu_bdrk_a', 'read', '{"path":')),
+    toolFrame(toolDelta(0, 'toolu_bdrk_a', 'read', '"a"}')),
+    toolFrame(toolDelta(0, 'toolu_bdrk_b', 'read', '{"path":')),
+    toolFrame(toolDelta(0, undefined, undefined, '"b"}')),
+    toolFinish,
+  ]
+  const streams = [
+    parseQoderSse(streamOf([...frames.map(data), done])),
+    parseModelServerSse(streamOf([...frames.map(frame => 'data: ' + JSON.stringify(frame)), 'data: [DONE]'])),
+  ]
+  for (const stream of streams) {
+    const chunks: StreamChunk[] = []
+    for await (const chunk of stream) chunks.push(chunk)
+    assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+      { type: 'tool-call', id: 'toolu_bdrk_a', name: 'read', arguments: '{"path":"a"}' },
+      { type: 'tool-call', id: 'toolu_bdrk_b', name: 'read', arguments: '{"path":"b"}' },
+      { type: 'tool-call', id: 'call-other', name: 'ping', arguments: '{}' },
+    ])
+    assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'tool-calls' } })
+  }
+})
+
+test('parseQoderSse accepts two named calls without indices in one frame', async () => {
+  const chunks: StreamChunk[] = []
+  for await (const chunk of parseQoderSse(streamOf([
+    data(toolFrame(toolDelta(undefined, 'call-a', 'ping', '{}'), toolDelta(undefined, 'call-b', 'ping', '{}'))),
+    data(toolFinish),
+    done,
+  ]))) chunks.push(chunk)
+  assert.deepEqual(chunks.filter(chunk => chunk.type === 'block-end').map(chunk => chunk.block), [
+    { type: 'tool-call', id: 'call-a', name: 'ping', arguments: '{}' },
+    { type: 'tool-call', id: 'call-b', name: 'ping', arguments: '{}' },
+  ])
+})
+
+const completeCall = toolDelta(0, 'call-a', 'ping', '{}')
+const nextCall = toolDelta(0, 'call-b', 'ping', '{}')
+for (const [scenario, frames] of Object.entries({
+  'the previous arguments are partial': [
+    toolFrame(toolDelta(0, 'call-a', 'ping', '{"x":')), toolFrame(nextCall),
+  ],
+  'the previous arguments never arrived': [
+    toolFrame(toolDelta(0, 'call-a', 'ping')), toolFrame(nextCall),
+  ],
+  'a new id arrives without a name': [
+    toolFrame(completeCall), toolFrame(toolDelta(0, 'call-b', undefined, '{}')),
+  ],
+  'a later delta refers to a sealed id': [
+    toolFrame(completeCall), toolFrame(nextCall), toolFrame(toolDelta(0, 'call-a', undefined, ' ')),
+  ],
+  'a later start repeats a sealed id': [
+    toolFrame(completeCall), toolFrame(nextCall), toolFrame(completeCall),
+  ],
+  'two indices use the same id': [
+    toolFrame(completeCall, toolDelta(1, 'call-a', 'ping', '{}')),
+  ],
+  'the final call has invalid arguments': [
+    toolFrame(completeCall), toolFrame(toolDelta(0, 'call-b', 'ping', '{')),
+  ],
+})) {
+  test('parseQoderSse emits no tool calls when ' + scenario, async () => {
+    const chunks: StreamChunk[] = []
+    await assert.rejects(async () => {
+      for await (const chunk of parseQoderSse(streamOf([...frames.map(data), data(toolFinish), done]))) {
+        chunks.push(chunk)
+      }
+    }, { code: 'MALFORMED_RESPONSE' })
+    assert.deepEqual(chunks, [])
+  })
+}
 
 test('parseQoderSse accepts the legacy function_call finish reason without a DONE sentinel', async () => {
   const chunks = []
