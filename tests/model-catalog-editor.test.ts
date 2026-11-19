@@ -44,22 +44,6 @@ test('all mounted editors lock controls during a host refresh and unlock on fail
   assert.equal(listeners.size, 0)
 })
 
-test('an edit already pending blocks further local edits and refresh', async () => {
-  const pending = deferred<QoderRpcResult<readonly QoderCatalogModel[]>>()
-  let calls = 0
-  const editor = new QoderModelCatalogEditor('global', [missing], {
-    editCatalog: () => { calls++; return pending.promise },
-    refreshCatalog: () => { calls++; return pending.promise },
-  })
-  const editing = editor.edit({ action: 'delete', id: 'a' })
-  await editor.edit({ action: 'toggle', id: 'a', enabled: true })
-  await editor.discover()
-  assert.equal(calls, 1)
-  pending.resolve({ ok: true, value: [] })
-  await editing
-  assert.deepEqual(editor.getSnapshot().models, [])
-})
-
 test('a late acknowledgement cannot replace newer settings or a disposed region', async () => {
   const pending = deferred<QoderRpcResult<readonly QoderCatalogModel[]>>()
   const editor = new QoderModelCatalogEditor('global', [missing], { refreshCatalog: () => pending.promise })
@@ -87,8 +71,8 @@ test('a failed manual refresh reports the save error without changing the saved 
 const other = { id: 'b', name: 'B', enabled: false }
 const toggle = (id: string, enabled: boolean) => ({ action: 'toggle', id, enabled } as const)
 const batch = (...items: ReturnType<typeof toggle>[]): QoderCatalogEdit => ({
-  action: 'toggleBatch',
-  toggles: items.map(({ id, enabled }) => ({ id, enabled })),
+  action: 'editBatch',
+  changes: items.map(({ id, enabled }) => ({ id, enabled })),
 })
 const saveFailure = { ok: false, error: { code: 'INTERNAL', message: 'Save failed' } } as const
 const bothEnabled = [{ ...missing, enabled: true }, { ...other, enabled: true }]
@@ -106,14 +90,14 @@ test('debounces multiple toggles into one batch and cancels a toggle restored to
   t.mock.timers.tick(1000)
   void editor.edit(toggle('b', true))
   void editor.edit(toggle('a', false))
-  assert.deepEqual([...editor.getSnapshot().pendingToggles], [['b', true]])
-  assert.equal(editor.getSnapshot().savingToggles, false)
+  assert.deepEqual(editor.getSnapshot().viewModels, [missing, bothEnabled[1]])
+  assert.equal(editor.getSnapshot().savingChanges, false)
   t.mock.timers.tick(1999)
   assert.deepEqual(calls, [])
   t.mock.timers.tick(1)
   await nextTurn()
   assert.deepEqual(calls, [batch(toggle('b', true))])
-  assert.equal(editor.getSnapshot().pendingToggles.size, 0)
+  assert.equal(editor.getSnapshot().hasPendingChanges, false)
 
   void editor.edit(toggle('a', true))
   void editor.edit(toggle('a', false))
@@ -154,12 +138,12 @@ test('manual refresh flushes debounced changes and waits for the single batch to
   assert.deepEqual(calls, [])
   const refreshing = editor.discover()
   assert.equal(editor.getSnapshot().refreshRequested, true)
-  assert.equal(editor.getSnapshot().savingToggles, true)
+  assert.equal(editor.getSnapshot().savingChanges, true)
   assert.deepEqual(calls, [batch(toggle('a', true), toggle('b', true))])
   write.resolve({ ok: true, value: bothEnabled })
   await refreshing
   assert.deepEqual(calls, [batch(toggle('a', true), toggle('b', true)), 'refresh'])
-  assert.equal(editor.getSnapshot().pendingToggles.size, 0)
+  assert.equal(editor.getSnapshot().hasPendingChanges, false)
 })
 
 test('a failed batch rolls back its models, preserves newer choices and cancels a waiting refresh', async t => {
@@ -182,7 +166,7 @@ test('a failed batch rolls back its models, preserves newer choices and cancels 
   first.resolve(saveFailure)
   await nextTurn()
   assert.deepEqual(calls, [batch(toggle('a', true), toggle('b', true)), batch(toggle('a', false))])
-  assert.deepEqual([...editor.getSnapshot().pendingToggles], [['a', false]])
+  assert.deepEqual(editor.getSnapshot().viewModels, [missing, other])
   assert.equal(editor.getSnapshot().refreshRequested, false)
   second.resolve({ ok: true, value: [missing, other] })
   await nextTurn()
@@ -214,12 +198,12 @@ test('an automatic refresh pauses a ready batch and revalidates its targets befo
   first.resolve({ ok: false, error: { code: 'CATALOG_REFRESHING', message: 'Refreshing' } })
   await nextTurn()
   assert.deepEqual(calls, [batch(toggle('a', true), toggle('b', true))])
-  assert.equal(editor.getSnapshot().pendingToggles.size, 2)
+  assert.deepEqual(editor.getSnapshot().viewModels, bothEnabled)
   editor.replaceModels([other])
   notify(ready)
   await nextTurn()
   assert.deepEqual(calls, [batch(toggle('a', true), toggle('b', true)), batch(toggle('b', true))])
-  assert.equal(editor.getSnapshot().pendingToggles.size, 0)
+  assert.equal(editor.getSnapshot().hasPendingChanges, false)
   assert.equal(editor.getSnapshot().failure, 'saveFailed')
   editor.dispose()
 })
@@ -247,4 +231,31 @@ test('unmount flushes a debounced batch immediately and releases the subscriptio
   await nextTurn()
   assert.deepEqual(editor.getSnapshot().models, bothEnabled)
   assert.equal(subscriptions, 0)
+})
+
+test('disable, delete and context tier changes share one pending batch and roll back together', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const removing = { ...missing, enabled: true }
+  const tiered = { ...other, enabled: true, contextTier: 'small', contextWindow: 50,
+    contextOptions: { small: { tokenCount: 50 }, large: { tokenCount: 100 } } }
+  const pending = deferred<QoderRpcResult<readonly QoderCatalogModel[]>>()
+  const calls: QoderCatalogEdit[] = []
+  const editor = new QoderModelCatalogEditor('global', [removing, tiered], {
+    editCatalog: (_region, edit) => { calls.push(edit); return pending.promise },
+  })
+  void editor.edit(toggle('a', false))
+  void editor.edit({ action: 'delete', id: 'a' })
+  void editor.edit({ action: 'selectTier', id: 'b', tierKey: 'large' })
+  void editor.edit(toggle('b', false))
+  assert.deepEqual(editor.getSnapshot().viewModels, [{ ...tiered, enabled: false, contextTier: 'large', contextWindow: 100 }])
+  assert.deepEqual(calls, [])
+  t.mock.timers.tick(2000)
+  assert.deepEqual(calls, [{ action: 'editBatch', changes: [
+    { id: 'a', enabled: false, remove: true },
+    { id: 'b', tierKey: 'large', enabled: false },
+  ] }])
+  pending.resolve(saveFailure)
+  await nextTurn()
+  assert.deepEqual(editor.getSnapshot().viewModels, [removing, tiered])
+  assert.equal(editor.getSnapshot().failure, 'saveFailed')
 })

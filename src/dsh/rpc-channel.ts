@@ -7,7 +7,7 @@
 
 import type { QoderAccountInfo } from '../qoder/account.ts'
 import type { QoderAuthorizationView } from '../qoder/authorization.ts'
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import type { QoderCatalogChange, QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderQueueSnapshot } from '../qoder/queue.ts'
 import type { QoderRegion } from '../qoder/region.ts'
  
@@ -53,7 +53,7 @@ export interface QoderCatalogToggle {
 
 export type QoderCatalogEdit =
   | ({ action: 'toggle' } & QoderCatalogToggle)
-  | { action: 'toggleBatch'; toggles: readonly QoderCatalogToggle[] }
+  | { action: 'editBatch'; changes: readonly QoderCatalogChange[] }
   | { action: 'delete'; id: string }
   | { action: 'selectTier'; id: string; tierKey: string }
 

@@ -1,7 +1,7 @@
 /** Region-scoped Qoder model discovery and catalog updates. */
 import { isDeepStrictEqual } from 'node:util'
 import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
-import { cloneCatalogModel, hasSameQoderDiscoveryMetadata, mergeQoderDiscoveryMetadata, reconcileQoderCatalog, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { applyQoderCatalogChange, cloneCatalogModel, hasSameQoderDiscoveryMetadata, mergeQoderDiscoveryMetadata, reconcileQoderCatalog, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
@@ -328,16 +328,19 @@ export class QoderCatalogLifecycle {
     if (state.running) throw new QoderLlmError('The Qoder model catalog is being updated.', 'CATALOG_REFRESHING')
     if (state.editing) throw new QoderRequestError('The Qoder model catalog is being updated.')
     const pending = this.writeCatalog(region, models => {
-      if (edit.action === 'toggleBatch' || edit.action === 'toggle') {
-        const toggles = edit.action === 'toggleBatch' ? edit.toggles : [edit]
-        const desired = new Map(toggles.map(toggle => [toggle.id, toggle.enabled]))
+      if (edit.action === 'editBatch' || edit.action === 'toggle') {
+        const changes = edit.action === 'editBatch' ? edit.changes : [edit]
+        const desired = new Map(changes.map(change => [change.id, change]))
         const savedIds = new Set(models.map(model => model.id))
-        if (toggles.some(toggle => !savedIds.has(toggle.id))) {
+        if (changes.some(change => !savedIds.has(change.id))) {
           throw new QoderRequestError('The model is no longer saved in this region.')
         }
-        return models.map(model => {
-          const enabled = desired.get(model.id)
-          return enabled === undefined || enabled === (model.enabled !== false) ? model : { ...model, enabled }
+        return models.flatMap(model => {
+          const change = desired.get(model.id)
+          if (!change) return [model]
+          const updated = applyQoderCatalogChange(model, change)
+          if (updated === undefined) throw new QoderRequestError('A catalog edit is no longer valid.')
+          return updated === null ? [] : [updated]
         })
       }
       const model = models.find(candidate => candidate.id === edit.id)

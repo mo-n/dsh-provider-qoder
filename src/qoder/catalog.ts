@@ -33,6 +33,29 @@ export interface QoderCatalogModel {
   supportsImages?: boolean
 }
 
+export interface QoderCatalogChange {
+  id: string
+  enabled?: boolean
+  tierKey?: string
+  remove?: true
+}
+
+/** Apply the final choices for a model. Undefined means the change is no longer valid. */
+export function applyQoderCatalogChange(
+  model: QoderCatalogModel,
+  change: QoderCatalogChange,
+): QoderCatalogModel | null | undefined {
+  const enabled = change.enabled ?? (model.enabled !== false)
+  if (change.remove) return model.missingFromCatalog && !enabled ? null : undefined
+  let updated = enabled === (model.enabled !== false) ? model : { ...model, enabled }
+  if (change.tierKey !== undefined) {
+    const tokenCount = model.contextOptions?.[change.tierKey]?.tokenCount
+    if (typeof tokenCount !== 'number' || !Number.isFinite(tokenCount) || tokenCount <= 0) return undefined
+    updated = { ...updated, contextTier: change.tierKey, contextWindow: tokenCount }
+  }
+  return updated
+}
+
 interface QoderModelEntry {
   key?: unknown
   enable?: unknown

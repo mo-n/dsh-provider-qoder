@@ -41,8 +41,7 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
     editor.replaceModels(models)
   }, [editor, models])
   const fetching = snapshot.pending === 'discovering' || snapshot.status?.refreshing === true
-  const locked = fetching || snapshot.refreshRequested || snapshot.pending === 'saving' || !snapshot.status
-  const busy = locked || snapshot.pendingToggles.size > 0
+  const locked = fetching || snapshot.refreshRequested || !snapshot.status
   const failure = snapshot.failure ?? (snapshot.status?.failure === 'save' ? 'modelsUpdateNotSaved'
     : snapshot.status?.failure === 'fetch' ? 'modelsFetchFailed' : undefined)
 
@@ -52,7 +51,7 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
         {!hideTitle ? (
           <div>
             <strong className={css.modelCatalogTitle}>{t('modelsTitle')}</strong>
-            <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: snapshot.models.filter(model => model.enabled !== false).length })}</p>
+            <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: snapshot.viewModels.filter(model => model.enabled !== false).length })}</p>
           </div>
         ) : null}
         <button
@@ -64,23 +63,22 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
           <span aria-live="polite">{fetching ? t('modelsUpdating') : t(snapshot.status ? 'modelsFetch' : 'modelsLoading')}</span>
         </button>
       </div>
-      {snapshot.savingToggles || snapshot.pending === 'saving' ? (
+      {snapshot.savingChanges ? (
         <ModelSaveStatus t={t} />
-      ) : snapshot.pendingToggles.size > 0 && snapshot.status?.refreshing ? (
+      ) : snapshot.hasPendingChanges && snapshot.status?.refreshing ? (
         <span className={css.modelCatalogMeta} role="status">{t('modelWaitingForCatalog')}</span>
       ) : null}
       {failure && !fetching ? <p className={css.error} role="alert">{t(failure)}</p> : null}
       <div className={css.modelList}>
-        {snapshot.models.map(model => {
+        {snapshot.viewModels.map(model => {
           const missing = model.missingFromCatalog === true
           const rate = renderQoderModelRate(model, t)
-          const pendingToggle = snapshot.pendingToggles.get(model.id)
-          const enabled = pendingToggle ?? (model.enabled !== false)
+          const enabled = model.enabled !== false
           const tiers = contextTiersOf(model)
           const fallbackTier = tiers.find(tier => tier.isDefault) ?? tiers[tiers.length - 1]
           const selectedTier = resolveContextTier(model)?.key ?? fallbackTier?.key
           const selectedTierOption = tiers.find(tier => tier.key === selectedTier)
-          const tierDisabled = disabled || busy || !enabled
+          const tierDisabled = disabled || locked || !enabled
           const tierLabel = (tier: typeof tiers[number]) => tier.isDefault
             ? `${formatContextTokens(tier.tokenCount)}${t('contextTierDefaultSuffix')}`
             : formatContextTokens(tier.tokenCount)
@@ -104,7 +102,7 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
                 </label>
                 <div className={css.modelActions}>
                   {missing && !enabled ? (
-                    <button type="button" className={css.modelDelete} disabled={disabled || busy}
+                    <button type="button" className={css.modelDelete} disabled={disabled || locked}
                       onClick={() => { void editor.edit({ action: 'delete', id: model.id }) }}>
                       {t('modelDelete')}
                     </button>

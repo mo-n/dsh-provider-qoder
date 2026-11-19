@@ -1,5 +1,5 @@
 /** Qoder settings RPC dispatch, validation, and public failure classification. */
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import type { QoderCatalogChange, QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderTransport, QoderTransportOptions } from '../qoder/transport/index.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
@@ -9,7 +9,7 @@ import type { QoderAdapter } from './adapter.ts'
 import type { QoderBrowserAuthorizationManager } from './browser-authorization.ts'
 import type { QoderQueueStatusStore } from './queue-status.ts'
 import { QoderRequestError } from './request-error.ts'
-import { isQoderRpcEndpoint, type QoderCatalogEdit, type QoderCatalogToggle, type QoderRpcErrorCode, type QoderJsonRpcEndpoint, type QoderRpcOutput } from './rpc-channel.ts'
+import { isQoderRpcEndpoint, type QoderCatalogEdit, type QoderRpcErrorCode, type QoderJsonRpcEndpoint, type QoderRpcOutput } from './rpc-channel.ts'
 import type { QoderRpcHandler } from './rpc.ts'
 
 type QoderLogger = NonNullable<QoderTransportOptions['logger']>
@@ -88,19 +88,23 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
 
 function catalogEdit(value: unknown): QoderCatalogEdit | undefined {
   if (typeof value !== 'object' || value === null) return
-  const { action, id, enabled, tierKey, toggles } = value as Record<string, unknown>
-  if (action === 'toggleBatch') {
-    if (!Array.isArray(toggles) || !toggles.length) return
-    const parsed: QoderCatalogToggle[] = []
+  const { action, id, enabled, tierKey, changes } = value as Record<string, unknown>
+  if (action === 'editBatch') {
+    if (!Array.isArray(changes) || !changes.length) return
+    const parsed: QoderCatalogChange[] = []
     const ids = new Set<string>()
-    for (const toggle of toggles) {
-      if (typeof toggle !== 'object' || toggle === null) return
-      const { id, enabled } = toggle as Record<string, unknown>
-      if (typeof id !== 'string' || !id.trim() || typeof enabled !== 'boolean' || ids.has(id)) return
+    for (const change of changes) {
+      if (typeof change !== 'object' || change === null || Array.isArray(change)) return
+      const { id, enabled, tierKey, remove } = change as Record<string, unknown>
+      if (typeof id !== 'string' || !id.trim() || ids.has(id)) return
+      if (enabled !== undefined && typeof enabled !== 'boolean') return
+      if (tierKey !== undefined && (typeof tierKey !== 'string' || !tierKey.trim())) return
+      if (remove !== undefined && (remove !== true || tierKey !== undefined || enabled === true)) return
+      if (enabled === undefined && tierKey === undefined && remove === undefined) return
       ids.add(id)
-      parsed.push({ id, enabled })
+      parsed.push({ id, enabled, tierKey, remove })
     }
-    return { action, toggles: parsed }
+    return { action, changes: parsed }
   }
   if (typeof id !== 'string' || !id.trim()) return
   if (action === 'delete') return { action, id }

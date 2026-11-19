@@ -123,15 +123,15 @@ test('model catalog separates row actions and details and reflects pending toggl
         listener({ region, refreshing: false })
         return () => {}
       },
-      editCatalog: async (region: string, edit: { action: string }) => {
+      editCatalog: async (region: string, edit: { action: string; changes?: { id: string }[] }) => {
         assert.equal(region, 'global')
-        if (edit.action === 'toggleBatch') {
-          assert.equal(JSON.stringify(edit), JSON.stringify({ action: 'toggleBatch', toggles: [{ id: 'single', enabled: true }] }))
+        if (edit.changes?.[0]?.id === 'single') {
+          assert.equal(JSON.stringify(edit), JSON.stringify({ action: 'editBatch', changes: [{ id: 'single', enabled: true }] }))
           toggleCalls++
           await toggle.promise
           return { ok: false, error: { code: 'INTERNAL', message: 'Save failed' } }
         }
-        assert.equal(JSON.stringify(edit), JSON.stringify({ action: 'selectTier', id: 'tiered', tierKey: 'large' }))
+        assert.equal(JSON.stringify(edit), JSON.stringify({ action: 'editBatch', changes: [{ id: 'tiered', tierKey: 'large' }] }))
         changedModels = [{ ...tieredModel, contextTier: 'large', contextWindow: 1_000_000 }, singleModel]
         return success(changedModels)
       },
@@ -195,6 +195,10 @@ test('model catalog separates row actions and details and reflects pending toggl
   // Selecting a new tier saves the updated model to its mounted region
   const selectHandler = tierSelect.props.onSelect as (key: string) => void
   selectHandler('large')
+  const updatedTier = childrenOf(find(find(rows()[0], 'modelDetails')!, 'modelTier')!).find(c => c?.type === 'menu')
+  assert.equal(updatedTier?.props.selectedId, 'large')
+  assert.equal(changedModels.length, 0)
+  t.mock.timers.tick(2000)
   assert.equal(changedModels.length, 2)
   assert.equal(changedModels[0].id, 'tiered')
   assert.equal(changedModels[0].contextTier, 'large')

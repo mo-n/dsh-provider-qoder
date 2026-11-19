@@ -1,19 +1,20 @@
-import { cloneCatalogModel, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { applyQoderCatalogChange, cloneCatalogModel, resolveContextTier, type QoderCatalogChange, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderCatalogEdit, QoderCatalogStatus, QoderRpcResult } from '../dsh/rpc-channel.ts'
 import type { QoderCredentialOperations } from './credential-operations.ts'
 
 type CatalogOperations = Pick<QoderCredentialOperations, 'refreshCatalog' | 'editCatalog' | 'subscribeCatalog'>
 type CatalogResult = QoderRpcResult<readonly QoderCatalogModel[]>
-const toggleDebounceMs = 2000
-const maxToggleDelayMs = 5000
+const editDebounceMs = 2000
+const maxEditDelayMs = 5000
 
 export interface QoderModelCatalogEditSnapshot {
   models: readonly QoderCatalogModel[]
   status?: QoderCatalogStatus
-  pending?: 'discovering' | 'saving'
-  savingToggles: boolean
-  pendingToggles: ReadonlyMap<string, boolean>
+  pending?: 'discovering'
+  viewModels: readonly QoderCatalogModel[]
+  savingChanges: boolean
+  hasPendingChanges: boolean
   refreshRequested: boolean
   failure?: 'modelsFetchFailed' | 'modelsUpdateNotSaved' | 'saveFailed'
 }
@@ -21,12 +22,12 @@ export interface QoderModelCatalogEditSnapshot {
 export class QoderModelCatalogEditor {
   private readonly region: QoderRegion
   private readonly operations: CatalogOperations
-  private readonly queued = new Map<string, boolean>()
+  private readonly queued = new Map<string, QoderCatalogChange>()
   private readonly listeners = new Set<() => void>()
   private active = true
   private mounts = 0
   private unsubscribeStatus?: () => void
-  private inFlight?: ReadonlyMap<string, boolean>
+  private inFlight?: ReadonlyMap<string, QoderCatalogChange>
   private debounceTimer?: ReturnType<typeof setTimeout>
   private deadlineTimer?: ReturnType<typeof setTimeout>
   private batchReady = false
@@ -37,7 +38,8 @@ export class QoderModelCatalogEditor {
   constructor(region: QoderRegion, models: readonly QoderCatalogModel[], operations: CatalogOperations) {
     this.region = region
     this.operations = operations
-    this.snapshot = { models: models.map(cloneCatalogModel), pendingToggles: new Map(), savingToggles: false, refreshRequested: false }
+    const saved = models.map(cloneCatalogModel)
+    this.snapshot = { models: saved, viewModels: saved, savingChanges: false, hasPendingChanges: false, refreshRequested: false }
   }
 
   getSnapshot = (): QoderModelCatalogEditSnapshot => this.snapshot
@@ -74,9 +76,18 @@ export class QoderModelCatalogEditor {
   }
 
   private publish(patch: Partial<QoderModelCatalogEditSnapshot>): void {
-    const pendingToggles = new Map(this.inFlight)
-    for (const [id, enabled] of this.queued) pendingToggles.set(id, enabled)
-    this.snapshot = { ...this.snapshot, ...patch, pendingToggles, savingToggles: this.inFlight !== undefined }
+    const models = patch.models ?? this.snapshot.models
+    const hasPendingChanges = !!this.inFlight || this.queued.size > 0
+    const viewModels = hasPendingChanges ? models.flatMap(model => {
+      const sent = this.inFlight?.get(model.id)
+      const queued = this.queued.get(model.id)
+      const baseline = sent ? applyQoderCatalogChange(model, sent) : model
+      if (baseline === null) return []
+      const current = baseline ?? model
+      const updated = queued ? applyQoderCatalogChange(current, queued) : current
+      return updated === null ? [] : [updated ?? current]
+    }) : models
+    this.snapshot = { ...this.snapshot, ...patch, viewModels, hasPendingChanges, savingChanges: !!this.inFlight }
     if (this.active) for (const listener of this.listeners) listener()
   }
 
@@ -91,24 +102,36 @@ export class QoderModelCatalogEditor {
     return this.flush()
   }
 
-  edit(edit: Exclude<QoderCatalogEdit, { action: 'toggleBatch' }>): Promise<void> | undefined {
-    const apply = this.operations.editCatalog
-    if (!this.active || !apply || this.hostLocked() || this.snapshot.pending || this.snapshot.refreshRequested) return
+  edit(edit: Exclude<QoderCatalogEdit, { action: 'editBatch' }>): Promise<void> | undefined {
+    if (!this.active || !this.operations.editCatalog || this.hostLocked() || this.snapshot.pending || this.snapshot.refreshRequested) return
+    const model = this.snapshot.models.find(candidate => candidate.id === edit.id)
+    const current = this.snapshot.viewModels.find(candidate => candidate.id === edit.id)
+    if (!model || !current) return
+    const sent = this.inFlight?.get(edit.id)
+    const baseline = sent ? applyQoderCatalogChange(model, sent) ?? model : model
+    const change = { id: edit.id, ...this.queued.get(edit.id) }
+
     if (edit.action === 'toggle') {
-      const model = this.snapshot.models.find(candidate => candidate.id === edit.id)
-      if (!model) return
-      const saved = this.inFlight?.get(edit.id) ?? (model.enabled !== false)
-      if (edit.enabled === saved) this.queued.delete(edit.id)
-      else this.queued.set(edit.id, edit.enabled)
-      this.publish({ failure: undefined })
-      if (!this.queued.size || this.batchReady) return this.flush()
-      clearTimeout(this.debounceTimer)
-      this.debounceTimer = setTimeout(() => { void this.flush() }, toggleDebounceMs)
-      this.deadlineTimer ??= setTimeout(() => { void this.flush() }, maxToggleDelayMs)
-      return
+      if (edit.enabled === (baseline.enabled !== false)) delete change.enabled
+      else change.enabled = edit.enabled
+    } else if (edit.action === 'selectTier') {
+      if (current.enabled === false || !applyQoderCatalogChange(current, { id: edit.id, tierKey: edit.tierKey })) return
+      if (edit.tierKey === resolveContextTier(baseline)?.key) delete change.tierKey
+      else change.tierKey = edit.tierKey
+    } else {
+      if (!current.missingFromCatalog || current.enabled !== false) return
+      change.remove = true
+      if (model.enabled !== false) change.enabled = false
+      delete change.tierKey
     }
-    if (this.draining || this.queued.size) return
-    return this.saveEdit(edit, apply)
+
+    if (change.enabled === undefined && change.tierKey === undefined && !change.remove) this.queued.delete(edit.id)
+    else this.queued.set(edit.id, change)
+    this.publish({ failure: undefined })
+    if (!this.queued.size || this.batchReady) return this.flush()
+    clearTimeout(this.debounceTimer)
+    this.debounceTimer = setTimeout(() => { void this.flush() }, editDebounceMs)
+    this.deadlineTimer ??= setTimeout(() => { void this.flush() }, maxEditDelayMs)
   }
 
   private flush(): Promise<void> {
@@ -127,8 +150,11 @@ export class QoderModelCatalogEditor {
       const apply = this.operations.editCatalog
       while (apply && !this.hostLocked() && this.batchReady) {
         const modelsAtStart = this.snapshot.models
-        const knownIds = new Set(modelsAtStart.map(model => model.id))
-        const batch = new Map([...this.queued].filter(([id]) => knownIds.has(id)))
+        const saved = new Map(modelsAtStart.map(model => [model.id, model]))
+        const batch = new Map([...this.queued].filter(([id, change]) => {
+          const model = saved.get(id)
+          return model && applyQoderCatalogChange(model, change) !== undefined
+        }))
         const missing = batch.size !== this.queued.size
         this.queued.clear()
         this.batchReady = false
@@ -139,15 +165,17 @@ export class QoderModelCatalogEditor {
         }
         this.inFlight = batch
         this.publish(failure)
-        const toggles = Array.from(batch, ([id, enabled]) => ({ id, enabled }))
-        const result = await apply(this.region, { action: 'toggleBatch', toggles }).catch(() => undefined)
+        const result = await apply(this.region, { action: 'editBatch', changes: [...batch.values()] }).catch(() => undefined)
         this.inFlight = undefined
         if (result?.ok) {
           this.confirm(result.value, modelsAtStart)
         } else if (result?.error.code === 'CATALOG_REFRESHING') {
           // A refresh may start before its status reaches this page.
-          for (const [id, enabled] of batch) {
-            if (!this.queued.has(id)) this.queued.set(id, enabled)
+          for (const [id, change] of batch) {
+            const newer = this.queued.get(id)
+            const combined = { ...change, ...newer }
+            if (combined.remove) delete combined.tierKey
+            this.queued.set(id, combined)
           }
           this.publish({})
           void this.flush()
@@ -184,16 +212,6 @@ export class QoderModelCatalogEditor {
       this.retry = undefined
       void this.drain()
     }, 150)
-  }
-
-  private async saveEdit(edit: QoderCatalogEdit, apply: NonNullable<CatalogOperations['editCatalog']>): Promise<void> {
-    const modelsAtStart = this.snapshot.models
-    this.publish({ pending: 'saving', failure: undefined })
-    const result = await apply(this.region, edit).catch(() => undefined)
-    const settled = { pending: undefined }
-    if (result?.ok) this.confirm(result.value, modelsAtStart, settled)
-    else this.publish({ ...settled, failure: 'saveFailed' })
-    this.releaseSubscription()
   }
 
   private confirm(

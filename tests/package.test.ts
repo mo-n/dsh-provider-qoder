@@ -533,7 +533,7 @@ test('settings RPC shares automatic catalog locks and persists missing models an
 
   const writesBeforeBatch = settings.writes.length
   const toggleBatch = (ids: string[]) => call('editCatalog', {
-    region: 'global', edit: { action: 'toggleBatch', toggles: ids.map(id => ({ id, enabled: false })) },
+    region: 'global', edit: { action: 'editBatch', changes: ids.map(id => ({ id, enabled: false })) },
   })
   for (const ids of [[], [chosen.id, chosen.id], [other.id, 'unknown']]) {
     const invalid = await toggleBatch(ids)
@@ -544,6 +544,24 @@ test('settings RPC shares automatic catalog locks and persists missing models an
   assert.equal((await toggleBatch([other.id, chosen.id])).ok, true)
   assert.equal(settings.writes.length, writesBeforeBatch + 1)
   assert.deepEqual(saved()?.global?.map(model => model.enabled), [false, false])
+  const global = saved()?.global
+  assert.ok(global)
+  await ctx.settings.update(ns, { modelsByRegion: { global: global.map(model =>
+    model.id === other.id ? { ...model, missingFromCatalog: true } : model,
+  ) } })
+  const writesBeforeMixed = settings.writes.length
+  const mixed = await call('editCatalog', {
+    region: 'global',
+    edit: { action: 'editBatch', changes: [
+      { id: other.id, remove: true },
+      { id: chosen.id, enabled: true, tierKey: 'large' },
+    ] },
+  })
+  assert.ok(mixed.ok)
+  assert.equal(settings.writes.length, writesBeforeMixed + 1)
+  assert.deepEqual(saved()?.global?.map(model => [model.id, model.enabled, model.contextTier, model.contextWindow]), [
+    [chosen.id, true, 'large', 1_000_000],
+  ])
   assert.deepEqual(saved()?.china, normalizedCatalog([other]))
 })
 
