@@ -48,6 +48,10 @@ test('the settings RPC mounts all endpoints as POST routes below the shared API 
   const expectedPaths = [
     '/api/qoder-subscription/account',
     '/api/qoder-subscription/models',
+    '/api/qoder-subscription/refreshCatalog',
+    '/api/qoder-subscription/editCatalog',
+    '/api/qoder-subscription/catalogStatus',
+    '/api/qoder-subscription/catalogEvents',
     '/api/qoder-subscription/modelRates',
     '/api/qoder-subscription/queue',
     '/api/qoder-subscription/conversationStatus',

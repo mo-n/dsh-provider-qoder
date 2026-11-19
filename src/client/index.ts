@@ -21,6 +21,8 @@ import type {
   QoderModelSettingsSection,
 } from './credential-operations.ts'
 import { en, zh, type QoderCredentialCopy } from './locales.ts'
+import { QoderModelCatalogEditor } from './model-catalog-editor.ts'
+import { createCatalogEvents } from './catalog-events.ts'
 import { createSessionTierEvents } from './session-tier-events.ts'
 import { createQoderRpcCaller } from './rpc-client.ts'
 import { QoderSettingsNavIcon } from './QoderSettingsNavIcon.tsx'
@@ -87,6 +89,9 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
   const credentials = ctx.remote.credentials
   assertCredentials(ctx)
   const tierEvents = createSessionTierEvents()
+  const catalogEvents = createCatalogEvents(rpc)
+  const catalogEditors = new Map<import('../qoder/region.ts').QoderRegion, QoderModelCatalogEditor>()
+  ctx.effect(() => () => catalogEvents.dispose(), 'provider-qoder: model catalog events')
   ctx.effect(() => () => tierEvents.dispose(), 'provider-qoder: session context tier events')
 
   const readModelSnapshot = () => modelScope.getSnapshot()
@@ -102,7 +107,17 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
     getAccount: async (force) => await rpc.call('account', { force }),
     getModelSnapshot: readModelSnapshot,
     subscribeModels: listener => modelScope.subscribe(listener),
-    discoverModels: async () => await rpc.call('models', {}),
+    getCatalogEditor: (region, models) => {
+      let editor = catalogEditors.get(region)
+      if (!editor) {
+        editor = new QoderModelCatalogEditor(region, models, operations)
+        catalogEditors.set(region, editor)
+      }
+      return editor
+    },
+    refreshCatalog: region => rpc.call('refreshCatalog', { region }),
+    editCatalog: (region, edit) => rpc.call('editCatalog', { region, edit }),
+    subscribeCatalog: (region, listener) => catalogEvents.subscribe(region, listener),
     subscribeSessionTiers: (scope, listener) => tierEvents.subscribe(scope, listener),
 
     subscribe: listener => {

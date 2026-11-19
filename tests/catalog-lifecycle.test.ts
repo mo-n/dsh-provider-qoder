@@ -2,7 +2,7 @@ import test from 'node:test'
 import { deferred } from './helpers/timing.ts'
 import assert from 'node:assert/strict'
 import { SettingsConflictError, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import { QoderCatalogLifecycle, type QoderCatalogSettings } from '../src/dsh/catalog-lifecycle.ts'
+import { QoderCatalogLifecycle } from '../src/dsh/catalog-lifecycle.ts'
 import { Config, modelsFor } from '../src/dsh/config.ts'
 import type { QoderCatalogModel } from '../src/qoder/catalog.ts'
 import type { QoderRegion } from '../src/qoder/region.ts'
@@ -30,35 +30,46 @@ function runtime(options: { defaultBackoff?: boolean } = {}) {
     setSelected(value: readonly QoderCatalogModel[]) { selected = value }, getSelected: () => selected }
 }
 
-test('later discovery wins even when older discovery finishes last', async () => {
-  const { catalog, setTransport } = runtime()
-  const old = deferred<readonly QoderCatalogModel[]>()
-  const fresh = deferred<readonly QoderCatalogModel[]>()
+test('a manual refresh shares upstream discovery and keeps the region locked until commit', async () => {
+  const { catalog, setTransport, getSelected, setSelected } = runtime()
+  const upstream = deferred<readonly QoderCatalogModel[]>()
+  const saving = deferred<void>()
+  const started = deferred<void>()
   let calls = 0
-  setTransport(transport(() => ++calls === 1 ? old.promise : fresh.promise))
-  const automatic = catalog.refresh()
-  await Promise.resolve()
-  const explicit = catalog.discover()
-  fresh.resolve(advertised(4))
-  await explicit
-  old.resolve(advertised(2))
-  await automatic
-  assert.equal(catalog.models()[0].priceFactor, 4)
-  assert.deepEqual(catalog.models().map(model => model.id), ['chosen'])
+  setTransport(transport(() => { calls++; return upstream.promise }))
+  catalog.bindSettings({ read: () => ({ models: getSelected(), revision: 0 }),
+    write: async (_region, models) => { started.resolve(); await saving.promise; setSelected(models) } })
+  const statuses: boolean[] = []
+  const stop = catalog.subscribe(status => { if (status.region === 'global') statuses.push(status.refreshing) })
+  const manual = catalog.refreshCatalog('global')
+  const duplicate = catalog.refreshCatalog('global')
+  const discovery = catalog.discover()
+  upstream.resolve(advertised(4))
+  await started.promise
+  assert.equal(calls, 1)
+  assert.equal((await discovery)[0].priceFactor, 4)
+  assert.equal(catalog.status('global').refreshing, true)
+  assert.equal(catalog.status('china').refreshing, false)
+  await assert.rejects(catalog.editCatalog('global', { action: 'toggle', id: 'chosen', enabled: false }), /being updated/)
+  saving.resolve()
+  assert.deepEqual(await duplicate, await manual)
+  assert.deepEqual(getSelected().map(model => model.id), ['chosen', 'disabled'])
+  assert.deepEqual(statuses, [false, true, false])
+  stop()
 })
 
-test('failed newer discovery still supersedes older work and retains accepted metadata', async () => {
+test('an automatic refresh rejects manual catalog edits and a concurrent manual refresh', async () => {
   const { catalog, setTransport } = runtime()
-  await catalog.discover()
-  const old = deferred<readonly QoderCatalogModel[]>()
+  const upstream = deferred<readonly QoderCatalogModel[]>()
   let calls = 0
-  setTransport(transport(() => ++calls === 1 ? old.promise : Promise.reject(new Error('offline'))))
+  setTransport(transport(() => { calls++; return upstream.promise }))
   const automatic = catalog.refresh()
-  await Promise.resolve()
-  await assert.rejects(catalog.discover(), /offline/)
-  old.resolve(advertised(9))
+  await assert.rejects(catalog.refreshCatalog('global'), /being updated/)
+  await assert.rejects(catalog.editCatalog('global', { action: 'delete', id: 'chosen' }), /being updated/)
+  upstream.resolve(advertised(1))
   await automatic
-  assert.equal(catalog.models()[0].priceFactor, 1)
+  assert.equal(calls, 1)
+  assert.deepEqual(catalog.models().map(model => model.id), ['chosen'])
 })
 
 test('switching away and back invalidates discovery even if a transport is reused', async () => {
@@ -79,59 +90,140 @@ test('switching away and back invalidates discovery even if a transport is reuse
   assert.deepEqual(writes, [])
 })
 
-test('explicit discovery returns fresh models without waiting for persistence', async () => {
-  const { catalog, getSelected } = runtime()
-  const gate = deferred<void>()
-  let writes = 0
-  catalog.bindSettings({ read: () => ({ models: getSelected(), revision: 0 }), write: async () => { writes++; await gate.promise } })
-  assert.equal((await catalog.discover())[0].priceFactor, 1)
-  assert.equal(catalog.models()[0].priceFactor, 1)
-  await catalog.refresh()
-  await drain()
-  assert.equal(writes, 1)
-  gate.resolve()
-  await drain()
-})
-
-test('persistence serializes each region and coalesces intermediate discoveries', async () => {
-  const { catalog, setTransport } = runtime()
-  let price = 1
-  setTransport(transport(async () => advertised(price)))
-  let stored: readonly QoderCatalogModel[] = [{ id: 'chosen', name: 'User name' }]
+test('an authorization change rolls back an outdated commit before the new refresh', async () => {
+  const { catalog, setTransport, getSelected, setSelected } = runtime()
+  const previous = getSelected()
+  const available = previous[0]
+  const wrongSubscriberModel = { id: 'old-account-only', name: 'Old account model' }
+  const saving = deferred<void>()
+  const release = deferred<void>()
+  const reverting = deferred<void>()
+  const releaseRevert = deferred<void>()
   let revision = 0
-  let activeWriters = 0
-  let maxWriters = 0
-  const prices: number[] = []
-  const started = deferred<void>()
-  const gate = deferred<void>()
-  catalog.bindSettings({ read: () => ({ models: stored, revision }), write: async (_region, models, expected) => {
-    assert.equal(expected, revision)
-    maxWriters = Math.max(maxWriters, ++activeWriters)
-    prices.push(models[0].priceFactor!)
-    if (prices.length === 1) { started.resolve(); await gate.promise }
-    stored = models
-    revision++
-    activeWriters--
-  } })
-  await catalog.discover()
-  await started.promise
-  price = 2
-  await catalog.discover()
-  price = 3
-  await catalog.discover()
-  assert.deepEqual(prices, [1])
-  gate.resolve()
-  await drain()
-  assert.deepEqual(prices, [1, 3])
-  assert.equal(maxWriters, 1)
-  assert.equal(stored[0].name, 'User name')
-  assert.deepEqual(stored.map(model => model.id), ['chosen'])
+  setTransport(transport(async () => [wrongSubscriberModel]))
+  catalog.bindSettings({
+    read: () => ({ models: getSelected(), revision }),
+    write: async (_region, models, expected) => {
+      assert.equal(expected, revision)
+      if (!revision) { saving.resolve(); await release.promise }
+      if (revision === 1) { reverting.resolve(); await releaseRevert.promise }
+      setSelected(models)
+      revision++
+    },
+  })
+
+  const stale = assert.rejects(catalog.refreshCatalog('global'), { code: 'ABORTED' })
+  await saving.promise
+  catalog.clearDiscovered()
+  setTransport(transport(async () => [available]))
+  const reading = catalog.refresh()
+  release.resolve()
+  await reverting.promise
+  const projected = catalog.models()
+  const stillLocked = catalog.status('global').refreshing
+  releaseRevert.resolve()
+  await Promise.all([stale, reading])
+  assert.ok(stillLocked)
+  assert.deepEqual(projected, previous)
+  assert.deepEqual(getSelected(), previous)
+  assert.equal(revision, 2, 'the stale commit is compensated before the new catalog is accepted')
 })
 
-test('revision conflict retries against current selection and latest accepted discovery', async () => {
+test('a cached read returns while a superseded write settles and revalidates afterwards', async () => {
+  const { catalog, setTransport, getSelected, setSelected } = runtime()
+  const available = getSelected()[0]
+  let remote = [available]
+  setTransport(transport(async () => remote))
+  const saving = deferred<void>()
+  const release = deferred<void>()
+  let writes = 0
+  catalog.bindSettings({
+    read: () => ({ models: getSelected(), revision: writes }),
+    write: async (_region, models) => {
+      if (!writes++) { saving.resolve(); await release.promise }
+      setSelected(models)
+    },
+  })
+  await catalog.refresh()
+  remote = [{ ...available, priceFactor: 2 }]
+  const stale = assert.rejects(catalog.refreshCatalog('global'), { code: 'ABORTED' })
+  await saving.promise
+  setTransport(transport(async () => [{ ...available, priceFactor: 3 }]))
+  const read = Promise.race([
+    catalog.refresh().then(() => true),
+    new Promise<false>(resolve => setImmediate(() => resolve(false))),
+  ])
+  const returnedBeforeSave = await read
+  release.resolve()
+  await stale
+  await drain()
+  assert.equal(returnedBeforeSave, true)
+  assert.equal(catalog.models()[0].priceFactor, 3)
+})
+
+test('manual discovery preserves a deletion made through another entry point after the request begins', async () => {
+  const { catalog, setTransport, getSelected, setSelected } = runtime()
+  const existing = { id: 'chosen', name: 'Chosen', enabled: false, missingFromCatalog: true }
+  const fresh = { id: 'new', name: 'New' }
+  setSelected([existing])
+  const upstream = deferred<readonly QoderCatalogModel[]>()
+  setTransport(transport(() => upstream.promise))
+  let revision = 0
+  catalog.bindSettings({
+    read: () => ({ models: getSelected(), revision }),
+    write: async (_region, models, expected) => { assert.equal(expected, revision++); setSelected(models) },
+  })
+  const pending = catalog.refreshCatalog('global')
+  setSelected([])
+  revision++
+  upstream.resolve([existing, fresh])
+  assert.deepEqual((await pending).map(model => model.id), ['new'])
+  assert.deepEqual(getSelected().map(model => model.id), ['new'])
+})
+
+test('missing models retain their tier and manual enablement until they return and disappear again', async () => {
+  const { catalog, setTransport, getSelected, setSelected } = runtime()
+  const missing = { id: 'chosen', name: 'Chosen', contextTier: 'large', contextWindow: 1_000_000 }
+  const other = { id: 'other', name: 'Other' }
+  setSelected([missing])
+  let remote = [other]
+  let revision = 0
+  setTransport(transport(async () => remote))
+  catalog.bindSettings({
+    read: () => ({ models: getSelected(), revision }),
+    write: async (_region, models, expected) => { assert.equal(expected, revision++); setSelected(models) },
+  })
+  const automatic = async () => { await catalog.discover(); await drain() }
+  await automatic()
+  assert.equal(getSelected()[0].contextTier, missing.contextTier)
+  assert.equal(getSelected()[0].contextWindow, missing.contextWindow)
+  assert.equal(getSelected()[0].enabled, false)
+  assert.equal(getSelected()[0].missingFromCatalog, true)
+  await catalog.editCatalog('global', { action: 'toggle', id: missing.id, enabled: true })
+  catalog.clearDiscovered()
+  await automatic()
+  assert.equal(getSelected()[0].enabled, true)
+  assert.equal(getSelected()[0].missingFromCatalog, true)
+  remote = [other, missing]
+  await automatic()
+  assert.equal(getSelected()[0].enabled, true)
+  assert.equal(getSelected()[0].missingFromCatalog, undefined)
+  remote = [other]
+  await automatic()
+  assert.equal(getSelected()[0].enabled, false)
+  const cleared = await catalog.editCatalog('global', { action: 'delete', id: missing.id })
+  assert.deepEqual(cleared, [])
+  remote = [other, missing]
+  await automatic()
+  assert.deepEqual(getSelected(), [])
+  const manuallyFound = await catalog.refreshCatalog('global')
+  assert.deepEqual(manuallyFound.map(model => model.id), [other.id, missing.id])
+  assert.ok(manuallyFound.every(model => model.enabled !== false))
+})
+
+test('revision conflict rebases the discovery on the latest saved catalog', async () => {
   const { catalog, setTransport } = runtime()
-  let price = 1
-  setTransport(transport(async () => advertised(price)))
+  setTransport(transport(async () => advertised(1)))
   let stored: readonly QoderCatalogModel[] = [{ id: 'chosen', name: 'Before' }, { id: 'removed', name: 'Removed' }]
   let revision = 0
   const gate = deferred<void>()
@@ -147,8 +239,6 @@ test('revision conflict retries against current selection and latest accepted di
   await started.promise
   stored = [{ id: 'chosen', name: 'User edited', contextWindow: 50_000, maxTokens: 2048 }]
   revision++
-  price = 4
-  await catalog.discover()
   gate.resolve()
   await drain()
   assert.equal(writes, 2)
@@ -156,7 +246,7 @@ test('revision conflict retries against current selection and latest accepted di
   assert.equal(stored[0].name, 'User edited')
   assert.equal(stored[0].contextWindow, 50_000)
   assert.equal(stored[0].maxTokens, 2048)
-  assert.equal(stored[0].priceFactor, 4)
+  assert.equal(stored[0].priceFactor, 1)
 })
 
 test('revision conflicts stop after a bounded retry budget and await explicit retry', async () => {
@@ -190,8 +280,7 @@ test('revision conflicts stop after a bounded retry budget and await explicit re
   assert.equal(writes, 4)
 
   conflicting = false
-  catalog.retryPersistence()
-  await drain()
+  await catalog.refreshCatalog('global')
   assert.equal(writes, 5)
   assert.equal(stored[0].priceFactor, 1)
 })
@@ -264,36 +353,26 @@ test('replacing settings during conflict backoff does not write the old binding 
   assert.equal(newWrites, 1)
 })
 
-for (const trigger of ['settings change', 'reattachment', 'successful discovery'] as const) {
-  test(`persistence failure retains metadata and retries on ${trigger}`, async () => {
-    const { catalog, errors } = runtime()
-    let stored: readonly QoderCatalogModel[] = [{ id: 'chosen', name: 'User name' }]
-    let fail = true
-    let writes = 0
-    const settings: QoderCatalogSettings = { read: () => ({ models: stored, revision: 0 }), write: async (_region, models) => {
-      writes++
+test('save failure keeps the accepted catalog and a new manual refresh can recover', async () => {
+  const { catalog, errors, getSelected, setSelected } = runtime()
+  let fail = true
+  catalog.bindSettings({
+    read: () => ({ models: getSelected(), revision: 0 }),
+    write: async (_region, models) => {
       if (fail) throw new Error('disk unavailable')
-      stored = models
-    } }
-    catalog.bindSettings(settings)
-    assert.equal((await catalog.discover())[0].priceFactor, 1)
-    await drain()
-    assert.equal(catalog.models()[0].priceFactor, 1)
-    assert.equal(errors.length, 1)
-    assert.equal(writes, 1)
-    fail = false
-    if (trigger === 'settings change') catalog.retryPersistence()
-    else if (trigger === 'reattachment') { catalog.bindSettings(undefined); catalog.bindSettings(settings) }
-    else await catalog.discover()
-    await drain()
-    assert.equal(writes, 2)
-    assert.equal(stored[0].priceFactor, 1)
-    // No redundant write after normalization, even when settings emits its own update.
-    catalog.retryPersistence()
-    await drain()
-    assert.equal(writes, 2)
+      setSelected(models)
+    },
   })
-}
+  await assert.rejects(catalog.refreshCatalog('global'), { code: 'CATALOG_SAVE_FAILED' })
+  assert.equal(catalog.status('global').failure, 'save')
+  assert.equal(catalog.status('global').refreshing, false)
+  assert.equal(catalog.models()[0].priceFactor, undefined)
+  assert.equal(errors.length, 1)
+  fail = false
+  await catalog.refreshCatalog('global')
+  assert.equal(getSelected()[0].priceFactor, 1)
+  assert.equal(catalog.status('global').failure, undefined)
+})
 
 test('late settings binding persists a previously accepted discovery', async () => {
   const { catalog } = runtime()
@@ -304,7 +383,7 @@ test('late settings binding persists a previously accepted discovery', async () 
   assert.equal(stored[0].priceFactor, 1)
 })
 
-test('replacement settings binding waits for the previous region writer', async () => {
+test('an in-flight save does not write into a replacement settings binding', async () => {
   const { catalog } = runtime()
   const started = deferred<void>()
   const gate = deferred<void>()
@@ -319,7 +398,7 @@ test('replacement settings binding waits for the previous region writer', async 
   assert.equal(writes, 0)
   gate.resolve()
   await drain()
-  assert.equal(writes, 1)
+  assert.equal(writes, 0)
 })
 
 test('disposed lifecycle never accepts or persists a late discovery', async () => {
@@ -329,6 +408,7 @@ test('disposed lifecycle never accepts or persists a late discovery', async () =
   let writes = 0
   catalog.bindSettings({ read: () => ({ models: [{ id: 'chosen', name: 'Chosen' }], revision: 0 }), write: async () => { writes++ } })
   const discovering = catalog.discover()
+  await Promise.resolve()
   catalog.dispose()
   pending.resolve(advertised(9))
   await discovering
@@ -349,28 +429,14 @@ test('pre-aborted or disposed discovery never calls upstream', async () => {
 })
 
 
-test('a successful discovery during a failing write triggers the next persistence attempt', async () => {
-  const { catalog, setTransport } = runtime()
-  let price = 1
-  setTransport(transport(async () => advertised(price)))
-  const gate = deferred<void>()
-  const started = deferred<void>()
-  let writes = 0
-  let stored: readonly QoderCatalogModel[] = [{ id: 'chosen', name: 'Chosen' }]
-  catalog.bindSettings({ read: () => ({ models: stored, revision: 0 }), write: async (_region, models) => {
-    if (++writes === 1) {
-      started.resolve()
-      await gate.promise
-      throw new Error('Temporary failure')
-    }
-    stored = models
-  } })
-  await catalog.discover()
-  await started.promise
-  price = 4
-  await catalog.discover()
-  gate.resolve()
-  await drain()
-  assert.equal(writes, 2)
-  assert.equal(stored[0].priceFactor, 4)
+test('an empty discovery leaves the configured catalog intact', async () => {
+  const { catalog, setTransport, getSelected } = runtime()
+  setTransport(transport(async () => []))
+  const original = getSelected()
+  catalog.bindSettings({ read: () => ({ models: getSelected(), revision: 0 }),
+    write: async () => assert.fail('empty discovery must never write') })
+  await assert.rejects(catalog.refreshCatalog('global'), { code: 'EMPTY_RESPONSE' })
+  assert.equal(catalog.status('global').failure, 'fetch')
+  assert.equal(catalog.status('global').refreshing, false)
+  assert.deepEqual(catalog.models(), original)
 })

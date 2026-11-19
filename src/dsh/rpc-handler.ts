@@ -4,11 +4,12 @@ import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderTransport, QoderTransportOptions } from '../qoder/transport/index.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import { redactLogValue } from '../qoder/transport/logging.ts'
+import type { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
 import type { QoderAdapter } from './adapter.ts'
 import type { QoderBrowserAuthorizationManager } from './browser-authorization.ts'
 import type { QoderQueueStatusStore } from './queue-status.ts'
 import { QoderRequestError } from './request-error.ts'
-import { isQoderRpcEndpoint, type QoderRpcErrorCode, type QoderJsonRpcEndpoint, type QoderRpcOutput } from './rpc-channel.ts'
+import { isQoderRpcEndpoint, type QoderCatalogEdit, type QoderCatalogToggle, type QoderRpcErrorCode, type QoderJsonRpcEndpoint, type QoderRpcOutput } from './rpc-channel.ts'
 import type { QoderRpcHandler } from './rpc.ts'
 
 type QoderLogger = NonNullable<QoderTransportOptions['logger']>
@@ -18,6 +19,7 @@ interface QoderRpcHandlerOptions {
   region(): QoderRegion
   resolveTransport(): Pick<QoderTransport, 'readAccount'>
   discoverModels(signal?: AbortSignal): Promise<readonly QoderCatalogModel[]>
+  catalog?: Pick<QoderCatalogLifecycle, 'refreshCatalog' | 'editCatalog' | 'status'>
   readModels(): { region: QoderRegion; models: readonly QoderCatalogModel[] }
   authorization: Pick<QoderBrowserAuthorizationManager, 'begin' | 'cancel' | 'select' | 'describe'>
   adapter: Pick<QoderAdapter, 'setSessionTier' | 'readSessionTier'>
@@ -63,6 +65,10 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
     if (error instanceof QoderLlmError) {
       if (error instanceof QoderRequestError) {
         code = 'INVALID_REQUEST'
+      } else if (error.code === 'CATALOG_REFRESHING') {
+        return publicError('CATALOG_REFRESHING', error.message)
+      } else if (error.code === 'CATALOG_SAVE_FAILED') {
+        code = 'CATALOG_SAVE_FAILED'
       } else if (error.code === 'INTERNAL') {
         code = 'INTERNAL'
       } else if (error.code === 'MISSING_CREDENTIAL' || error.code === 'NO_CREDENTIALS') {
@@ -80,6 +86,28 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
   }
 }
 
+function catalogEdit(value: unknown): QoderCatalogEdit | undefined {
+  if (typeof value !== 'object' || value === null) return
+  const { action, id, enabled, tierKey, toggles } = value as Record<string, unknown>
+  if (action === 'toggleBatch') {
+    if (!Array.isArray(toggles) || !toggles.length) return
+    const parsed: QoderCatalogToggle[] = []
+    const ids = new Set<string>()
+    for (const toggle of toggles) {
+      if (typeof toggle !== 'object' || toggle === null) return
+      const { id, enabled } = toggle as Record<string, unknown>
+      if (typeof id !== 'string' || !id.trim() || typeof enabled !== 'boolean' || ids.has(id)) return
+      ids.add(id)
+      parsed.push({ id, enabled })
+    }
+    return { action, toggles: parsed }
+  }
+  if (typeof id !== 'string' || !id.trim()) return
+  if (action === 'delete') return { action, id }
+  if (action === 'toggle' && typeof enabled === 'boolean') return { action, id, enabled }
+  if (action === 'selectTier' && typeof tierKey === 'string' && tierKey.trim()) return { action, id, tierKey }
+}
+
 /** Create a handler without registering routes or taking ownership of dependencies. */
 export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpcHandler {
   const { resolveTransport, discoverModels, authorization, adapter, readQueue, restoreSession, logger } = options
@@ -87,7 +115,7 @@ export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpc
   return async (endpoint, payload, signal) => {
     if (!isQoderRpcEndpoint(endpoint)) return publicError('UNKNOWN_ENDPOINT', `Unknown endpoint: ${endpoint}`)
     if (signal.aborted) return publicError('ABORTED', 'Request aborted')
-    if (endpoint === 'sessionTierEvents') return publicError('UNKNOWN_ENDPOINT', 'This endpoint requires the event stream handler')
+    if (endpoint === 'sessionTierEvents' || endpoint === 'catalogEvents') return publicError('UNKNOWN_ENDPOINT', 'This endpoint requires the event stream handler')
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return publicError('INVALID_REQUEST', 'An object payload is required')
     const data = payload as Record<string, unknown>
 
@@ -132,6 +160,20 @@ export function createQoderRpcHandler(options: QoderRpcHandlerOptions): QoderRpc
 
     if (endpoint === 'models') {
       return await executeRpc(endpoint, 'discover Qoder models', () => discoverModels(signal), signal, logger)
+    }
+
+    if (endpoint === 'refreshCatalog' || endpoint === 'editCatalog' || endpoint === 'catalogStatus') {
+      const { region } = data
+      const catalog = options.catalog
+      if (!catalog) return publicError('INTERNAL', 'Qoder catalog settings are unavailable.')
+      if (region !== 'global' && region !== 'china') return publicError('INVALID_REQUEST', 'A valid Qoder service region is required.')
+      if (endpoint === 'catalogStatus') return { ok: true, value: catalog.status(region) }
+      if (endpoint === 'refreshCatalog') {
+        return executeRpc(endpoint, 'refresh the Qoder model catalog', () => catalog.refreshCatalog(region, signal), signal, logger)
+      }
+      const edit = catalogEdit(data.edit)
+      if (!edit) return publicError('INVALID_REQUEST', 'Invalid Qoder catalog edit.')
+      return executeRpc(endpoint, 'edit the Qoder model catalog', () => catalog.editCatalog(region, edit), signal, logger)
     }
 
     if (endpoint === 'modelRates') {

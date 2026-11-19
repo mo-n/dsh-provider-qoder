@@ -8,6 +8,8 @@ The original capabilities were model streaming, model discovery, and account rea
 
 Connection pools, timer-driven background refresh, circuit breakers, dynamic rate limiting, and full tracing remain outside scope until demonstrated needs justify them. Request-driven stale-cache revalidation is allowed: when a model catalog has an accepted discovery, a caller may use that catalog immediately after expiry while one bounded discovery runs in the background; the first read without an accepted discovery still waits for discovery, and a failed revalidation retains the last accepted catalog without blocking model selection or creating an unhandled rejection. This is not a refresh timer or an independent background loop.
 
+Catalog refresh and editing are coordinated per region by the DSH integration. Automatic refresh reconciles saved records. A manual refresh also adds newly advertised keys. The first absence disables a saved model, and local enablement can override a continuing absence. An empty discovery leaves the saved catalog intact. Settings pages share the refresh status and lock catalog controls until the write settles. DSH publishes the last saved enablement while a refresh is in progress.
+
 ## Authentication recovery before model generation
 
 Qoder transport may refresh subscriber credentials once after an HTTP rejection

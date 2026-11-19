@@ -25,7 +25,7 @@ import { QoderLlmError } from '../src/qoder/errors.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
-import { qoderRpcPath, type QoderRpcOutput, type QoderRpcResult } from '../src/dsh/rpc-channel.ts'
+import { qoderRpcPath, type QoderJsonRpcEndpoint, type QoderRpcInput, type QoderRpcOutput, type QoderRpcResult } from '../src/dsh/rpc-channel.ts'
 
 interface MemorySection {
   value: plugin.Config
@@ -352,6 +352,7 @@ test('discovery reconciles runtime and stored budgets and a failed discovery pre
   await ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID, apiKey: 'pt-other' })
   assert.deepEqual((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'large' })).inputModalities, ['text'])
   await discover()
+  await drain()
   assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID))[0].inputModalities, ['text', 'image'])
   for (const [id, expected] of [['large', 200_000], ['small', 100_000]] as const) {
     const prepared = await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: id })
@@ -375,22 +376,27 @@ async function modelRuntime(config: plugin.Config) {
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TestCredentials)
   await ctx.plugin(RecordingSettings).await()
-  const ratePath = qoderRpcPath('modelRates')
-  let rateRoute: ConnectionFetchRoute | undefined
+  const routes = new Map<string, ConnectionFetchRoute>()
   ctx.provide('connection', { fetch: { register(route: ConnectionFetchRoute) {
-    if (route.path === ratePath) rateRoute = route
-    return () => {}
+    routes.set(route.path, route)
+    return () => { routes.delete(route.path) }
   } } } as Context['connection'])
   applyWithSettings(ctx, config)
+  const request = (endpoint: Parameters<typeof qoderRpcPath>[0], body: unknown = {}) => {
+    const path = qoderRpcPath(endpoint)
+    const route = routes.get(path)
+    assert.ok(route)
+    return route.fetch(new Request(`http://127.0.0.1${path}`, { method: 'POST', body: JSON.stringify(body) }))
+  }
+  const call = async <E extends QoderJsonRpcEndpoint>(endpoint: E, body: QoderRpcInput<E>) =>
+    await (await request(endpoint, body)).json() as QoderRpcResult<QoderRpcOutput<E>>
   const readRates = async () => {
-    assert.ok(rateRoute)
-    const response = await rateRoute.fetch(new Request(`http://127.0.0.1${ratePath}`, { method: 'POST' }))
-    const result = await response.json() as QoderRpcResult<QoderRpcOutput<'modelRates'>>
+    const result = await call('modelRates', {})
     assert.ok(result.ok)
     return result.value
   }
   const readRate = async () => (await readRates()).rates.find(model => model.id === 'chosen')
-  return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace, readRate, readRates }
+  return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace, readRate, readRates, request, call }
 }
 
 /** Let background settings writes and their revision retries settle. */
@@ -475,7 +481,73 @@ test('automatic discovery persists rates without changing selection and refreshe
   assert.equal(discovery.mock.callCount(), 4)
 })
 
-test('automatic discovery returns the catalog before settings persistence finishes', async (t) => {
+test('settings RPC shares automatic catalog locks and persists missing models and explicit empty regions', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 })
+  const chosen = { id: 'chosen', name: 'Chosen', contextTier: 'large',
+    contextOptions: { large: { tokenCount: 1_000_000 } } }
+  const other = { id: 'other', name: 'Other' }
+  let finish!: (models: readonly QoderCatalogModel[]) => void
+  t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', () =>
+    new Promise<readonly QoderCatalogModel[]>(resolve => { finish = resolve }))
+  const { ctx, ns, settings, request, call } = await modelRuntime({ modelsByRegion: { global: [chosen], china: [other] } })
+  const stream = (await request('catalogEvents')).body!.getReader()
+  t.after(async () => { await stream.cancel() })
+  const readStatus = async () => JSON.parse(new TextDecoder().decode((await stream.read()).value))
+  assert.deepEqual(await readStatus(), { region: 'global', refreshing: false })
+  assert.deepEqual(await readStatus(), { region: 'china', refreshing: false })
+  assert.deepEqual(await readStatus(), { ready: true })
+
+  const current = ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.deepEqual(await readStatus(), { region: 'global', refreshing: true })
+  assert.deepEqual(await call('catalogStatus', { region: 'global' }), {
+    ok: true, value: { region: 'global', refreshing: true },
+  })
+  const blocked = await call('editCatalog', { region: 'global', edit: { action: 'toggle', id: chosen.id, enabled: false } })
+  assert.ok(!blocked.ok)
+  assert.equal(blocked.error.code, 'CATALOG_REFRESHING')
+  finish([other])
+  assert.deepEqual((await current).map(model => model.id), [])
+  assert.deepEqual(await readStatus(), { region: 'global', refreshing: false })
+  assert.deepEqual(await call('catalogStatus', { region: 'global' }), {
+    ok: true, value: { region: 'global', refreshing: false },
+  })
+  const saved = () => memorySettings(ctx).get(ns)?.modelsByRegion
+  assert.equal(saved()?.global?.[0].contextTier, 'large')
+  assert.equal(saved()?.global?.[0].missingFromCatalog, true)
+  assert.equal(saved()?.global?.[0].enabled, false)
+  assert.deepEqual(saved()?.china, normalizedCatalog([other]))
+
+  const toggle = (enabled: boolean) => call('editCatalog', { region: 'global', edit: { action: 'toggle', id: chosen.id, enabled } })
+  assert.equal((await toggle(true)).ok, true)
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), [chosen.id])
+  assert.equal((await toggle(false)).ok, true)
+  assert.deepEqual(await call('editCatalog', { region: 'global', edit: { action: 'delete', id: chosen.id } }), { ok: true, value: [] })
+  assert.deepEqual(saved()?.global, [])
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), [])
+
+  const next = call('refreshCatalog', { region: 'global' })
+  await drain()
+  finish([other, chosen])
+  assert.equal((await next).ok, true)
+  assert.deepEqual((await ctx.llm.listModels(QODER_PROVIDER_ID)).map(model => model.id), [other.id, chosen.id])
+
+  const writesBeforeBatch = settings.writes.length
+  const toggleBatch = (ids: string[]) => call('editCatalog', {
+    region: 'global', edit: { action: 'toggleBatch', toggles: ids.map(id => ({ id, enabled: false })) },
+  })
+  for (const ids of [[], [chosen.id, chosen.id], [other.id, 'unknown']]) {
+    const invalid = await toggleBatch(ids)
+    assert.ok(!invalid.ok)
+    assert.equal(invalid.error.code, 'INVALID_REQUEST')
+  }
+  assert.equal(settings.writes.length, writesBeforeBatch)
+  assert.equal((await toggleBatch([other.id, chosen.id])).ok, true)
+  assert.equal(settings.writes.length, writesBeforeBatch + 1)
+  assert.deepEqual(saved()?.global?.map(model => model.enabled), [false, false])
+  assert.deepEqual(saved()?.china, normalizedCatalog([other]))
+})
+
+test('first catalog read waits for discovery to be committed', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 })
   t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
     { id: 'chosen', name: 'Remote name', priceFactor: 3 },
@@ -499,10 +571,11 @@ test('automatic discovery returns the catalog before settings persistence finish
   })
   await started
   await new Promise<void>(resolve => setImmediate(resolve))
-  assert.equal(listed, true)
+  assert.equal(listed, false)
+  assert.equal((await readRate())?.priceFactor, 1)
+  release()
   assert.equal((await reading)[0].name, 'Chosen name')
   assert.equal((await readRate())?.priceFactor, 3)
-  release()
   await drain()
 })
 
@@ -541,7 +614,7 @@ test('automatic discovery and settings persistence failures remain advisory', as
   settings.onPersist = async () => { throw new Error('storage unavailable') }
 
   await ctx.llm.listModels(QODER_PROVIDER_ID)
-  assert.equal((await readRate())?.priceFactor, 3)
+  assert.equal((await readRate())?.priceFactor, 1)
   await drain()
   assert.equal(settings.writes.length, 1)
   assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
@@ -552,7 +625,7 @@ test('automatic discovery and settings persistence failures remain advisory', as
   offline = true
   t.mock.timers.tick(300_000)
   await ctx.llm.listModels(QODER_PROVIDER_ID)
-  assert.equal((await readRate())?.priceFactor, 3)
+  assert.equal((await readRate())?.priceFactor, 1)
   await drain()
   assert.deepEqual((memorySettings(ctx).get(ns) as plugin.Config).modelsByRegion?.global, normalizedCatalog([chosen]))
   assert.equal(settings.writes.length, 1)
@@ -597,11 +670,12 @@ test('automatic discovery cannot overwrite a settings save already awaiting pers
   // Drain the discovery continuation while the earlier user write is still blocked.
   await new Promise<void>(resolve => setImmediate(resolve))
   releaseSave()
-  await Promise.all([save, reading])
+  await save
   // The queued metadata write reconciles under a stale revision, so let its
   // conflict retry settle before reading the committed catalog.
   await drain()
   t.mock.timers.tick(50)
+  await reading
   await drain()
 
   const stored = memorySettings(ctx).get(ns) as plugin.Config
@@ -850,7 +924,7 @@ test('the settings service tolerates updates with frozen models containing conte
 })
 
 
-test('explicit discovery retains fresh metadata when storage fails and settings updates retry it', async (t) => {
+test('failed storage keeps the saved metadata until a later successful discovery', async (t) => {
   t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
     { id: 'chosen', name: 'Remote name', priceFactor: 4, supportsImages: true },
   ])
@@ -861,10 +935,13 @@ test('explicit discovery retains fresh metadata when storage fails and settings 
   const discovered = await ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID })
   assert.equal(discovered.length, 1)
   await drain()
-  assert.equal((await readRate())?.priceFactor, 4)
+  assert.equal((await readRate())?.priceFactor, 1)
   assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
   settings.onPersist = undefined
   await ctx.settings.update(ns, { webSearchMode: 'always' })
+  await drain()
+  assert.equal(memorySettings(ctx).get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
+  await ctx.llm.discoverModels(ns, { provider: QODER_PROVIDER_ID })
   await drain()
   const stored = memorySettings(ctx).get(ns)
   assert.equal(stored?.modelsByRegion?.global?.[0].priceFactor, 4)
@@ -1096,7 +1173,7 @@ test('settings RPC validates defined fields before business work and distinguish
     const extraTier = await call('readSessionTier', { ...scope, extra: true })
     assert.equal(extraTier.ok, true, JSON.stringify(extraTier))
     assert.equal(extraTier.value.extra, undefined)
-    assert.deepEqual(await call('models', { extra: true }), { ok: true, value: [] })
+    assert.equal((await call('models', { extra: true })).error.code, 'UPSTREAM_ERROR')
     t.mock.method(TestCredentials.prototype, 'describeRecord', async () => ({ configured: false, writable: false }))
     assert.equal((await call('beginLogin', { region: 'global' })).error.code, 'INTERNAL')
     restoreError = new QoderLlmError('Storage unavailable', 'INVALID_REQUEST')

@@ -10,6 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import {
   qoderRpcEndpoints,
   qoderRpcPath,
+  type QoderCatalogStatus,
   type QoderRpcEndpoint,
   type QoderRpcResult,
   type QoderSessionTierScope,
@@ -33,6 +34,7 @@ export function registerQoderRpc(
   ctx: Context,
   handler: QoderRpcHandler,
   subscribeTiers?: (listener: (scope: QoderSessionTierScope) => void) => () => void,
+  subscribeCatalog?: (listener: (status: QoderCatalogStatus) => void) => () => void,
 ): () => Promise<void> {
   const registry = ctx.connection?.fetch
   if (typeof registry?.register !== 'function') {
@@ -46,11 +48,15 @@ export function registerQoderRpc(
       path: qoderRpcPath(endpoint),
       methods: ['POST'],
       requestBody: 'buffered',
-      fetch: request => endpoint === 'sessionTierEvents' && subscribeTiers
-        ? closing
-          ? Promise.resolve(new Response('provider-qoder: settings RPC is closing', { status: 503 }))
-          : Promise.resolve(sessionTierEvents(request, subscribeTiers, streams))
-        : handleQoderRpcRequest(endpoint, handler, request),
+      fetch: request => {
+        const subscribe = endpoint === 'sessionTierEvents' ? subscribeTiers
+          : endpoint === 'catalogEvents' ? subscribeCatalog : undefined
+        if (subscribe) {
+          if (closing) return Promise.resolve(new Response('provider-qoder: settings RPC is closing', { status: 503 }))
+          return Promise.resolve(changeEvents(request, subscribe, streams))
+        }
+        return handleQoderRpcRequest(endpoint, handler, request)
+      },
     }))
   } catch (error) {
     // Registration is synchronous, so rollback cannot be awaited here. Start
@@ -133,9 +139,9 @@ async function handleQoderRpcRequest(
 }
 
 /** Authenticated change stream; reconnecting clients reread on the initial ready item. */
-function sessionTierEvents(
+function changeEvents(
   request: Request,
-  subscribe: (listener: (scope: QoderSessionTierScope) => void) => () => void,
+  subscribe: (listener: (value: unknown) => void) => () => void,
   streams: Set<() => void>,
 ): Response {
   let close = () => {}
@@ -154,7 +160,7 @@ function sessionTierEvents(
         streams.delete(close)
         try { controller.close() } catch { /* The reader may already have cancelled. */ }
         if (errors.length === 1) throw errors[0]
-        if (errors.length > 1) throw new AggregateError(errors, 'provider-qoder: failed to close a session tier stream')
+        if (errors.length > 1) throw new AggregateError(errors, 'provider-qoder: failed to close a settings event stream')
       }
       unsubscribe = subscribe(scope => send(scope))
       streams.add(close)

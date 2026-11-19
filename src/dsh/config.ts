@@ -35,6 +35,8 @@ const catalogModel = z.object({
   id: z.string().required(),
   name: z.string().required(),
   description: z.string(),
+  enabled: z.boolean(),
+  missingFromCatalog: z.boolean(),
   contextWindow: z.number().step(1).min(1),
   maxContextWindow: z.number().step(1).min(1),
   contextTier: z.string(),
@@ -90,7 +92,6 @@ export function readConfig(value: Config | LiveConfig): Config {
 
 export function resolveModels(models: readonly QoderCatalogModel[] | undefined): QoderCatalogModel[] {
   const resolved = models ?? defaultModels
-  if (resolved.length === 0) throw new Error('provider-qoder: at least one model is required')
   const seen = new Set<string>()
   return resolved.map((model) => {
     if (!model.id || !model.name) throw new Error('provider-qoder: model id and name must be non-empty')

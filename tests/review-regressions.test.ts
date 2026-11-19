@@ -1,4 +1,3 @@
-import { accepted } from './helpers/operation-result.ts'
 import { deferred, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -50,12 +49,11 @@ test('account waiters share credential recovery, including when the first caller
 test('external accepted models remain visible after local catalog editing', async () => {
   const a = { id: 'a', name: 'A' }, b = { id: 'b', name: 'B' }, c = { id: 'c', name: 'C' }
   const editor = new QoderModelCatalogEditor('global', [a, b], {
-    storeModels: async () => accepted(true), discoverModels: async () => ({ ok: true, value: [a, b] }),
+    editCatalog: async () => ({ ok: true, value: [a, { ...b, enabled: false }] }),
   })
-  await editor.toggle('b', false)
+  await editor.edit({ action: 'toggle', id: 'b', enabled: false })
   editor.replaceModels([a, c])
   assert.deepEqual(editor.getSnapshot().models.map(model => model.id), ['a', 'c'])
-  assert.deepEqual(editor.getSnapshot().catalog.map(model => model.id), ['a', 'b', 'c'])
 })
 
 test('credential preview cannot overwrite, persist, or supersede active discovery', async () => {

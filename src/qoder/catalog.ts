@@ -4,6 +4,9 @@ export interface QoderCatalogModel {
   id: string
   name: string
   description?: string
+  /** Absent means enabled, including for catalogs saved before enablement was persisted. */
+  enabled?: boolean
+  missingFromCatalog?: boolean
   /** Effective DSH input budget, which may be smaller than the provider default tier. */
   contextWindow?: number
   /** Largest known capacity, independent of the effective input budget. */
@@ -333,13 +336,40 @@ export function mergeQoderDiscoveryMetadata(
   })
 }
 
+/** A model is auto-disabled only on the transition into a continuous absence. */
+export function reconcileQoderCatalog(
+  configured: readonly QoderCatalogModel[],
+  discovered: readonly QoderCatalogModel[],
+  includeNew: boolean,
+): QoderCatalogModel[] {
+  const advertised = new Set(discovered.map(model => model.id))
+  const reconciled = mergeQoderDiscoveryMetadata(configured, discovered).map(model => {
+    if (advertised.has(model.id)) {
+      delete model.missingFromCatalog
+    } else if (!model.missingFromCatalog) {
+      model.missingFromCatalog = true
+      model.enabled = false
+    }
+    return model
+  })
+  if (includeNew) {
+    const known = new Set(configured.map(model => model.id))
+    for (const model of discovered) {
+      if (!known.has(model.id)) reconciled.push(cloneCatalogModel(model))
+    }
+  }
+  return reconciled
+}
+
 export function hasSameQoderDiscoveryMetadata(
   left: readonly QoderCatalogModel[] | undefined,
   right: readonly QoderCatalogModel[],
 ): boolean {
   return left?.length === right.length && left.every((model, index) => {
     const candidate = right[index]
-    return candidate?.id === model.id && candidate.contextWindow === model.contextWindow && discoveredMetadataKeys.every(key => (
+    return candidate?.id === model.id && candidate.contextWindow === model.contextWindow
+      && candidate.contextTier === model.contextTier && candidate.enabled === model.enabled
+      && candidate.missingFromCatalog === model.missingFromCatalog && discoveredMetadataKeys.every(key => (
       JSON.stringify(model[key]) === JSON.stringify(candidate[key])
     ))
   })

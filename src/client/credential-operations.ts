@@ -1,9 +1,10 @@
+import type { QoderModelCatalogEditor } from './model-catalog-editor.ts'
 import type { OperationResult } from './operation-result.ts'
 import type { QoderAccountInfo } from '../qoder/account.ts'
-import { cloneCatalogModel, defaultModels, mergeAdvertisedContext, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderWebSearchMode } from '../dsh/config.ts'
-import type { QoderSessionTierScope, QoderSessionTierSelection, QoderRpcResult } from '../dsh/rpc-channel.ts'
+import type { QoderCatalogEdit, QoderCatalogStatus, QoderSessionTierScope, QoderSessionTierSelection, QoderRpcResult } from '../dsh/rpc-channel.ts'
 import type { QoderCredentialCopy } from './locales.ts'
 import type { QoderAuthorizationView } from '../qoder/authorization.ts'
 
@@ -28,7 +29,10 @@ export interface QoderCredentialOperations {
   storeWebSearchMode(mode: QoderWebSearchMode): Promise<OperationResult<void>>
   storeImageSearchEnabled(enabled: boolean): Promise<OperationResult<void>>
   storeImageGenEnabled(enabled: boolean): Promise<OperationResult<void>>
-  discoverModels(): Promise<QoderModelDiscoveryResult>
+  getCatalogEditor?(region: QoderRegion, models: readonly QoderCatalogModel[]): QoderModelCatalogEditor
+  refreshCatalog?(region: QoderRegion): Promise<QoderRpcResult<readonly QoderCatalogModel[]>>
+  editCatalog?(region: QoderRegion, edit: QoderCatalogEdit): Promise<QoderRpcResult<readonly QoderCatalogModel[]>>
+  subscribeCatalog?(region: QoderRegion, listener: (status?: QoderCatalogStatus) => void): () => void
   setSessionTier?(sessionId: string, modelId: string, tierKey: string, region: QoderRegion): Promise<OperationResult<QoderSessionTierSelection>>
   readSessionTier?(scope: QoderSessionTierScope): Promise<OperationResult<QoderSessionTierSelection>>
   subscribeSessionTiers?(scope: QoderSessionTierScope, listener: () => void): () => void
@@ -62,33 +66,6 @@ export interface QoderModelSettingsSnapshot {
   revision: number | undefined
   writable: boolean
   mode?: 'host' | 'memory'
-}
-
-export type QoderModelDiscoveryResult = QoderRpcResult<readonly QoderCatalogModel[]>
-
-export interface QoderModelReconciliation {
-  catalog: QoderCatalogModel[]
-  selected: QoderCatalogModel[]
-  unavailableIds: Set<string>
-}
-
-export function reconcileQoderModels(
-  known: readonly QoderCatalogModel[],
-  discovered: readonly QoderCatalogModel[],
-): QoderModelReconciliation {
-  const availableIds = new Set(discovered.map(model => model.id))
-  const unavailable = known.filter(model => !availableIds.has(model.id)).map(cloneCatalogModel)
-  const previous = new Map(known.map(model => [model.id, model]))
-  const reconciled = discovered.map(model => {
-    const remembered = previous.get(model.id)
-    if (remembered === undefined) return cloneCatalogModel(model)
-    return mergeAdvertisedContext(remembered, model, model)
-  })
-  return {
-    catalog: [...reconciled, ...unavailable],
-    selected: reconciled,
-    unavailableIds: new Set(unavailable.map(model => model.id)),
-  }
 }
 
 export interface QoderCredentialStatus {

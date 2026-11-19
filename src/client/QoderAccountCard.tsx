@@ -279,7 +279,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
         <summary className={css.customizedSummary}>
           <span>{t('modelsTitle')}</span>
           <span className={css.modelSummaryBadge}>
-            {t('modelsEnabled', { count: currentModels.length })}
+            {t('modelsEnabled', { count: currentModels.filter(model => model.enabled !== false).length })}
           </span>
         </summary>
         <div className={css.customizedBody}>
