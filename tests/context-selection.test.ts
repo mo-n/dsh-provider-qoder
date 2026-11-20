@@ -1,4 +1,5 @@
 import { success } from './helpers/operation-result.ts'
+import { deferred, nextTurn } from './helpers/timing.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -63,82 +64,194 @@ test('composer keeps projection hook order stable across unresolved, foreign, si
   }
 })
 
-test('model catalog renders context tier select and propagates default tier changes', async () => {
+test('model catalog separates row actions and details and reflects pending toggles', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const labelFile = new URL('../src/client/QoderModelLabel.tsx', import.meta.url)
   const filename = new URL('../src/client/QoderModelCatalog.tsx', import.meta.url)
-  const source = ts.transpileModule(await readFile(filename, 'utf8'), {
+  const compile = async (file: URL) => ts.transpileModule(await readFile(file, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText
   const require = createRequire(filename)
   const exports: Record<string, (props: object) => unknown> = {}
-  runInNewContext(source, {
-    exports,
+  const labelExports: Record<string, unknown> = {}
+  const states: unknown[] = []
+  let cursor = 0
+  let stopFeedback: (() => void) | undefined
+  t.after(() => stopFeedback?.())
+  const context = {
+    setTimeout,
+    clearTimeout,
     require: (id: string) => id === 'react' ? {
       useMemo: (fn: () => unknown) => fn(),
-      useState: (value: unknown) => [typeof value === 'function' ? value() : value, () => {}],
+      useState: (value: unknown) => {
+        const index = cursor++
+        if (!(index in states)) states[index] = typeof value === 'function' ? value() : value
+        return [states[index], (next: unknown) => { states[index] = next }]
+      },
       useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
       useRef: (value: unknown) => ({ current: value }),
-      useLayoutEffect: () => {},
-    } : id === '@deepseek-ai/dsh-client-ui-primitives' ? { Menu: 'menu', IconChevronDownOutlineRegular: 'svg' }
+      useEffect: (effect: () => () => void) => { stopFeedback ??= effect() },
+      useLayoutEffect: (effect: () => unknown) => { effect() },
+    } : id === '@deepseek-ai/dsh-client-ui-primitives' ? { Menu: 'menu', IconChevronDownOutlineRegular: 'svg', Tag: 'tag' }
+      : id === './QoderModelLabel.tsx' ? labelExports
       : id.endsWith('.css') ? { __esModule: true, default: new Proxy({}, { get: (_, prop) => String(prop) }) } : require(id),
-  })
+  }
+  runInNewContext(await compile(labelFile), { ...context, exports: labelExports })
+  runInNewContext(await compile(filename), { ...context, exports })
 
   const tieredModel: QoderCatalogModel = {
-    id: 'tiered', name: 'Tiered', contextWindow: 200_000,
+    id: 'tiered', name: 'Tiered', contextWindow: 200_000, priceFactor: 0.5, originalPriceFactor: 1,
     contextOptions: {
       small: { tokenCount: 200_000, isDefault: true },
       large: { tokenCount: 1_000_000 },
     },
   }
   const singleModel: QoderCatalogModel = {
-    id: 'single', name: 'Single', contextWindow: 100_000,
+    id: 'single', name: 'Single', contextWindow: 100_000, missingFromCatalog: true, enabled: false,
   }
 
   let changedModels: QoderCatalogModel[] = []
+  const toggle = deferred<void>()
+  let toggleCalls = 0
+  let reportStatus!: (status: object) => void
   type VNode = { type: unknown; props: Record<string, unknown> }
   const keyed = exports.QoderModelCatalog({
     region: 'global',
     operations: {
-      discoverModels: async () => ({ ok: true, value: [] }),
-      storeModels: async (region: string, models: QoderCatalogModel[]) => {
+      subscribeCatalog: (region: string, listener: (status: object) => void) => {
+        reportStatus = listener
+        listener({ region, refreshing: false })
+        return () => {}
+      },
+      editCatalog: async (region: string, edit: { action: string; changes?: { id: string }[] }) => {
         assert.equal(region, 'global')
-        changedModels = models
-        return success(undefined)
+        if (edit.changes?.[0]?.id === 'single') {
+          assert.equal(JSON.stringify(edit), JSON.stringify({ action: 'editBatch', changes: [{ id: 'single', enabled: true }] }))
+          toggleCalls++
+          await toggle.promise
+          return { ok: false, error: { code: 'INTERNAL', message: 'Save failed' } }
+        }
+        assert.equal(JSON.stringify(edit), JSON.stringify({ action: 'editBatch', changes: [{ id: 'tiered', tierKey: 'large' }] }))
+        changedModels = [{ ...tieredModel, contextTier: 'large', contextWindow: 1_000_000 }, singleModel]
+        return success(changedModels)
       },
     },
     models: [tieredModel, singleModel],
     disabled: false,
-    t: (key: string, values?: Record<string, string | number>) => key === 'modelRate' ? `${values?.value}x` : key,
+    t: (key: string) => key,
   }) as VNode
 
   assert.equal((keyed as VNode & { key: string }).key, 'global')
-  const vdom = (keyed.type as (props: object) => VNode)(keyed.props)
-  const children = vdom.props.children as VNode[]
-  const modelList = children.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelList'))
-  assert.ok(modelList)
-  const choices = modelList.props.children as VNode[]
+  const render = keyed.type as (props: object) => VNode
+  render(keyed.props)
+  const childrenOf = (parent: VNode) => [parent.props.children].flat() as (VNode | null)[]
+  const find = (parent: VNode, className: string) => childrenOf(parent).find(node => node?.props?.className === className)
+  const rows = () => {
+    cursor = 0
+    const list = find(render(keyed.props), 'modelList')
+    assert.ok(list)
+    return list.props.children as VNode[]
+  }
+  const choices = rows()
   assert.equal(choices.length, 2)
 
-  // Tiered model has modelTier select
-  const tieredChoice = choices[0].props.children as (VNode | null)[]
-  const tierSection = tieredChoice.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelTier'))
+  const tieredDetails = find(choices[0], 'modelDetails')
+  assert.ok(tieredDetails)
+  const tierSection = find(tieredDetails, 'modelTier')
   assert.ok(tierSection)
-  const tierSelect = (tierSection.props.children as VNode[]).find(c => c.type === 'menu')
+  const tierSelect = childrenOf(tierSection).find(c => c?.type === 'menu')
   assert.ok(tierSelect)
   assert.equal(tierSelect.props.selectedId, 'small')
 
-  // Single model has no tier select
-  const singleChoice = choices[1].props.children as (VNode | null)[]
-  const singleTierSection = singleChoice.find(c => c && typeof c.props?.className === 'string' && c.props.className.includes('modelTier'))
-  assert.equal(singleTierSection, undefined)
+  const singleDetails = find(choices[1], 'modelDetails')
+  assert.ok(singleDetails)
+  assert.equal(find(singleDetails, 'modelTier'), undefined)
+  const metadata = find(singleDetails, 'modelMetadata')
+  assert.ok(metadata)
+  const nameGroup = (row: VNode) => {
+    const rowHead = find(row, 'modelChoiceHead')!
+    return find(find(rowHead, 'modelChoiceLabel')!, 'modelName')!
+  }
+  const ratedName = nameGroup(choices[0])
+  assert.equal(ratedName.type, 'span')
+  const rate = find(ratedName, 'modelRate')!
+  const [, visual] = (rate.props.children as VNode).props.children as VNode[]
+  const [original, discounted] = visual.props.children as VNode[]
+  const [, strikethrough] = original.props.children as VNode[]
+  assert.equal(strikethrough.type, 'del')
+  assert.equal(strikethrough.props.children, '1×')
+  assert.equal(discounted.props.tone, 'success')
+  assert.equal(discounted.props.children, '0.5×')
+  const missingName = nameGroup(choices[1])
+  assert.equal(find(missingName, 'modelRate'), undefined)
+  assert.equal(find(missingName, 'modelMissing')?.props.children, 'modelMissingFromCatalog')
+  const head = find(choices[1], 'modelChoiceHead')
+  assert.ok(head)
+  const actions = find(head, 'modelActions')
+  assert.ok(actions)
+  const remove = find(actions, 'modelDelete')
+  assert.equal(remove?.props.children, 'modelDelete')
 
   // Selecting a new tier saves the updated model to its mounted region
   const selectHandler = tierSelect.props.onSelect as (key: string) => void
   selectHandler('large')
+  const updatedTier = childrenOf(find(find(rows()[0], 'modelDetails')!, 'modelTier')!).find(c => c?.type === 'menu')
+  assert.equal(updatedTier?.props.selectedId, 'large')
+  assert.equal(changedModels.length, 0)
+  t.mock.timers.tick(2000)
   assert.equal(changedModels.length, 2)
   assert.equal(changedModels[0].id, 'tiered')
   assert.equal(changedModels[0].contextTier, 'large')
   assert.equal(changedModels[0].contextWindow, 1_000_000)
   assert.equal(changedModels[1].id, 'single')
+  await nextTurn()
+
+  const checkbox = (row: VNode) => {
+    const header = find(row, 'modelChoiceHead')
+    assert.ok(header)
+    const label = find(header, 'modelChoiceLabel')
+    assert.equal(label?.type, 'label')
+    const [input] = label!.props.children as VNode[]
+    assert.equal(input.type, 'input')
+    return input
+  }
+  const unchecked = checkbox(rows()[1])
+  assert.equal(unchecked.props.checked, false)
+  assert.equal(unchecked.props.disabled, false)
+  const change = unchecked.props.onChange as (event: { currentTarget: { checked: boolean } }) => void
+  change({ currentTarget: { checked: true } })
+  const during = rows()
+  const saving = checkbox(during[1])
+  assert.equal(saving.props.checked, true)
+  assert.equal(saving.props.disabled, false)
+  assert.equal(saving.props['aria-disabled'], undefined)
+  assert.equal(checkbox(during[0]).props.disabled, false)
+  assert.equal(toggleCalls, 0)
+  const saveFeedback = () => {
+    cursor = 0
+    return childrenOf(render(keyed.props))[1]
+  }
+  assert.equal(saveFeedback(), null)
+  reportStatus({ region: 'global', refreshing: true })
+  assert.equal(saveFeedback()?.props.children, 'modelWaitingForCatalog')
+  t.mock.timers.tick(2000)
+  assert.equal(toggleCalls, 0)
+  reportStatus({ region: 'global', refreshing: false })
+  assert.equal(toggleCalls, 1)
+  const feedback = saveFeedback()!
+  const renderFeedback = (node: VNode) => {
+    cursor = 2
+    return (node.type as (props: object) => VNode | null)(node.props)
+  }
+  assert.equal(renderFeedback(feedback), null)
+  t.mock.timers.tick(499)
+  assert.equal(renderFeedback(feedback), null)
+  t.mock.timers.tick(1)
+  assert.equal(renderFeedback(feedback)?.props.children, 'saving')
+  toggle.resolve()
+  await nextTurn()
+  assert.equal(checkbox(rows()[1]).props.checked, false)
+  assert.equal(checkbox(rows()[1]).props.disabled, false)
 })
 
 test('composer renders the host-confirmed tier after remount and keys controls by region, session and model', async () => {

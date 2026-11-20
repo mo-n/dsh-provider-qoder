@@ -1,9 +1,8 @@
-import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { IconChevronDownOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   contextTiersOf,
   formatContextTokens,
-  formatRateFactor,
   resolveContextTier,
   type QoderCatalogModel,
 } from '../qoder/catalog.ts'
@@ -12,12 +11,13 @@ import {
   type QoderCredentialInjected,
 } from './credential-operations.ts'
 import type { QoderRegion } from '../qoder/region.ts'
+import { renderQoderModelRate } from './QoderModelLabel.tsx'
 import { QoderModelCatalogEditor } from './model-catalog-editor.ts'
 import css from './QoderCredentialCard.module.css'
 
 interface QoderModelCatalogProps extends Pick<QoderCredentialInjected, 't'> {
   region: QoderRegion
-  operations: Pick<QoderCredentialOperations, 'discoverModels' | 'storeModels'>
+  operations: Pick<QoderCredentialOperations, 'getCatalogEditor' | 'refreshCatalog' | 'editCatalog' | 'subscribeCatalog'>
   models: QoderCatalogModel[]
   disabled: boolean
   fetchDisabled?: boolean
@@ -30,7 +30,7 @@ export function QoderModelCatalog(props: QoderModelCatalogProps) {
 }
 
 function RegionModelCatalog({ operations, models, region, disabled, fetchDisabled, hideTitle, t }: QoderModelCatalogProps) {
-  const [editor] = useState(() => new QoderModelCatalogEditor(region, models, operations))
+  const [editor] = useState(() => operations.getCatalogEditor?.(region, models) ?? new QoderModelCatalogEditor(region, models, operations))
   const [openTierModelId, setOpenTierModelId] = useState<string>()
   const snapshot = useSyncExternalStore(editor.subscribe, editor.getSnapshot, editor.getSnapshot)
   useLayoutEffect(() => {
@@ -40,107 +40,124 @@ function RegionModelCatalog({ operations, models, region, disabled, fetchDisable
   useLayoutEffect(() => {
     editor.replaceModels(models)
   }, [editor, models])
-  const displayedModels = snapshot.catalog
-  const unavailableIds = snapshot.unavailableIds
-  const selectedIds = new Set(snapshot.models.map(model => model.id))
-  const busy = snapshot.pending !== undefined
-  const fetching = snapshot.pending === 'discovering'
-  const failure = snapshot.failureMessage || (snapshot.failure ? t(snapshot.failure) : undefined)
-
-  const renderRate = (model: QoderCatalogModel): string => {
-    if (model.priceFactor === 0 || (model.priceFactor === undefined && model.isFree)) return t('modelRateFree')
-    if (model.priceFactor === undefined) return t('modelRateUnknown')
-    const current = formatRateFactor(model.priceFactor)
-    if (model.originalPriceFactor !== undefined && model.originalPriceFactor > model.priceFactor) {
-      return t('modelRateDiscount', {
-        value: current,
-        original: formatRateFactor(model.originalPriceFactor),
-      })
-    }
-    return t('modelRate', { value: current })
-  }
+  const fetching = snapshot.pending === 'discovering' || snapshot.status?.refreshing === true
+  const locked = fetching || snapshot.refreshRequested || !snapshot.status
+  const failure = snapshot.failure ?? (snapshot.status?.failure === 'save' ? 'modelsUpdateNotSaved'
+    : snapshot.status?.failure === 'fetch' ? 'modelsFetchFailed' : undefined)
 
   return (
-    <section className={css.modelCatalog} aria-label={t('modelsTitle')}>
+    <section className={css.modelCatalog} aria-label={t('modelsTitle')} aria-busy={fetching}>
       <div className={hideTitle ? css.modelCatalogHeadCompact : css.modelCatalogHead}>
         {!hideTitle ? (
           <div>
             <strong className={css.modelCatalogTitle}>{t('modelsTitle')}</strong>
-            <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: snapshot.models.length })}</p>
+            <p className={css.modelCatalogMeta}>{t('modelsEnabled', { count: snapshot.viewModels.filter(model => model.enabled !== false).length })}</p>
           </div>
         ) : null}
         <button
           type="button"
           className={css.linkButton}
-          disabled={disabled || busy || Boolean(fetchDisabled)}
+          disabled={disabled || locked || Boolean(fetchDisabled)}
           onClick={() => { if (!disabled && !fetchDisabled) void editor.discover() }}
         >
-          {fetching ? t('modelsFetching') : t('modelsFetch')}
+          <span aria-live="polite">{fetching ? t('modelsUpdating') : t(snapshot.status ? 'modelsFetch' : 'modelsLoading')}</span>
         </button>
       </div>
-      {failure ? <p className={css.error} role="alert">{failure}</p> : null}
+      {snapshot.savingChanges ? (
+        <ModelSaveStatus t={t} />
+      ) : snapshot.hasPendingChanges && snapshot.status?.refreshing ? (
+        <span className={css.modelCatalogMeta} role="status">{t('modelWaitingForCatalog')}</span>
+      ) : null}
+      {failure && !fetching ? <p className={css.error} role="alert">{t(failure)}</p> : null}
       <div className={css.modelList}>
-        {displayedModels.map(model => {
-          const unavailable = unavailableIds.has(model.id)
+        {snapshot.viewModels.map(model => {
+          const missing = model.missingFromCatalog === true
+          const rate = renderQoderModelRate(model, t)
+          const enabled = model.enabled !== false
           const tiers = contextTiersOf(model)
           const fallbackTier = tiers.find(tier => tier.isDefault) ?? tiers[tiers.length - 1]
           const selectedTier = resolveContextTier(model)?.key ?? fallbackTier?.key
           const selectedTierOption = tiers.find(tier => tier.key === selectedTier)
-          const tierDisabled = disabled || busy || unavailable || !selectedIds.has(model.id)
+          const tierDisabled = disabled || locked || !enabled
           const tierLabel = (tier: typeof tiers[number]) => tier.isDefault
             ? `${formatContextTokens(tier.tokenCount)}${t('contextTierDefaultSuffix')}`
             : formatContextTokens(tier.tokenCount)
           return (
-            <div className={`${css.modelChoice} ${unavailable ? css.modelUnavailable : ''}`} key={model.id}>
-              <label className={css.modelChoiceHead}>
-                <input
-                  type="checkbox"
-                  checked={!unavailable && selectedIds.has(model.id)}
-                  disabled={disabled || busy || unavailable}
-                  onChange={event => { if (!disabled) void editor.toggle(model.id, event.currentTarget.checked) }}
-                />
-                <span className={css.modelChoiceName}>{model.name}</span>
-                <span className={css.modelRate}>
-                  {renderRate(model)}
-                </span>
-                <code>{model.id}</code>
-                {unavailable ? <span className={css.modelBadge}>{t('modelUnavailable')}</span> : null}
-              </label>
-              {tiers.length > 1
-                ? (
-                  <div className={css.modelTier}>
-                    <span className={css.modelTierLabel}>{t('contextTierLabel')}</span>
-                    <Menu
-                      open={openTierModelId === model.id && !tierDisabled}
-                      onClose={() => { setOpenTierModelId(undefined) }}
-                      items={tiers.map(tier => ({ id: tier.key, label: tierLabel(tier) }))}
-                      selectedId={selectedTier}
-                      onSelect={key => {
-                        setOpenTierModelId(undefined)
-                        if (!tierDisabled && key !== selectedTier && tiers.some(tier => tier.key === key)) {
-                          void editor.selectTier(model.id, key)
-                        }
-                      }}
-                      align="start"
-                      portal
-                      anchor={(
-                        <button type="button" className={css.modelTierSelect}
-                          aria-label={`${model.name} ${t('contextTierLabel')}`}
-                          aria-haspopup="menu" aria-expanded={openTierModelId === model.id && !tierDisabled}
-                          disabled={tierDisabled}
-                          onClick={() => { if (!tierDisabled) setOpenTierModelId(openTierModelId === model.id ? undefined : model.id) }}>
-                          <span>{selectedTierOption ? tierLabel(selectedTierOption) : ''}</span>
-                          <IconChevronDownOutlineRegular size={14} aria-hidden="true" />
-                        </button>
-                      )}
-                    />
-                  </div>
-                )
-                : null}
+            <div className={css.modelChoice} key={model.id}>
+              <div className={css.modelChoiceHead}>
+                <label className={css.modelChoiceLabel}>
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    disabled={disabled || locked}
+                    onChange={event => {
+                      if (!disabled && !locked) void editor.edit({ action: 'toggle', id: model.id, enabled: event.currentTarget.checked })
+                    }}
+                  />
+                  <span className={css.modelName}>
+                    <span className={css.modelChoiceName}>{model.name}</span>
+                    {rate === null ? null : <span className={css.modelRate}>{rate}</span>}
+                    {missing ? <span className={css.modelMissing}>{t('modelMissingFromCatalog')}</span> : null}
+                  </span>
+                </label>
+                <div className={css.modelActions}>
+                  {missing && !enabled ? (
+                    <button type="button" className={css.modelDelete} disabled={disabled || locked}
+                      onClick={() => { void editor.edit({ action: 'delete', id: model.id }) }}>
+                      {t('modelDelete')}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className={css.modelDetails}>
+                <div className={css.modelMetadata}>
+                  <code>{model.id}</code>
+                </div>
+                {tiers.length > 1
+                  ? (
+                    <div className={css.modelTier}>
+                      <Menu
+                        open={openTierModelId === model.id && !tierDisabled}
+                        onClose={() => { setOpenTierModelId(undefined) }}
+                        items={tiers.map(tier => ({ id: tier.key, label: tierLabel(tier) }))}
+                        selectedId={selectedTier}
+                        onSelect={key => {
+                          setOpenTierModelId(undefined)
+                          if (!tierDisabled && key !== selectedTier && tiers.some(tier => tier.key === key)) {
+                            void editor.edit({ action: 'selectTier', id: model.id, tierKey: key })
+                          }
+                        }}
+                        align="start"
+                        portal
+                        anchor={(
+                          <button type="button" className={css.modelTierSelect}
+                            aria-label={`${model.name} ${t('contextTierLabel')}`}
+                            aria-haspopup="menu" aria-expanded={openTierModelId === model.id && !tierDisabled}
+                            disabled={tierDisabled}
+                            onClick={() => { if (!tierDisabled) setOpenTierModelId(openTierModelId === model.id ? undefined : model.id) }}>
+                            <span>{selectedTierOption ? tierLabel(selectedTierOption) : ''}</span>
+                            <IconChevronDownOutlineRegular size={14} aria-hidden="true" />
+                          </button>
+                        )}
+                      />
+                    </div>
+                  )
+                  : null}
+              </div>
             </div>
           )
         })}
       </div>
     </section>
   )
+}
+
+function ModelSaveStatus({ t }: Pick<QoderCredentialInjected, 't'>) {
+  const [showSaving, setShowSaving] = useState(false)
+  useEffect(() => {
+    const timer = setTimeout(() => setShowSaving(true), 500)
+    return () => clearTimeout(timer)
+  }, [])
+
+  return showSaving ? <span className={css.modelCatalogMeta} role="status">{t('saving')}</span> : null
 }

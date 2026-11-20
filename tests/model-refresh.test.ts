@@ -46,6 +46,7 @@ test('explicit discovery supersedes cached metadata and older in-flight discover
   const freshTransport = transport(async () => fresh)
   remote = freshTransport
   await catalog.discover()
+  await nextTurn()
   const resolved = await adapter.resolveModel(QODER_PROVIDER_ID, 'chosen')
   assert.deepEqual(resolved.inputModalities, ['text', 'image'])
   assert.equal(resolved.reasoning?.efforts[0].id, 'high')

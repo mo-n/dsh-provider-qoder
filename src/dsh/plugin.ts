@@ -234,6 +234,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     region: () => resolveConfig().region,
     resolveTransport: () => runtime.transport,
     discoverModels,
+    catalog,
     readModels: () => ({ region: runtime.config.region, models: catalog.models() }),
     authorization,
     adapter,
@@ -253,7 +254,8 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   })
 
   try {
-    ctx.effect(() => registerQoderRpc(ctx, handler, listener => adapter.subscribeSessionTiers(listener)), 'provider-qoder: settings RPC routes')
+    ctx.effect(() => registerQoderRpc(ctx, handler, listener => adapter.subscribeSessionTiers(listener),
+      listener => catalog.subscribe(listener)), 'provider-qoder: settings RPC routes')
   } catch (error) {
     // The settings RPC is an optional surface: a registration failure must not
     // take the model adapter or the web-search router down with it.

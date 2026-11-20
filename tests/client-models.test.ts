@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { reconcileQoderModels } from '../src/client/credential-operations.ts'
+import { reconcileQoderCatalog } from '../src/qoder/catalog.ts'
 
 test('model settings retain smaller budgets and cap old larger budgets on rediscovery', () => {
   const current = [
@@ -8,12 +8,11 @@ test('model settings retain smaller budgets and cap old larger budgets on redisc
     { id: 'large', name: 'Large', contextWindow: 1_000_000 },
   ]
   const discovered = current.map(model => ({ ...model, contextWindow: 200_000, maxContextWindow: 1_000_000 }))
-  const result = reconcileQoderModels(current, discovered)
-  assert.deepEqual(result.selected.map(model => model.contextWindow), [100_000, 200_000])
-  assert.deepEqual(result.catalog, result.selected)
+  const result = reconcileQoderCatalog(current, discovered, true)
+  assert.deepEqual(result.map(model => model.contextWindow), [100_000, 200_000])
 })
 
-test('fetched models default to selected while removed models remain visible as unavailable', () => {
+test('manual discovery enables new models and retains disabled missing models', () => {
   const current = [
     { id: 'retained', name: 'Old retained name' },
     { id: 'removed', name: 'Removed model' },
@@ -30,11 +29,14 @@ test('fetched models default to selected while removed models remain visible as 
     { id: 'new', name: 'New model' },
   ]
 
-  const reconciled = reconcileQoderModels(current, discovered)
+  const reconciled = reconcileQoderCatalog(current, discovered, true)
 
-  assert.deepEqual(reconciled.catalog.map(model => model.id), ['retained', 'new', 'removed'])
-  assert.deepEqual(reconciled.selected, discovered)
-  assert.deepEqual([...reconciled.unavailableIds], ['removed'])
+  assert.deepEqual(reconciled, [
+    { ...discovered[0], name: 'Old retained name' },
+    { ...current[1], missingFromCatalog: true, enabled: false },
+    discovered[1],
+  ])
+  assert.deepEqual(reconcileQoderCatalog(current, discovered, false), reconciled.slice(0, 2))
 })
 
 test('a remembered context tier survives rediscovery and widens the budget', () => {
@@ -45,11 +47,11 @@ test('a remembered context tier survives rediscovery and widens the budget', () 
   const current = [{ id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: 'large', contextOptions }]
   const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 200_000, maxContextWindow: 1_000_000, contextOptions }]
 
-  const reconciled = reconcileQoderModels(current, discovered)
+  const reconciled = reconcileQoderCatalog(current, discovered, true)
 
-  assert.equal(reconciled.selected[0].contextTier, 'large')
-  assert.equal(reconciled.selected[0].contextWindow, 1_000_000)
-  assert.equal(reconciled.unavailableIds.size, 0)
+  assert.equal(reconciled[0].contextTier, 'large')
+  assert.equal(reconciled[0].contextWindow, 1_000_000)
+  assert.equal(reconciled[0].missingFromCatalog, undefined)
 })
 
 test('a context tier the provider stops advertising falls back to the default budget', () => {
@@ -59,10 +61,10 @@ test('a context tier the provider stops advertising falls back to the default bu
   }]
   const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 200_000, contextOptions: { small: { tokenCount: 200_000, isDefault: true } } }]
 
-  const reconciled = reconcileQoderModels(current, discovered)
+  const reconciled = reconcileQoderCatalog(current, discovered, true)
 
-  assert.equal(reconciled.selected[0].contextTier, undefined)
-  assert.equal(reconciled.selected[0].contextWindow, 200_000)
+  assert.equal(reconciled[0].contextTier, undefined)
+  assert.equal(reconciled[0].contextWindow, 200_000)
 })
 
 test('rediscovery without context options clears the old options and tier', () => {
@@ -72,7 +74,7 @@ test('rediscovery without context options clears the old options and tier', () =
   }]
   const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 200_000 }]
 
-  const [selected] = reconcileQoderModels(current, discovered).selected
+  const [selected] = reconcileQoderCatalog(current, discovered, true)
   assert.equal(selected.contextOptions, undefined)
   assert.equal(selected.contextTier, undefined)
   assert.equal(selected.contextWindow, 200_000)
@@ -85,14 +87,14 @@ test('rediscovery replaces a removed smaller Context Tier with the advertised wi
   }]
   for (const contextOptions of [undefined, { large: { tokenCount: 1_000_000, isDefault: true } }]) {
     const discovered = [{ id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextOptions }]
-    const [selected] = reconcileQoderModels(current, discovered).selected
+    const [selected] = reconcileQoderCatalog(current, discovered, true)
     assert.equal(selected.contextTier, undefined)
     assert.equal(selected.contextWindow, 1_000_000)
     assert.deepEqual(selected.contextOptions, contextOptions)
   }
 })
 
-test('reconcileQoderModels tolerates deeply frozen models with contextOptions', () => {
+test('reconcileQoderCatalog tolerates deeply frozen models with contextOptions', () => {
   const current = Object.freeze([{
     id: 'tiered', name: 'Tiered', contextWindow: 1_000_000, contextTier: '1M',
     contextOptions: Object.freeze({
@@ -108,8 +110,8 @@ test('reconcileQoderModels tolerates deeply frozen models with contextOptions', 
     }),
   }])
 
-  const reconciled = reconcileQoderModels(current, discovered)
-  assert.equal(reconciled.selected[0].contextTier, '1M')
-  assert.equal(reconciled.selected[0].contextWindow, 1_000_000)
-  assert.equal(Object.isFrozen(reconciled.selected[0].contextOptions), false)
+  const reconciled = reconcileQoderCatalog(current, discovered, true)
+  assert.equal(reconciled[0].contextTier, '1M')
+  assert.equal(reconciled[0].contextWindow, 1_000_000)
+  assert.equal(Object.isFrozen(reconciled[0].contextOptions), false)
 })

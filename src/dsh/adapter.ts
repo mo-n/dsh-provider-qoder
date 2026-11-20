@@ -82,7 +82,7 @@ export class QoderAdapter extends LlmAdapter {
   constructor(options: QoderAdapterOptions) {
     super()
     this.resolveTransport = options.resolveTransport
-    this.catalogModels = options.models && options.models.length > 0 ? options.models : defaultModels
+    this.catalogModels = options.models ?? defaultModels
     this.providerId = options.providerId ?? QODER_PROVIDER_ID
     this.providerName = options.providerName ?? 'Qoder'
     this.region = options.region ?? (() => 'global')
@@ -170,7 +170,7 @@ export class QoderAdapter extends LlmAdapter {
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     await this.catalog.refresh()
-    return this.effectiveModels().map(model => modelInfo(provider, model))
+    return this.effectiveModels().filter(model => model.enabled !== false).map(model => modelInfo(provider, model))
   }
 
   private effectiveModels(): readonly QoderCatalogModel[] {

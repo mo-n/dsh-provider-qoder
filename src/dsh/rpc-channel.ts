@@ -7,7 +7,7 @@
 
 import type { QoderAccountInfo } from '../qoder/account.ts'
 import type { QoderAuthorizationView } from '../qoder/authorization.ts'
-import type { QoderCatalogModel } from '../qoder/catalog.ts'
+import type { QoderCatalogChange, QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderQueueSnapshot } from '../qoder/queue.ts'
 import type { QoderRegion } from '../qoder/region.ts'
  
@@ -21,7 +21,7 @@ export const qoderRpcChannel = '/qoder-subscription'
 export const qoderRpcApiPath = `/api${qoderRpcChannel}`
 
 /** Endpoints used by Qoder settings and composer controls. */
-export const qoderRpcEndpoints = ['account', 'models', 'modelRates', 'queue', 'conversationStatus', 'sessionTier', 'readSessionTier', 'sessionTierEvents', 'authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization', 'bootstrap'] as const
+export const qoderRpcEndpoints = ['account', 'models', 'refreshCatalog', 'editCatalog', 'catalogStatus', 'catalogEvents', 'modelRates', 'queue', 'conversationStatus', 'sessionTier', 'readSessionTier', 'sessionTierEvents', 'authorization', 'beginLogin', 'cancelLogin', 'selectAuthorization', 'bootstrap'] as const
 
 export type QoderRpcEndpoint = (typeof qoderRpcEndpoints)[number]
 
@@ -40,11 +40,31 @@ export interface QoderSessionTierPayload extends QoderSessionTierScope {
   tierKey: string
 }
 
+export interface QoderCatalogStatus {
+  region: QoderRegion
+  refreshing: boolean
+  failure?: 'fetch' | 'save'
+}
+
+export interface QoderCatalogToggle {
+  id: string
+  enabled: boolean
+}
+
+export type QoderCatalogEdit =
+  | ({ action: 'toggle' } & QoderCatalogToggle)
+  | { action: 'editBatch'; changes: readonly QoderCatalogChange[] }
+  | { action: 'delete'; id: string }
+  | { action: 'selectTier'; id: string; tierKey: string }
+
 /** Ordinary JSON endpoints; the NDJSON event stream is deliberately separate. */
 export interface QoderRpcContract {
   bootstrap: { input: Record<string, never>; output: { settingsNamespace: string } }
   account: { input: { force?: boolean }; output: QoderAccountInfo }
   models: { input: Record<string, never>; output: readonly QoderCatalogModel[] }
+  catalogStatus: { input: { region: QoderRegion }; output: QoderCatalogStatus }
+  refreshCatalog: { input: { region: QoderRegion }; output: readonly QoderCatalogModel[] }
+  editCatalog: { input: { region: QoderRegion; edit: QoderCatalogEdit }; output: readonly QoderCatalogModel[] }
   modelRates: { input: Record<string, never>; output: { region: QoderRegion; rates: readonly QoderModelRate[] } }
   queue: { input: { sessionId: string }; output: QoderQueueSnapshot[] }
   conversationStatus: {
@@ -80,6 +100,10 @@ export const qoderRpcErrorCodes = [
   'NO_CREDENTIALS',
   'UNAUTHENTICATED',
   'UPSTREAM_ERROR',
+  'CATALOG_REFRESHING',
+  'CATALOG_EDITING',
+  'CATALOG_TIER_UNAVAILABLE',
+  'CATALOG_SAVE_FAILED',
   'TIMEOUT',
   'ABORTED',
   'UNKNOWN_ENDPOINT',

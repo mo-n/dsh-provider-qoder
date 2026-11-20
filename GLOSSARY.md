@@ -74,6 +74,10 @@ _Avoid_: OSS bucket, image CDN, upload gateway
 
 ### Models & Reasoning
 
+**Qoder model catalog**:
+The collection of Qoder model records kept for a Qoder service region. A record can be locally enabled even while its Qoder model key is missing from the latest successful discovery.
+_Avoid_: upstream availability list, enabled model list
+
 **Qoder model key**:
 The provider-facing identifier of a selected Qoder model sent in upstream requests.
 _Avoid_: display name, DSH provider route

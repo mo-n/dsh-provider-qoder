@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { Tag, type TagTone } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { QoderModelRate } from '../dsh/rpc-channel.ts'
 import { QODER_PROVIDER_ID } from '../dsh/provider.ts'
 import { formatRateFactor } from '../qoder/catalog.ts'
 import type { QoderCredentialInjected } from './credential-operations.ts'
@@ -38,19 +39,27 @@ export function QoderModelLabel({ provider, model, placement, rates, t, resolveB
 
 function QoderModelOption({ model, rates, t }: Pick<ModelLabelProps, 'model' | 'rates' | 't'>) {
   const rate = useSyncExternalStore(rates.subscribe, rates.getSnapshot).get(model.id)
+  return renderQoderModelRate(rate, t, model.name)
+}
+
+export function renderQoderModelRate(
+  rate: Omit<QoderModelRate, 'id'> | undefined,
+  t: QoderCredentialInjected['t'],
+  name?: string,
+) {
   const price = rate?.priceFactor ?? (rate?.isFree ? 0 : undefined)
-  if (price === undefined) return model.name
-  if (price === 0) return <>{model.name} · {t('modelRateFree')}</>
+  if (price === undefined) return name ?? null
+  if (price === 0) return <>{name} · {t('modelRateFree')}</>
 
   const current = `${formatRateFactor(price)}×`
   const original = rate?.originalPriceFactor
   if (original === undefined || original <= price) {
-    return <>{model.name} · {current}</>
+    return <>{name} · {current}</>
   }
 
   const originalRate = `${formatRateFactor(original)}×`
   return <span className={css.label}>
-    <span className={css.name}>{model.name}</span>
+    {name === undefined ? null : <span className={css.name}>{name}</span>}
     <span aria-hidden="true" className={css.label}>
       <span>· <del>{originalRate}</del></span>
       <Tag className={css.badge} tone="success">{current}</Tag>
