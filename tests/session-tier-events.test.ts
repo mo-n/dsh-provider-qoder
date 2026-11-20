@@ -263,3 +263,33 @@ test('client decodes a scoped non-ASCII model id split inside a UTF-8 character'
   off(); events.dispose()
   await settle()
 })
+
+
+test('a late record from an aborted client stream cannot notify a replacement listener', async () => {
+  const controllers: ReadableStreamDefaultController<Uint8Array>[] = []
+  const events = createSessionTierEvents(async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controllers.push(controller) },
+  })))
+  const scope = { region: 'global', sessionId: 's1', modelId: 'model' } as const
+  const leave = events.subscribe(scope, () => {})
+  await nextTurn()
+  const encoder = new TextEncoder()
+  controllers[0].enqueue(encoder.encode(JSON.stringify(scope) + '\n'))
+  leave()
+  let changes = 0
+  const leaveReplacement = events.subscribe(scope, () => { changes++ })
+  try {
+    await nextTurn()
+    assert.equal(changes, 0)
+    assert.equal(controllers.length, 2)
+    controllers[1].enqueue(encoder.encode(JSON.stringify(scope) + '\n'))
+    await nextTurn()
+    assert.equal(changes, 1)
+  } finally {
+    leaveReplacement()
+    for (const controller of controllers) {
+      try { controller.close() } catch { /* The old reader may already have cancelled. */ }
+    }
+    events.dispose()
+  }
+})

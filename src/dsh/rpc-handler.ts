@@ -8,7 +8,7 @@ import type { QoderCatalogLifecycle } from './catalog-lifecycle.ts'
 import type { QoderAdapter } from './adapter.ts'
 import type { QoderBrowserAuthorizationManager } from './browser-authorization.ts'
 import type { QoderQueueStatusStore } from './queue-status.ts'
-import { QoderRequestError } from './request-error.ts'
+import { QoderCatalogTierUnavailableError, QoderRequestError } from './request-error.ts'
 import { isQoderRpcEndpoint, type QoderCatalogEdit, type QoderRpcErrorCode, type QoderJsonRpcEndpoint, type QoderRpcOutput } from './rpc-channel.ts'
 import type { QoderRpcHandler } from './rpc.ts'
 
@@ -63,10 +63,13 @@ async function executeRpc<E extends QoderJsonRpcEndpoint>(
     }
     let code: QoderRpcErrorCode = 'INTERNAL'
     if (error instanceof QoderLlmError) {
+      if (error instanceof QoderCatalogTierUnavailableError) {
+        return publicError('CATALOG_TIER_UNAVAILABLE', error.message, { modelIds: error.modelIds })
+      }
       if (error instanceof QoderRequestError) {
         code = 'INVALID_REQUEST'
-      } else if (error.code === 'CATALOG_REFRESHING') {
-        return publicError('CATALOG_REFRESHING', error.message)
+      } else if (error.code === 'CATALOG_REFRESHING' || error.code === 'CATALOG_EDITING') {
+        return publicError(error.code, error.message)
       } else if (error.code === 'CATALOG_SAVE_FAILED') {
         code = 'CATALOG_SAVE_FAILED'
       } else if (error.code === 'INTERNAL') {

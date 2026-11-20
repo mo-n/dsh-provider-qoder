@@ -129,6 +129,89 @@ test('an authorization change rolls back an outdated commit before the new refre
   assert.equal(revision, 2, 'the stale commit is compensated before the new catalog is accepted')
 })
 
+test('rolling back a stale refresh preserves a later context tier and its budget', async () => {
+  const { catalog, setSelected, getSelected, setTransport } = runtime()
+  const small = { tokenCount: 200_000, isDefault: true }
+  const large = { tokenCount: 1_000_000 }
+  const chosen = { id: 'chosen', name: 'Chosen', contextTier: 'large', contextWindow: large.tokenCount,
+    contextOptions: { small, large } }
+  setSelected([chosen])
+  setTransport(transport(async () => [{ ...chosen, contextTier: undefined, contextWindow: small.tokenCount,
+    contextOptions: { small } }]))
+  let revision = 0
+  catalog.bindSettings({
+    read: () => ({ models: getSelected(), revision }),
+    write: async (_region, models, expected) => {
+      assert.equal(expected, revision)
+      setSelected(models)
+      if (++revision === 1) {
+        setSelected([{ ...models[0], contextTier: 'small' }])
+        revision++
+        catalog.clearDiscovered()
+      }
+    },
+  })
+  await assert.rejects(catalog.refreshCatalog('global'), { code: 'ABORTED' })
+  assert.equal(getSelected()[0].contextTier, 'small')
+  assert.equal(getSelected()[0].contextWindow, small.tokenCount)
+  assert.deepEqual(getSelected()[0].contextOptions, { small })
+  assert.equal(revision, 2)
+})
+
+test('a matching revision written elsewhere is never rolled back by an aborted refresh', async () => {
+  const { catalog, setSelected, getSelected } = runtime()
+  setSelected([{ id: 'chosen', name: 'Chosen' }])
+  let revision = 0
+  let writes = 0
+  let cancellationScheduled = false
+  catalog.bindSettings({
+    read: () => {
+      if (revision === 1 && !cancellationScheduled) {
+        cancellationScheduled = true
+        queueMicrotask(() => catalog.clearDiscovered())
+      }
+      return { models: getSelected(), revision }
+    },
+    write: async (_region, models, expected) => {
+      assert.equal(expected, revision)
+      if (++writes === 1) {
+        setSelected(models)
+        revision++
+        throw new SettingsConflictError('provider-qoder' as SettingsNamespace, expected, revision)
+      }
+      setSelected(models)
+      revision++
+    },
+  })
+  await assert.rejects(catalog.refreshCatalog('global'), { code: 'ABORTED' })
+  assert.equal(writes, 1)
+  assert.deepEqual(getSelected().map(model => model.id), ['chosen', 'disabled'])
+})
+
+test('a new manual refresh starts before a cancelled discovery finishes cleaning up', async () => {
+  const { catalog, setTransport, getSelected, setSelected } = runtime()
+  const stale = deferred<readonly QoderCatalogModel[]>()
+  let calls = 0
+  setTransport(transport(() => ++calls === 1 ? stale.promise : Promise.resolve(advertised(4))))
+  catalog.bindSettings({
+    read: () => ({ models: getSelected(), revision: 0 }),
+    write: async (_region, models) => { setSelected(models) },
+  })
+  const controller = new AbortController()
+  const cancelled = catalog.refreshCatalog('global', controller.signal)
+  await Promise.resolve()
+  controller.abort()
+  await assert.rejects(cancelled, { code: 'ABORTED' })
+  try {
+    assert.equal((await catalog.refreshCatalog('global'))[0].priceFactor, 4)
+    assert.equal(calls, 2)
+  } finally {
+    stale.resolve(advertised(9))
+  }
+  await drain()
+  assert.equal(getSelected()[0].priceFactor, 4)
+})
+
 test('a cached read returns while a superseded write settles and revalidates afterwards', async () => {
   const { catalog, setTransport, getSelected, setSelected } = runtime()
   const available = getSelected()[0]

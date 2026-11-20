@@ -42,7 +42,7 @@ export function createCatalogEvents(rpc: QoderRpcCaller, send?: typeof fetch) {
   }
 
   async function poll(region: QoderRegion, subscription: CatalogSubscription): Promise<void> {
-    if (subscription.streaming || subscription.poll || subscription.retry !== undefined) return
+    if (subscriptions.get(region) !== subscription || subscription.streaming || subscription.poll || subscription.retry !== undefined) return
     const controller = new AbortController()
     subscription.poll = controller
     const timeout = setTimeout(() => controller.abort(), 3000)

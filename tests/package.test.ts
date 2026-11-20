@@ -562,6 +562,29 @@ test('settings RPC shares automatic catalog locks and persists missing models an
   assert.deepEqual(saved()?.global?.map(model => [model.id, model.enabled, model.contextTier, model.contextWindow]), [
     [chosen.id, true, 'large', 1_000_000],
   ])
+  const deniedTier = await call('editCatalog', {
+    region: 'global', edit: { action: 'editBatch', changes: [{ id: chosen.id, enabled: false, tierKey: 'removed' }] },
+  })
+  assert.ok(!deniedTier.ok)
+  assert.equal(deniedTier.error.code, 'CATALOG_TIER_UNAVAILABLE')
+  assert.deepEqual(deniedTier.error.details, { modelIds: [chosen.id] })
+  assert.equal(settings.writes.length, writesBeforeMixed + 1)
+
+  let beginWrite!: () => void
+  let releaseWrite!: () => void
+  const writeStarted = new Promise<void>(resolve => { beginWrite = resolve })
+  settings.onPersist = () => new Promise<void>(resolve => { releaseWrite = resolve; beginWrite() })
+  const editing = toggle(false)
+  await writeStarted
+  try {
+    const busy = await toggle(true)
+    assert.ok(!busy.ok)
+    assert.equal(busy.error.code, 'CATALOG_EDITING')
+  } finally {
+    releaseWrite()
+    settings.onPersist = undefined
+  }
+  assert.ok((await editing).ok)
   assert.deepEqual(saved()?.china, normalizedCatalog([other]))
 })
 

@@ -1,12 +1,12 @@
 /** Region-scoped Qoder model discovery and catalog updates. */
 import { isDeepStrictEqual } from 'node:util'
 import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
-import { applyQoderCatalogChange, cloneCatalogModel, hasSameQoderDiscoveryMetadata, mergeQoderDiscoveryMetadata, reconcileQoderCatalog, type QoderCatalogModel } from '../qoder/catalog.ts'
+import { applyQoderCatalogChange, cloneCatalogModel, hasSameQoderDiscoveryMetadata, mergeQoderDiscoveryMetadata, reconcileQoderCatalog, type QoderCatalogChange, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
 import type { QoderTransport } from '../qoder/transport/index.ts'
 import { QoderLlmError } from '../qoder/errors.ts'
 import { Config, modelsFor } from './config.ts'
-import { QoderRequestError } from './request-error.ts'
+import { QoderCatalogTierUnavailableError, QoderRequestError } from './request-error.ts'
 import type { QoderCatalogEdit, QoderCatalogStatus } from './rpc-channel.ts'
 
 export interface QoderCatalogSettings {
@@ -25,7 +25,7 @@ interface CatalogRefresh {
   persisting: boolean
   keepAlive: boolean
   waiters: number
-  write?: CatalogWrite
+  committedWrite?: CatalogWrite
   discovery: Promise<readonly QoderCatalogModel[]>
   completion: Promise<readonly QoderCatalogModel[]>
 }
@@ -49,6 +49,10 @@ export interface QoderCatalogLifecycleOptions {
 }
 
 const defaultPersistenceConflictBackoffMs = [50, 100, 200] as const
+const contextFields = ['contextTier', 'contextWindow', 'contextOptions', 'maxContextWindow'] as const
+const contextFieldSet = new Set<keyof QoderCatalogModel>(contextFields)
+const catalogEditing = () => new QoderLlmError('Another Qoder model catalog edit is being saved.', 'CATALOG_EDITING')
+
 /** Revert the changes from a stale write while preserving later changes to the same records. */
 function revertCatalogWrite(current: readonly QoderCatalogModel[], { before, after }: CatalogWrite): QoderCatalogModel[] {
   const previous = new Map(before.map(model => [model.id, model]))
@@ -59,8 +63,10 @@ function revertCatalogWrite(current: readonly QoderCatalogModel[], { before, aft
     const original = previous.get(model.id)
     if (!original) return isDeepStrictEqual(model, stale) ? [] : [model]
     const result: QoderCatalogModel = { ...model }
+    const contextUnchanged = contextFields.every(key => isDeepStrictEqual(model[key], stale[key]))
     for (const key of Object.keys({ ...original, ...stale }) as (keyof QoderCatalogModel)[]) {
-      if (isDeepStrictEqual(original[key], stale[key]) || !isDeepStrictEqual(model[key], stale[key])) continue
+      const unchanged = contextFieldSet.has(key) ? contextUnchanged : isDeepStrictEqual(model[key], stale[key])
+      if (!unchanged || isDeepStrictEqual(original[key], stale[key])) continue
       if (Object.hasOwn(original, key)) Object.assign(result, { [key]: original[key] })
       else delete result[key]
     }
@@ -144,8 +150,8 @@ export class QoderCatalogLifecycle {
     const state = this.catalogs[region]
     const configured = this.options.configuredModels(region)
     const running = state.running
-    const models = running?.controller.signal.aborted && running.write
-      ? revertCatalogWrite(configured, running.write)
+    const models = running?.controller.signal.aborted && running.committedWrite
+      ? revertCatalogWrite(configured, running.committedWrite)
       : configured
     return mergeQoderDiscoveryMetadata(models, state.models)
   }
@@ -207,7 +213,7 @@ export class QoderCatalogLifecycle {
       })
     }
     const running = state.running ?? this.startRefresh(region, false)
-    return this.joinRefresh(running, running.discovery, signal)
+    return this.joinRefresh(region, running, running.discovery, signal)
   }
 
   refreshCatalog(region: QoderRegion, signal?: AbortSignal): Promise<readonly QoderCatalogModel[]> {
@@ -218,17 +224,21 @@ export class QoderCatalogLifecycle {
     if (state.running && !state.running.manual) {
       return Promise.reject(new QoderLlmError('The Qoder model catalog is being updated.', 'CATALOG_REFRESHING'))
     }
-    if (state.editing) return Promise.reject(new QoderRequestError('The Qoder model catalog is being updated.'))
+    if (state.editing) return Promise.reject(catalogEditing())
     const running = state.running ?? this.startRefresh(region, true)
-    return this.joinRefresh(running, running.completion, signal)
+    return this.joinRefresh(region, running, running.completion, signal)
   }
 
-  private joinRefresh<T>(running: CatalogRefresh, pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  private joinRefresh<T>(region: QoderRegion, running: CatalogRefresh, pending: Promise<T>, signal?: AbortSignal): Promise<T> {
     running.waiters++
     return waitForDiscovery(pending, signal).finally(() => {
       running.waiters--
       if (signal?.aborted && !running.waiters && !running.keepAlive && !running.persisting) {
+        const state = this.catalogs[region]
+        const owned = state.running === running
+        if (owned) state.running = undefined
         running.controller.abort()
+        if (owned) this.publish(region)
       }
     })
   }
@@ -253,7 +263,7 @@ export class QoderCatalogLifecycle {
       const saved = await this.persistRefresh(region, models, running, knownAtStart)
       this.observeTransport()
       if (controller.signal.aborted) {
-        if (running.write && saved) await this.revertRefresh(region, running.write)
+        if (running.committedWrite) await this.revertRefresh(region, running.committedWrite)
         throw aborted()
       }
       state.models = models.map(cloneCatalogModel)
@@ -299,7 +309,7 @@ export class QoderCatalogLifecycle {
       }, {
         signal,
         allowUnavailable: !running.manual,
-        onWrite: write => { running.write = write },
+        onCommit: write => { running.committedWrite = write },
       })
     } catch (error) {
       if (signal.aborted) throw aborted()
@@ -326,15 +336,20 @@ export class QoderCatalogLifecycle {
     this.observeTransport()
     const state = this.catalogs[region]
     if (state.running) throw new QoderLlmError('The Qoder model catalog is being updated.', 'CATALOG_REFRESHING')
-    if (state.editing) throw new QoderRequestError('The Qoder model catalog is being updated.')
+    if (state.editing) throw catalogEditing()
     const pending = this.writeCatalog(region, models => {
       if (edit.action === 'editBatch' || edit.action === 'toggle') {
         const changes = edit.action === 'editBatch' ? edit.changes : [edit]
-        const desired = new Map(changes.map(change => [change.id, change]))
+        const desired = new Map<string, QoderCatalogChange>(changes.map(change => [change.id, change]))
         const savedIds = new Set(models.map(model => model.id))
         if (changes.some(change => !savedIds.has(change.id))) {
           throw new QoderRequestError('The model is no longer saved in this region.')
         }
+        const unavailableTiers = models.flatMap(model => {
+          const tierKey = desired.get(model.id)?.tierKey
+          return tierKey !== undefined && !applyQoderCatalogChange(model, { id: model.id, tierKey }) ? [model.id] : []
+        })
+        if (unavailableTiers.length) throw new QoderCatalogTierUnavailableError(unavailableTiers)
         return models.flatMap(model => {
           const change = desired.get(model.id)
           if (!change) return [model]
@@ -374,10 +389,10 @@ export class QoderCatalogLifecycle {
   private async writeCatalog(
     region: QoderRegion,
     reconcile: (models: readonly QoderCatalogModel[]) => readonly QoderCatalogModel[],
-    { signal, allowUnavailable, onWrite }: {
+    { signal, allowUnavailable, onCommit }: {
       signal?: AbortSignal
       allowUnavailable?: boolean
-      onWrite?(write: CatalogWrite): void
+      onCommit?(write: CatalogWrite): void
     } = {},
   ): Promise<readonly QoderCatalogModel[] | undefined> {
     const settings = this.settings
@@ -394,9 +409,9 @@ export class QoderCatalogLifecycle {
       const models = modelsFor(Config({ modelsByRegion: { [region]: updated } }), region)
       if (hasSameQoderDiscoveryMetadata(snapshot.models, models)) return snapshot.models
       try {
-        onWrite?.({ before: snapshot.models, after: models })
         await settings.write(region, models, snapshot.revision)
         if (this.settings !== settings) throw new Error('Qoder catalog settings changed during the save.')
+        onCommit?.({ before: snapshot.models, after: models })
         return models
       } catch (error) {
         if (!(error instanceof SettingsConflictError) || attempt >= delays.length) throw error

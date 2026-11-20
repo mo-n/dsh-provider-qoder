@@ -38,3 +38,33 @@ test('catalog status falls back to a shared JSON read while the event stream is 
   await nextTurn()
   assert.equal(reads, 2)
 })
+
+
+test('unsubscribing in the disconnect notification does not restart fallback polling', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let polls = 0
+  let stream!: ReadableStreamDefaultController<Uint8Array>
+  const send: typeof fetch = async url => {
+    if (String(url).endsWith('/catalogEvents')) {
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller } }))
+    }
+    polls++
+    return Response.json({ ok: true, value: { region: 'global', refreshing: false } })
+  }
+  const events = createCatalogEvents(createQoderRpcCaller({ fetch: send }), send)
+  t.after(() => events.dispose())
+  let sawStream = false
+  const leave = events.subscribe('global', status => {
+    if (status?.refreshing) sawStream = true
+    if (!status && sawStream) leave()
+  })
+  stream.enqueue(new TextEncoder().encode('{"region":"global","refreshing":true}\n'))
+  await nextTurn()
+  assert.ok(sawStream)
+  assert.equal(polls, 1)
+  stream.close()
+  await nextTurn()
+  t.mock.timers.tick(1000)
+  await nextTurn()
+  assert.equal(polls, 1)
+})

@@ -1,12 +1,31 @@
 import { applyQoderCatalogChange, cloneCatalogModel, resolveContextTier, type QoderCatalogChange, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
-import type { QoderCatalogEdit, QoderCatalogStatus, QoderRpcResult } from '../dsh/rpc-channel.ts'
+import type { QoderCatalogEdit, QoderCatalogStatus, QoderRpcErrorDetail, QoderRpcResult } from '../dsh/rpc-channel.ts'
 import type { QoderCredentialOperations } from './credential-operations.ts'
 
 type CatalogOperations = Pick<QoderCredentialOperations, 'refreshCatalog' | 'editCatalog' | 'subscribeCatalog'>
 type CatalogResult = QoderRpcResult<readonly QoderCatalogModel[]>
 const editDebounceMs = 2000
 const maxEditDelayMs = 5000
+const editRetryDelays = [150, 300, 600, 1200, 2400] as const
+
+function hasChanges(change: QoderCatalogChange): boolean {
+  return change.enabled !== undefined || change.tierKey !== undefined || change.remove === true
+}
+
+function previewCatalogChange(model: QoderCatalogModel, change?: QoderCatalogChange): QoderCatalogModel | null {
+  if (!change) return model
+  const updated = applyQoderCatalogChange(model, change)
+  if (updated !== undefined) return updated
+  if (change.tierKey !== undefined && change.enabled !== undefined) return { ...model, enabled: change.enabled }
+  return model
+}
+
+function unavailableTierIds(error?: QoderRpcErrorDetail): ReadonlySet<string> {
+  if (error?.code !== 'CATALOG_TIER_UNAVAILABLE' || !error.details || !('modelIds' in error.details)) return new Set()
+  const ids = error.details.modelIds
+  return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [])
+}
 
 export interface QoderModelCatalogEditSnapshot {
   models: readonly QoderCatalogModel[]
@@ -16,7 +35,7 @@ export interface QoderModelCatalogEditSnapshot {
   savingChanges: boolean
   hasPendingChanges: boolean
   refreshRequested: boolean
-  failure?: 'modelsFetchFailed' | 'modelsUpdateNotSaved' | 'saveFailed'
+  failure?: 'modelsFetchFailed' | 'modelsUpdateNotSaved' | 'saveFailed' | 'catalogTierNotSaved'
 }
 
 export class QoderModelCatalogEditor {
@@ -33,6 +52,7 @@ export class QoderModelCatalogEditor {
   private batchReady = false
   private draining = false
   private retry?: ReturnType<typeof setTimeout>
+  private editRetries = 0
   private snapshot: QoderModelCatalogEditSnapshot
 
   constructor(region: QoderRegion, models: readonly QoderCatalogModel[], operations: CatalogOperations) {
@@ -79,13 +99,10 @@ export class QoderModelCatalogEditor {
     const models = patch.models ?? this.snapshot.models
     const hasPendingChanges = !!this.inFlight || this.queued.size > 0
     const viewModels = hasPendingChanges ? models.flatMap(model => {
-      const sent = this.inFlight?.get(model.id)
-      const queued = this.queued.get(model.id)
-      const baseline = sent ? applyQoderCatalogChange(model, sent) : model
+      const baseline = previewCatalogChange(model, this.inFlight?.get(model.id))
       if (baseline === null) return []
-      const current = baseline ?? model
-      const updated = queued ? applyQoderCatalogChange(current, queued) : current
-      return updated === null ? [] : [updated ?? current]
+      const updated = previewCatalogChange(baseline, this.queued.get(model.id))
+      return updated === null ? [] : [updated]
     }) : models
     this.snapshot = { ...this.snapshot, ...patch, viewModels, hasPendingChanges, savingChanges: !!this.inFlight }
     if (this.active) for (const listener of this.listeners) listener()
@@ -112,11 +129,11 @@ export class QoderModelCatalogEditor {
     const change = { id: edit.id, ...this.queued.get(edit.id) }
 
     if (edit.action === 'toggle') {
-      if (edit.enabled === (baseline.enabled !== false)) delete change.enabled
+      if (sent?.enabled === undefined && edit.enabled === (baseline.enabled !== false)) delete change.enabled
       else change.enabled = edit.enabled
     } else if (edit.action === 'selectTier') {
       if (current.enabled === false || !applyQoderCatalogChange(current, { id: edit.id, tierKey: edit.tierKey })) return
-      if (edit.tierKey === resolveContextTier(baseline)?.key) delete change.tierKey
+      if (sent?.tierKey === undefined && edit.tierKey === resolveContextTier(baseline)?.key) delete change.tierKey
       else change.tierKey = edit.tierKey
     } else {
       if (!current.missingFromCatalog || current.enabled !== false) return
@@ -125,7 +142,7 @@ export class QoderModelCatalogEditor {
       delete change.tierKey
     }
 
-    if (change.enabled === undefined && change.tierKey === undefined && !change.remove) this.queued.delete(edit.id)
+    if (!hasChanges(change)) this.queued.delete(edit.id)
     else this.queued.set(edit.id, change)
     this.publish({ failure: undefined })
     if (!this.queued.size || this.batchReady) return this.flush()
@@ -150,40 +167,40 @@ export class QoderModelCatalogEditor {
       const apply = this.operations.editCatalog
       while (apply && !this.hostLocked() && this.batchReady) {
         const modelsAtStart = this.snapshot.models
-        const saved = new Map(modelsAtStart.map(model => [model.id, model]))
-        const batch = new Map([...this.queued].filter(([id, change]) => {
-          const model = saved.get(id)
-          return model && applyQoderCatalogChange(model, change) !== undefined
-        }))
-        const missing = batch.size !== this.queued.size
+        const { batch, failure } = this.prepareBatch(modelsAtStart)
         this.queued.clear()
         this.batchReady = false
-        const failure = missing ? { refreshRequested: false, failure: 'saveFailed' as const } : {}
+        const notice = failure ? { refreshRequested: false, failure } : {}
         if (!batch.size) {
-          this.publish(failure)
+          this.publish(notice)
           continue
         }
         this.inFlight = batch
-        this.publish(failure)
+        this.publish(notice)
         const result = await apply(this.region, { action: 'editBatch', changes: [...batch.values()] }).catch(() => undefined)
         this.inFlight = undefined
         if (result?.ok) {
+          this.editRetries = 0
           this.confirm(result.value, modelsAtStart)
-        } else if (result?.error.code === 'CATALOG_REFRESHING') {
-          // A refresh may start before its status reaches this page.
-          for (const [id, change] of batch) {
-            const newer = this.queued.get(id)
-            const combined = { ...change, ...newer }
-            if (combined.remove) delete combined.tierKey
-            this.queued.set(id, combined)
-          }
+          continue
+        }
+
+        const code = result?.error.code
+        if (this.retryWhenAvailable(code)) {
+          this.restoreBatch(batch)
           this.publish({})
           void this.flush()
-          this.retryAfterRefresh()
           return
-        } else {
-          this.publish({ refreshRequested: false, failure: 'saveFailed' })
         }
+
+        const staleTiers = unavailableTierIds(result?.error)
+        if ([...batch.values()].some(change => change.tierKey !== undefined && staleTiers.has(change.id))) {
+          this.restoreBatch(batch, staleTiers)
+          this.publish({ refreshRequested: false, failure: 'catalogTierNotSaved' })
+          void this.flush()
+          continue
+        }
+        this.publish({ refreshRequested: false, failure: 'saveFailed' })
       }
 
       const refresh = this.operations.refreshCatalog
@@ -191,10 +208,11 @@ export class QoderModelCatalogEditor {
         const modelsAtStart = this.snapshot.models
         this.publish({ pending: 'discovering', refreshRequested: false })
         const result = await refresh(this.region).catch(() => undefined)
-        if (result?.ok) this.confirm(result.value, modelsAtStart, { pending: undefined })
-        else if (result?.error.code === 'CATALOG_REFRESHING') {
+        if (result?.ok) {
+          this.editRetries = 0
+          this.confirm(result.value, modelsAtStart, { pending: undefined })
+        } else if (this.retryWhenAvailable(result?.error.code)) {
           this.publish({ pending: undefined, refreshRequested: true })
-          this.retryAfterRefresh()
         } else {
           const failure = result?.error.code === 'CATALOG_SAVE_FAILED' ? 'modelsUpdateNotSaved' : 'modelsFetchFailed'
           this.publish({ pending: undefined, failure })
@@ -206,12 +224,59 @@ export class QoderModelCatalogEditor {
     }
   }
 
-  private retryAfterRefresh(): void {
-    if (this.hostLocked()) return
+  private prepareBatch(models: readonly QoderCatalogModel[]) {
+    const saved = new Map(models.map(model => [model.id, model]))
+    const batch = new Map<string, QoderCatalogChange>()
+    let invalid = false
+    let staleTier = false
+    for (const [id, change] of this.queued) {
+      const model = saved.get(id)
+      if (!model) {
+        invalid = true
+        continue
+      }
+      const next = { ...change }
+      if (next.enabled === (model.enabled !== false)) delete next.enabled
+      if (next.tierKey !== undefined) {
+        if (!applyQoderCatalogChange(model, { id, tierKey: next.tierKey })) {
+          delete next.tierKey
+          staleTier = true
+        } else if (next.tierKey === resolveContextTier(model)?.key) {
+          delete next.tierKey
+        }
+      }
+      if (!hasChanges(next)) continue
+      if (applyQoderCatalogChange(model, next) === undefined) invalid = true
+      else batch.set(id, next)
+    }
+    const failure = invalid ? 'saveFailed' : staleTier ? 'catalogTierNotSaved' : undefined
+    return { batch, failure } as const
+  }
+
+  private restoreBatch(batch: ReadonlyMap<string, QoderCatalogChange>, staleTiers?: ReadonlySet<string>): void {
+    for (const [id, change] of batch) {
+      const sent = { ...change }
+      if (staleTiers?.has(id)) delete sent.tierKey
+      const combined = { ...sent, ...this.queued.get(id) }
+      if (combined.remove) delete combined.tierKey
+      if (hasChanges(combined)) this.queued.set(id, combined)
+    }
+  }
+
+  private retryWhenAvailable(code?: QoderRpcErrorDetail['code']): boolean {
+    if (code !== 'CATALOG_EDITING') this.editRetries = 0
+    if (code !== 'CATALOG_EDITING' && code !== 'CATALOG_REFRESHING') return false
+    if (this.hostLocked()) return true
+    const delay = code === 'CATALOG_EDITING' ? editRetryDelays[this.editRetries++] : 150
+    if (delay === undefined) {
+      this.editRetries = 0
+      return false
+    }
     this.retry = setTimeout(() => {
       this.retry = undefined
       void this.drain()
-    }, 150)
+    }, delay)
+    return true
   }
 
   private confirm(

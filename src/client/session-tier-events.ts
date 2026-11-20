@@ -64,7 +64,7 @@ export function createQoderChangeEvents<T>(
         }
         const consume = (text: string) => {
           let offset = 0
-          while (offset < text.length) {
+          while (offset < text.length && !controller.signal.aborted) {
             const newline = text.indexOf('\n', offset)
             const end = newline < 0 ? text.length : newline
             const segment = text.slice(offset, end)
@@ -108,16 +108,17 @@ export function createQoderChangeEvents<T>(
         try {
           while (!controller.signal.aborted) {
             const { value, done } = await reader.read()
-            if (done) break
+            if (done || controller.signal.aborted) break
             consume(decoder.decode(value, { stream: true }))
           }
           // Flush a split UTF-8 code point. A trailing unterminated record is
           // intentionally discarded because the host stream is NDJSON.
-          consume(decoder.decode())
+          if (!controller.signal.aborted) consume(decoder.decode())
         } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
       } catch { /* Reconnect also rereads the host, covering events missed while disconnected. */ }
       if (controller.signal.aborted) break
       if (endpoint === 'catalogEvents') notify()
+      if (controller.signal.aborted) break
       await new Promise<void>(resolve => {
         const finish = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', finish); resolve() }
         const timer = setTimeout(finish, delay)

@@ -146,32 +146,58 @@ test('manual refresh flushes debounced changes and waits for the single batch to
   assert.equal(editor.getSnapshot().hasPendingChanges, false)
 })
 
-test('a failed batch rolls back its models, preserves newer choices and cancels a waiting refresh', async t => {
+test('a failed batch preserves a newer choice and never invokes a waiting refresh', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const first = deferred<QoderRpcResult<readonly QoderCatalogModel[]>>()
   const second = deferred<QoderRpcResult<readonly QoderCatalogModel[]>>()
   const calls: QoderCatalogEdit[] = []
+  let refreshCalls = 0
   const editor = new QoderModelCatalogEditor('global', [missing, other], {
     editCatalog: (_region, edit) => {
       calls.push(edit)
       return calls.length === 1 ? first.promise : second.promise
     },
-    refreshCatalog: async () => assert.fail('refresh must wait for a successful drain'),
+    refreshCatalog: async () => {
+      refreshCalls++
+      return { ok: true, value: [missing, other] }
+    },
   })
   void editor.edit(toggle('a', true))
   void editor.edit(toggle('b', true))
   t.mock.timers.tick(2000)
   void editor.edit(toggle('a', false))
+  void editor.edit(toggle('a', true))
   void editor.discover()
   first.resolve(saveFailure)
   await nextTurn()
-  assert.deepEqual(calls, [batch(toggle('a', true), toggle('b', true)), batch(toggle('a', false))])
-  assert.deepEqual(editor.getSnapshot().viewModels, [missing, other])
+  assert.deepEqual(calls, [batch(toggle('a', true), toggle('b', true)), batch(toggle('a', true))])
+  const enabledA = { ...missing, enabled: true }
+  assert.deepEqual(editor.getSnapshot().viewModels, [enabledA, other])
   assert.equal(editor.getSnapshot().refreshRequested, false)
-  second.resolve({ ok: true, value: [missing, other] })
+  second.resolve({ ok: true, value: [enabledA, other] })
   await nextTurn()
+  assert.equal(refreshCalls, 0)
   assert.equal(editor.getSnapshot().failure, 'saveFailed')
-  assert.deepEqual(editor.getSnapshot().models, [missing, other])
+  assert.deepEqual(editor.getSnapshot().models, [enabledA, other])
+})
+
+test('a newer choice already satisfied by a successful save makes no extra write', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const pending = deferred<QoderRpcResult<readonly QoderCatalogModel[]>>()
+  const calls: QoderCatalogEdit[] = []
+  const editor = new QoderModelCatalogEditor('global', [missing], {
+    editCatalog: (_region, edit) => { calls.push(edit); return pending.promise },
+  })
+  void editor.edit(toggle('a', true))
+  t.mock.timers.tick(2000)
+  void editor.edit(toggle('a', false))
+  void editor.edit(toggle('a', true))
+  pending.resolve({ ok: true, value: [bothEnabled[0]] })
+  await nextTurn()
+  t.mock.timers.tick(2000)
+  await nextTurn()
+  assert.deepEqual(calls, [batch(toggle('a', true))])
+  assert.equal(editor.getSnapshot().hasPendingChanges, false)
 })
 
 test('an automatic refresh pauses a ready batch and revalidates its targets before resuming', async t => {
@@ -258,4 +284,78 @@ test('disable, delete and context tier changes share one pending batch and roll 
   await nextTurn()
   assert.deepEqual(editor.getSnapshot().viewModels, [removing, tiered])
   assert.equal(editor.getSnapshot().failure, 'saveFailed')
+})
+
+
+for (const mirrorUpdated of [true, false]) {
+  test(`a stale tier preserves a disable when detected by the ${mirrorUpdated ? 'client' : 'host'}`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const small = { id: 'a', name: 'A', contextTier: 'small', contextWindow: 200_000,
+      contextOptions: { small: { tokenCount: 200_000 } } }
+    const tiered = { ...small, contextOptions: { ...small.contextOptions, large: { tokenCount: 1_000_000 } } }
+    const confirmed = { ...small, enabled: false }
+    const calls: QoderCatalogEdit[] = []
+    const editor = new QoderModelCatalogEditor('global', [tiered], {
+      editCatalog: async (_region, edit) => {
+        calls.push(edit)
+        if (!mirrorUpdated && calls.length === 1) {
+          return { ok: false, error: { code: 'CATALOG_TIER_UNAVAILABLE', message: 'Stale tier', details: { modelIds: ['a'] } } }
+        }
+        return { ok: true, value: [confirmed] }
+      },
+    })
+    void editor.edit({ action: 'selectTier', id: 'a', tierKey: 'large' })
+    void editor.edit(toggle('a', false))
+    if (mirrorUpdated) {
+      editor.replaceModels([small])
+      assert.deepEqual(editor.getSnapshot().viewModels, [confirmed])
+    }
+    t.mock.timers.tick(2000)
+    await nextTurn()
+    assert.deepEqual(calls, [
+      ...mirrorUpdated ? [] : [{ action: 'editBatch', changes: [{ id: 'a', tierKey: 'large', enabled: false }] }],
+      batch(toggle('a', false)),
+    ])
+    assert.equal(editor.getSnapshot().failure, 'catalogTierNotSaved')
+    assert.deepEqual(editor.getSnapshot().viewModels, [confirmed])
+  })
+}
+
+test('contention retries the latest queued changes with a bounded backoff', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const calls: QoderCatalogEdit[] = []
+  let busy = true
+  const editor = new QoderModelCatalogEditor('global', [missing, other], {
+    editCatalog: async (_region, edit) => {
+      calls.push(edit)
+      return busy
+        ? { ok: false, error: { code: 'CATALOG_EDITING', message: 'Another writer is saving' } }
+        : { ok: true, value: bothEnabled }
+    },
+  })
+  void editor.edit(toggle('a', true))
+  t.mock.timers.tick(2000)
+  await nextTurn()
+  void editor.edit(toggle('b', true))
+  assert.deepEqual(editor.getSnapshot().viewModels, bothEnabled)
+  t.mock.timers.tick(149)
+  assert.equal(calls.length, 1)
+  busy = false
+  t.mock.timers.tick(1)
+  await nextTurn()
+  assert.deepEqual(calls, [batch(toggle('a', true)), batch(toggle('a', true), toggle('b', true))])
+  assert.equal(editor.getSnapshot().failure, undefined)
+
+  busy = true
+  void editor.edit(toggle('a', false))
+  t.mock.timers.tick(2000)
+  await nextTurn()
+  for (const delay of [150, 300, 600, 1200, 2400]) {
+    t.mock.timers.tick(delay)
+    await nextTurn()
+  }
+  assert.equal(calls.length, 8)
+  assert.equal(editor.getSnapshot().hasPendingChanges, false)
+  assert.equal(editor.getSnapshot().failure, 'saveFailed')
+  assert.deepEqual(editor.getSnapshot().viewModels, bothEnabled)
 })
