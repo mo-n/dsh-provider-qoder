@@ -57,6 +57,11 @@ interface ToolCallState {
   arguments: string
 }
 
+interface ToolCallsAtIndex {
+  active: ToolCallState
+  sealed: ToolCallState[]
+}
+
 type SuccessfulFinishKind = 'stop' | 'tool-calls' | 'max-tokens'
 
 function malformed(message: string): QoderLlmError {
@@ -72,6 +77,17 @@ export class QoderMalformedJsonFrameError extends QoderLlmError {
     this.incomplete = incomplete
     this.auxiliary = auxiliary
   }
+}
+
+function validateToolCall(state: ToolCallState): void {
+  if (!state.id || !state.name) throw malformed('Qoder completed an unidentifiable tool call.')
+  const args = state.arguments.trim() ? state.arguments : '{}'
+  try {
+    JSON.parse(args)
+  } catch {
+    throw malformed(`Qoder completed tool call "${state.name}" with malformed JSON arguments.`)
+  }
+  state.arguments = args
 }
 
 function tokenUsage(innerChunk: QoderInnerChunk): TokenUsage | undefined {
@@ -129,7 +145,7 @@ export async function* parseQoderChunks(
 ): AsyncGenerator<StreamChunk> {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
-  const toolCalls = new Map<number, ToolCallState>()
+  const toolCalls = new Map<number, ToolCallsAtIndex>()
   let buffer = ''
   let eventData: string[] = []
   let continuedEventData: string[] = []
@@ -338,11 +354,12 @@ export async function* parseQoderChunks(
               if (!Number.isInteger(upstreamIndex) || upstreamIndex < 0) {
                 throw malformed('Qoder tool-call delta has an invalid index.')
               }
-              let state = toolCalls.get(upstreamIndex)
-              if (state === undefined) {
-                state = { id: '', name: '', arguments: '' }
-                toolCalls.set(upstreamIndex, state)
+              let calls = toolCalls.get(upstreamIndex)
+              if (calls === undefined) {
+                calls = { active: { id: '', name: '', arguments: '' }, sealed: [] }
+                toolCalls.set(upstreamIndex, calls)
               }
+              let state = calls.active
               if (rawCall.id !== undefined) {
                 if (rawCall.id === '' || rawCall.id === null) {
                   // Upstream models and gateways often emit empty or null IDs in parameter deltas.
@@ -350,7 +367,16 @@ export async function* parseQoderChunks(
                 } else if (typeof rawCall.id !== 'string') {
                   throw malformed('Qoder tool call has an invalid id.')
                 } else {
-                  if (state.id && state.id !== rawCall.id) throw malformed('Qoder changed a streamed tool-call id.')
+                  if (state.id && state.id !== rawCall.id) {
+                    const name = rawCall.function?.name
+                    if (typeof name !== 'string' || !name || !state.arguments.trim()) {
+                      throw malformed('Qoder changed a streamed tool-call id.')
+                    }
+                    // A named start can reuse an index once the previous call is complete.
+                    validateToolCall(state)
+                    calls.sealed.push(state)
+                    state = calls.active = { id: '', name: '', arguments: '' }
+                  }
                   state.id = rawCall.id
                 }
               }
@@ -399,19 +425,24 @@ export async function* parseQoderChunks(
 
   for (const chunk of closeTextual()) yield chunk
 
-  for (const [, state] of [...toolCalls.entries()].sort(([left], [right]) => left - right)) {
-    if (!state.id || !state.name) throw malformed('Qoder completed an unidentifiable tool call.')
-    const normalizedArguments = state.arguments.trim() ? state.arguments : '{}'
-    try {
-      JSON.parse(normalizedArguments)
-    } catch {
-      throw malformed(`Qoder completed tool call "${state.name}" with malformed JSON arguments.`)
+  const completedToolCalls: ToolCallState[] = []
+  const seenToolCallIds = new Set<string>()
+  for (const [, calls] of [...toolCalls.entries()].sort(([left], [right]) => left - right)) {
+    validateToolCall(calls.active)
+    for (const state of [...calls.sealed, calls.active]) {
+      if (seenToolCallIds.has(state.id)) throw malformed('Qoder repeated a streamed tool-call id.')
+      seenToolCallIds.add(state.id)
+      completedToolCalls.push(state)
     }
+  }
+
+  // A malformed call must not leave DSH with a partially published batch.
+  for (const state of completedToolCalls) {
     const index = nextBlockIndex++
     const id = ToolCallId(state.id)
     sawContent = true
     yield { type: 'block-start', index, blockType: 'tool-call' }
-    yield { type: 'tool-call-delta', index, id, name: state.name, argumentsDelta: normalizedArguments }
+    yield { type: 'tool-call-delta', index, id, name: state.name, argumentsDelta: state.arguments }
     yield {
       type: 'block-end',
       index,
@@ -419,7 +450,7 @@ export async function* parseQoderChunks(
         type: 'tool-call',
         id,
         name: state.name,
-        arguments: normalizedArguments,
+        arguments: state.arguments,
       },
     }
   }
