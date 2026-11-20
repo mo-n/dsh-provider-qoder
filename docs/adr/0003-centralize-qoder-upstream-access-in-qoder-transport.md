@@ -1,72 +1,12 @@
 # Centralize Qoder upstream access in Qoder transport
 
-All Qoder upstream communication belongs to Qoder transport, exposed through provider capabilities rather than a generic HTTP client. DSH owns registration, configuration, credential storage, and model-generation retries; the transport owns authentication and Qoder protocol behavior. This keeps provider details behind one boundary without duplicating DSH's agent responsibilities.
+All Qoder upstream communication belongs to Qoder transport, exposed through provider capabilities rather than a generic HTTP client. DSH owns registration, configuration, credential storage, and model-generation retries; the transport owns authentication, model discovery, account reads, image publication, and web search. This keeps provider details behind one boundary without duplicating DSH's agent responsibilities.
 
-Each transport instance binds one immutable Qoder service region. Model catalogs are configured and persisted separately by region; switching region replaces the active instance while allowing already-started requests to finish. Shared reads use last-waiter cancellation, and internal metadata retries are limited to idempotent reads.
+Each transport instance binds one immutable Qoder service region with its own isolated model catalog. Switching regions replaces the active transport instance while permitting in-flight requests to complete. Connection pools, background polling loops, and circuit breakers remain outside scope; model catalog discovery uses request-driven revalidation rather than autonomous background timers.
 
-The original capabilities were model streaming, model discovery, and account reading. [ADR-0004](0004-publish-qoder-multimodal-input-through-the-center-service.md) adds image publication inside model-request preparation, and [ADR-0006](0006-route-web-search-by-initiating-model.md) adds web search. Both preserve the same ownership boundary; authentication refresh and retry behavior for those operations are defined separately from model-generation retries.
+## Wire Protocols and Recovery
 
-Connection pools, timer-driven background refresh, circuit breakers, dynamic rate limiting, and full tracing remain outside scope until demonstrated needs justify them. Request-driven stale-cache revalidation is allowed: when a model catalog has an accepted discovery, a caller may use that catalog immediately after expiry while one bounded discovery runs in the background; the first read without an accepted discovery still waits for discovery, and a failed revalidation retains the last accepted catalog without blocking model selection or creating an unhandled rejection. This is not a refresh timer or an independent background loop.
-
-Catalog refresh and editing are coordinated per region by the DSH integration. Automatic refresh reconciles saved records. A manual refresh also adds newly advertised keys. The first absence disables a saved model, and local enablement can override a continuing absence. An empty discovery leaves the saved catalog intact. Settings pages share the refresh status and lock catalog controls until the write settles. DSH publishes the last saved enablement while a refresh is in progress.
-
-## Authentication recovery before model generation
-
-Qoder transport may refresh subscriber credentials once after an HTTP rejection
-received before a model SSE stream starts, matching qodercli. An HTTP 401 starts
-recovery after initiating cancellation of the error response body. An HTTP 403
-starts recovery only when the decoded business code is `105` (subscriber
-authentication expiry). The transport allows up to one second to read the
-authentication error body when needed. This is a protocol authentication
-exchange. The prepared model body, request ID, and turn identity are reused.
-A second rejection is returned to DSH.
-Transport never replays an HTTP-successful model stream after an authentication or quota error. Queue recovery before any model output is owned by transport using turn-scoped leases; ordinary model-generation retries remain DSH-owned. This narrowly extends the original idempotent-read retry restriction.
-
-Model HTTP and SSE rejections share business-error classification. Queue code
-`10605` is consumed by transport queue recovery and maps to `RATE_LIMIT` only
-when queue recovery is disabled; exhausted quota and entitlement limits map to
-`QUOTA`. Provider delay hints retain the greater valid body/header delay without
-clamping to force recovery. Transport owns bounded queue recovery, while terminal
-queue failures use dedicated codes outside DSH's default transient retry set.
-Ordinary failure delay hints still follow DSH's retry policy.
-Other transport capabilities retain their own error protocols. DSH owns the
-existing retry and generic quota presentation, while transport diagnostics retain
-the concrete upstream code and distinguish HTTP status from SSE business status.
-
-Both model transports retain pending tool calls until normal stream completion.
-DSH can assemble a tool call from deltas without a closing block, so the
-transport publishes those deltas only after it can commit the call. A model
-refusal ends the stream with the text and usage already received and discards
-pending calls. DSH receives a transient notice scoped to the originating
-conversation. The provider notification control frames are skipped.
-
-## Model-server HTTP and legacy model transport
-
-The model transport defaults to the COSY `/algo/` model protocol (`legacy`).
-Qoder's model-server HTTP SSE protocol with a Bearer subscriber token remains
-selectable as `http`. These are separate wire protocols; both remain inside Qoder transport.
-Model discovery, account reads, image publication, and web search continue to use
-their independently verified endpoints and authentication formats.
-
-Qoder transport owns one auth manager per region-bound instance. It exchanges the
-Managed Qoder PAT, merges concurrent refreshes, rejects stale credential results,
-and performs at most one same-protocol recovery before a model stream starts.
-An HTTP-successful stream is never replayed after a later authentication or quota
-error. Model protocols are switched only by explicit subscriber configuration.
-Legacy queue recovery before output retains the turn-scoped lease behavior above;
-ordinary model-generation retries remain DSH-owned.
-Refresh remains request-driven, so this decision does not introduce a background
-refresh timer.
-
-Zstd request-body compression is disabled by default. Subscribers can opt in
-through the YAML setting `requestCompression: true`; the provider does not consume
-the CLI's remote compression feature gate. Model transport is also configured only
-through YAML. When an endpoint explicitly rejects a compressed request, transport
-falls back to identity and remembers the endpoint by protocol, origin, and path
-for a process-local 30-minute TTL. HTTP endpoints enter that state only after the
-identity fallback produces confirmed model output; legacy endpoints enter it on
-the pre-output encoding rejection and let DSH retry with a new request identity.
-After the TTL expires, the next eligible request probes compression again. The
-state contains no subscriber or credential data, and changing the YAML toggle
-does not clear it; disabling compression already prevents a probe while the TTL
-provides bounded recovery when compression is enabled again.
+- **Dual protocol support**: The transport encapsulates both the native COSY model protocol (`legacy`) and the model-server HTTP SSE protocol (`http`), with optional request compression and fallback, presenting a unified interface to the host.
+- **Pre-stream authentication recovery**. The transport may refresh subscriber credentials and resend the prepared model request once after an HTTP 401 or an HTTP 403 carrying business code `105`. An HTTP-successful response ends eligibility for authentication recovery, even if the SSE stream fails before producing output.
+- **Bounded queue recovery**: The transport handles upstream model queue admission and turn-scoped leases before stream output, mapping exhausted entitlement limits to quota failures while leaving general generation retries to DSH.
+- **Tool call commitment**: Streaming tool calls are staged until committed, preventing partial deltas from triggering premature host execution.

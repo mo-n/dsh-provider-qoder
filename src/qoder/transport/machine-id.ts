@@ -60,7 +60,7 @@ function usableHardwareValue(value: string): boolean {
   return alphanumeric.length > 0 && !/^0+$|^f+$/.test(alphanumeric)
 }
 
-/** Match the serial and salted UUID branches in Qoder CLI 1.1.86. */
+/** Match the serial and salted UUID branches  */
 function deriveMachineId({ platform, serial, uuid }: HardwareIdentity): string | undefined {
   const serialValue = serial?.trim() ?? ''
   const uuidValue = uuid?.trim().toLowerCase() ?? ''

@@ -1,42 +1,16 @@
 # Expose Qoder image capabilities through DSH tools
 
-We expose Qoder image search and image generation as native DSH tools, `ImageSearch` and `ImageGen`, so subscribers can use these capabilities with the provider's existing authorization and service-region configuration. This extends the authentication/model-only scope in [ADR-0001](0001-keep-qoder-behind-the-dsh-llm-boundary.md), while preserving DSH's ownership of the agent loop, tool execution, cancellation, and permission policy. Qoder transport owns upstream authentication, signing, requests, and generated-image downloads under [ADR-0003](0003-centralize-qoder-upstream-access-in-qoder-transport.md).
+We expose Qoder image search and image generation as native DSH tools (`ImageSearch` and `ImageGen`), allowing subscribers to use these capabilities within the provider's existing authorization and service-region configuration. This extends the scope of [ADR-0001](0001-keep-qoder-behind-the-dsh-llm-boundary.md) without adopting the Qoder Agent SDK or duplicating agent loop responsibilities.
 
-## Considered options
+## Considered Options
 
-- Keep the provider limited to authentication and model transport, leaving image capabilities to a separate plugin. This preserves the original scope, but a separate plugin would need an authorization and region-sharing boundary or duplicate that integration. Native DSH tools reuse the existing Qoder transport without introducing another agent loop.
-- Embed the Qoder Agent SDK to obtain its tools. Its execution and workspace responsibilities overlap DSH's, retaining the ownership problem identified in ADR-0001. We expose only the upstream capabilities needed by DSH tools.
-- Save generated images directly into a requested workspace directory. The DSH filesystem interface targeted by this decision has no binary write operation; host filesystem writes cannot stand in for writes in an arbitrary execution environment. We use DSH's durable attachment storage and map its host path into the execution environment instead.
-- Return only the generated upstream URL. This avoids local persistence but makes delivery depend on continued upstream URL availability and does not provide a durable DSH attachment. We download and preserve the original bytes before reporting successful delivery.
+- **Separate image plugin**: Rejected to avoid duplicating authentication and region management across multiple provider integrations.
+- **Embed Qoder Agent SDK**: Rejected because its tool and workspace execution overlap DSH's core responsibilities.
+- **Direct workspace writes**: Rejected because the host filesystem interface cannot guarantee portable binary writes across arbitrary execution environments; we use DSH durable attachments instead.
+- **Return upstream URLs directly**: Rejected because delivery would depend on volatile upstream URLs rather than persistent DSH attachments.
 
-## Delivery and failure semantics
+## Delivery Semantics and Safety Guardrails
 
-DSH owns attachment persistence and execution-environment path mapping; Qoder transport returns the downloaded image bytes. A successful `ImageGen` result includes a durable file attachment and an absolute execution-environment read path. This does not promise that the image is written into the workspace or to an arbitrary caller-selected destination. `ImageSearch` returns image and source metadata without downloading search results.
-
-Generation submissions are not replayed after uncertain failures: a timeout, connection failure, or unusable response does not establish that Qoder rejected the operation. Repeating it could create another image and consume subscriber quota again. The narrow authentication-recovery exception is an explicit HTTP 401 rejection: transport may refresh credentials once and resubmit the same request body and request ID. HTTP 403 and uncertain failures do not trigger that recovery; model-generation retry rules do not apply to image tools.
-
-Caller cancellation retains its cancellation classification; it does not prove
-that an already-submitted image was never generated. Explicit HTTP failures
-retain the response status and safe numeric upstream code without exposing the
-upstream response text. Uncertain failures retain the no-regeneration warning.
-
-An explicit HTTP 401 starts credential recovery without waiting for the error
-body. Diagnostic reads have a separate short deadline within the original
-generation budget and are cancelled when recovery succeeds. Recovery failure
-retains the initial HTTP rejection and any safely available numeric code.
-
-Once Qoder has returned an image URL, download, validation, storage, or path-mapping failures are reported as delivery failures, with a request ID and instructions against automatic regeneration. No automatic delivery-recovery operation is currently exposed; retaining a request ID is diagnostic correlation, not a guarantee that the image can be recovered. Signed image URLs must not appear in ordinary diagnostics.
-
-## Consequences
-
-- Image capabilities share the provider's selected Qoder authorization and service region. They have independent live enable/disable settings; their availability is not restricted to turns using a Qoder language model. The initiator-aware web search modes in [ADR-0006](0006-route-web-search-by-initiating-model.md) retain their existing behavior.
-- Generation is registered only when transport generation, attachment persistence, and host-to-execution path-mapping APIs are available. Even then, mapping a particular saved attachment can fail after generation; a host without usable mapping cannot fulfill the delivery contract. Image search can remain available independently.
-- Disabling a capability removes its tool definition and rejects retained calls at execution entry. It does not cancel calls already in progress; DSH remains responsible for caller cancellation and tool policy.
-- Generating an image does not require the calling language model to accept image input. Inspecting the resulting image is a separate capability, provided by DSH's existing `read_image` tool when available. This decision adds neither an image-reading implementation nor video tools.
-- Downloading upstream image URLs adds transport security responsibilities: bound resource use, validate download destinations and redirects, preserve TLS verification, and keep subscriber credentials out of download requests. Protocol details and limits remain in transport and its tests.
-- A download may try another already-validated public DNS address after a
-  connection failure before any HTTP response. All attempts share the hop's
-  deadline and caller cancellation, preserve the URL hostname for TLS, and never
-  regenerate the image. A received HTTP response or body failure is not replayed.
-
-The feature specification records configuration and acceptance details. Automated tests mock upstream interactions and consume no subscriber quota; offline protocol fixtures and mocks do not establish live availability for every Qoder service region or subscriber entitlement.
+- **Ownership boundary**. Qoder transport handles upstream authentication, signing, and generation, then returns the validated image bytes. DSH saves those bytes as a durable attachment and maps its path for reading in the execution environment.
+- **No speculative regeneration**: To protect subscriber quota, uncertain generation failures (timeouts, network drops) are never automatically replayed. Credential recovery is restricted to an explicit HTTP 401 before resubmitting the request ID.
+- **Secure downloads**. The transport enforces resource limits, validates download destinations and redirects, preserves TLS verification, and keeps subscriber credentials out of download requests.

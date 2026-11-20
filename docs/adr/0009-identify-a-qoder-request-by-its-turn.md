@@ -1,89 +1,18 @@
 # Identify a Qoder request by its turn, not by its step
 
-A DSH turn issues one model request per reasoning step, turning a single user prompt into dozens of consecutive requests. The Qoder service aggregates resource consumption per agent run: requests sharing a `business.id` appear in the Credits panel as a single record covering the whole turn.
+A DSH turn can issue multiple model requests for a single subscriber prompt. The Qoder service aggregates resource consumption per Qoder agent run, so successive requests in the same run share one Credits record.
 
-## Identity Mapping
+## Turn Boundary and Identity Mapping
 
 The transport aligns turn identity with Qoder's upstream aggregation model:
-- `business.id` & `business.begin_at`: identify an agent run, maintained across every request within a turn to aggregate usage.
-- `request_set_id`: carries the same turn identity.
-- `chat_record_id` & `request_id`: assigned a unique per-request UUID.
-- `session_id`: identifies the conversation session. Wire session and request-set identifiers are UUID v4 values. Subscriber and service-region isolation remains internal to transport; provider prefixes and host session identifiers are not sent as the wire session ID.
-- `business.model_key`: the Qoder model key sent in the model request, also used in agent-run finalization.
-- `business.name`: the opening subscriber prompt's text, trimmed and truncated to ten JavaScript string units, retained for the run. An image-only model input uses an empty name. If image generation opens the run before a subscriber prompt is available, its trimmed and truncated prompt supplies the retained name.
+- **Authoritative boundary**: Hosted calls capture an immutable run handle from the committed DSH turn lifecycle before provider I/O. Injected context, history projections, or steering within an open host turn cannot split the Qoder agent run. Standalone calls without a host owner infer turn boundaries from DSH user-role messages.
+- **Identity allocation**. Model requests within the same Qoder agent run share `business.id`, `business.begin_at`, and `request_set_id`. Each request receives a unique `request_id` and matching legacy `chat_record_id`. Changing the Qoder model key within a DSH turn starts a new Qoder agent run and preserves `session_id`. Later requests in the same run use `processing` after its first successful step.
 
-Model and image requests use `start` until the run's first successful step. A
-cancelled preparation or failed step leaves its retry on the same business and
-request set with `start`. A successful model result, including a tool call, or
-a successfully delivered image advances the run to `processing` for later
-requests. Terminal stages are reported separately on agent-run finalization.
+## Auxiliary Calls and Isolation
 
-## Turn Boundary Derivation
-
-Hosted calls capture an immutable run handle from the committed DSH turn lifecycle before provider I/O. That handle is the authoritative turn boundary: injected context, history projections, and steering within an open host turn cannot open a second Qoder agent run. A model switch still opens a new Qoder agent run. Subscriber, region, and session identities remain isolated within the handle.
-
-This supersedes message-history inference within a hosted run. The previous combination of host scoping and text inference split real turns whenever the host introduced an unrecognized user-role context message, such as a time snapshot.
-
-Standalone calls with a session and without a host owner infer boundaries from
-DSH user-role messages. A message with a source is subscriber input when its
-source kind is `user`. A user-role input without a source is also accepted.
-Message IDs identify durable input. For inputs without an ID, the tracker
-counts matching text and image counts in the current projection. A newly
-observed subscriber message opens a run. When a conversation is first seen, the
-tracker accounts for the supplied history together and uses the latest
-subscriber message for its name. If compaction replaces an identity-free
-message with an identical occurrence, it can share the open record until
-distinct input arrives.
-
-## Auxiliary Calls & Lifecycle Isolation
-
-- **Auxiliary host calls** (session titles and history compaction summaries marked by `GenerateOptions.purpose`) run under their own independent agent run. Explicit `auto-review` calls use a separate aggregation window described below. They never open, displace, or claim subscriber turn records.
-- **Hosted tracking**: Transport state is weakly keyed by the captured run handle, outside the standalone LRU cache. The host releases its handle at turn end; outstanding requests retain the old handle until they finish, without joining a newer turn. Completed runs therefore cannot evict active ones, and no global strong reference retains completed run state.
-- **Standalone tracking**: The history-inference cache remains bounded, preferring idle conversations when capacity is exceeded. Auxiliary calls do not refresh its timestamps.
-
-Wire session UUIDs are mapped in memory for the lifetime of the DSH process and shared by model and image requests. Restarting DSH creates a new upstream session; no credential or identity registry is persisted. Stable UUID mappings deliberately remain until process exit (or tracker clear for no-session scopes): evicting them would silently change session identity. This retains one small mapping per observed DSH conversation and per no-session subscriber/region/model scope, while expired aggregation windows are pruned lazily.
-
-## Fallback and automatic review aggregation
-
-Calls without a host session and without an explicit auxiliary purpose cannot be reliably assigned to a subscriber turn. Older DSH Auto review calls use this path, but transport does not identify them by matching their prompt. Such calls share a Qoder request aggregation window per service region, subscriber, and model. This supersedes the previous per-request identity fallback for these calls only.
-
-Newer DSH hosts supply `sessionId` and `purpose: auto-review`. Treating every purpose as a one-off auxiliary call would bypass fallback aggregation and recreate a business for every tool review. Transport therefore recognizes only the explicit `auto-review` purpose and groups it in a separate review window per service region, subscriber, source conversation (when supplied), and model. A supplied conversation keeps its normal upstream session UUID, while review business and request-set identities remain separate from the main agent run. The captured host run does not open, displace, or claim review identities. Review calls lacking a session also use a review window, isolated from ordinary no-session model calls. This remains compatible with older host type declarations without modifying DSH.
-
-Each window lasts five minutes from its creation; activity does not extend it. It retains one business ID, request-set ID, begin time, and opening name. The upstream session stays stable across window rollover while the business and request-set IDs renew. Every model request still receives its own request ID and matching legacy chat-record ID. A request keeps its captured identity through completion and authentication recovery even if a later request opens a new window.
-
-This grouping deliberately permits calls originating in different DSH conversations to share an upstream consumption identity when their origin is unavailable. It does not combine their messages or recover a real DSH turn boundary, does not change SSE timeouts, and does not reduce token consumption. Explicit title and compaction calls remain independent even without a session. Ordinary hosted and standalone conversations keep their existing boundary rules.
-
-Shared queue admission is accounted for by all concurrent requests using the same request group. One request finishing or being cancelled must not release admission still used by another. Hosted queue leases remain owned by committed host turns. No background release timer or model replay is introduced.
-
-The protocol identity baseline is qodercli 1.1.82. Its native subagent path can inherit a parent's business while using a separate request set; implementing that parent relationship is outside this change. Our hosted child runs remain independent. UUID formatting and offline tests alone do not establish live gateway acceptance or exact Credits-panel presentation.
+- **Auxiliary host calls** (session titles, history compaction, and explicit `auto-review` calls) run under independent agent runs or bounded review aggregation windows. They never open, displace, or claim subscriber turn records.
+- **Fallback aggregation**: Calls lacking host session context share a bounded request aggregation window per service region, subscriber, and model, preventing unbounded business creation while keeping model calls isolated from subscriber turns.
 
 ## Agent-run Finalization
 
-Committed DSH `session/event` `turn/end` finalizes the Qoder agent runs actually
-dispatched under its captured host handle. Model-step completion does not close a
-run. The host retains transport-owned actions for every business identity,
-including earlier model selections and region or subscriber scopes. Replacing an
-open host turn or unloading the provider explicitly abandons its remaining runs
-with cancellation state; browser authorization remains available until this
-bounded cleanup completes.
-
-Qoder transport reports `BUSINESS_FINISH` to
-`/algo/api/v2/service/business/finish?Encode=1`, independently of
-`/ask/finish` queue lease release and regardless of the selected model protocol.
-The encoded, COSY-signed event uses the dispatched session and business identity,
-the original agent metadata, and the committed end timestamp. Terminal stages
-are `complete`, `abort`, and `error`. An ImageGen call sharing that identity does not create a second report or
-replace the agent metadata.
-
-Each region, subscriber, organization, session, and business identity is reported
-once per host handle, including across replaced transport instances. Later
-matching dispatches may update the captured credential lease. A late request
-keeps the closed handle's terminal state and cannot finalize a newer turn.
-Reports have an independent ten-second total deadline, including credential
-resolution and response cleanup. Only an HTTP 401 or an HTTP 403 carrying explicit
-subscriber expiry (`105`) allows one authentication recovery. Failures remain
-best effort and do not change the subscriber's model result.
-
-Auxiliary model calls remain isolated and do not register subscriber finalization.
-Standalone calls inferred from history lack an authoritative completion event and
-therefore do not report automatic agent-run finalization.
+A committed DSH turn end (`turn/end`) finalizes the Qoder agent runs dispatched under its captured host handle, independently of queue lease release. The transport reports terminal state (`complete`, `abort`, or `error`) upstream via a best-effort, signed `BUSINESS_FINISH` event. Auxiliary and history-inferred standalone calls do not emit automatic agent-run finalization.
