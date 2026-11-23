@@ -10,6 +10,7 @@ export function transportConfig(value: Config) {
     responseHeaderTimeoutMs: value.responseHeaderTimeoutMs ?? defaultResponseHeaderTimeoutMs,
     modelQueueMaxWaitMs: value.modelQueueMaxWaitMs ?? defaultModelQueueMaxWaitMs,
     preserveThinking: value.preserveThinking ?? true,
+    replaceSystemPrompt: value.replaceSystemPrompt ?? true,
     requestCompression: value.requestCompression ?? false,
     requestCompressionMinChars: value.requestCompressionMinChars ?? defaultRequestCompressionMinChars,
     requestCompressionLevel: value.requestCompressionLevel ?? defaultRequestCompressionLevel,

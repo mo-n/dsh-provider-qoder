@@ -181,7 +181,7 @@ test('invalid tool-call roles and non-string text fail before credential or netw
   const messages = [{ role: 'assistant', content: [toolCall] }, { role: 'user', content: [{ type: 'text', text: '' }] }]
   const translated = await validateAndTranslateMessages(messages as unknown as GenerateOptions['messages'])
   assert.equal(translated[0].tool_calls?.[0].function.name, 'lookup')
-  assert.equal(translated[1].content, '')
+  assert.equal(translated.length, 1)
 })
 
 test('session cleanup releases all regions without changing another session selection', () => {
@@ -216,7 +216,7 @@ test('transport runtime replaces changed configuration atomically and retains ca
 test('every transport configuration field replaces the instance, and failed creation preserves the snapshot', () => {
   const changes = [
     { region: 'china' as const }, { streamIdleTimeoutMs: 1234 }, { responseHeaderTimeoutMs: 1234 },
-    { modelQueueMaxWaitMs: 1234 }, { preserveThinking: false }, { requestCompression: true },
+    { modelQueueMaxWaitMs: 1234 }, { preserveThinking: false }, { replaceSystemPrompt: false }, { requestCompression: true },
     { modelTransport: 'http' as const }, { requestCompressionMinChars: 100 }, { requestCompressionLevel: 3 },
   ]
   for (const change of changes) {

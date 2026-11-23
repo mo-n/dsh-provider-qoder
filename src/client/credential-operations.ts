@@ -29,6 +29,7 @@ export interface QoderCredentialOperations {
   storeWebSearchMode(mode: QoderWebSearchMode): Promise<OperationResult<void>>
   storeImageSearchEnabled(enabled: boolean): Promise<OperationResult<void>>
   storeImageGenEnabled(enabled: boolean): Promise<OperationResult<void>>
+  storeReplaceSystemPrompt(enabled: boolean): Promise<OperationResult<void>>
   getCatalogEditor?(region: QoderRegion, models: readonly QoderCatalogModel[]): QoderModelCatalogEditor
   refreshCatalog?(region: QoderRegion): Promise<QoderRpcResult<readonly QoderCatalogModel[]>>
   editCatalog?(region: QoderRegion, edit: QoderCatalogEdit): Promise<QoderRpcResult<readonly QoderCatalogModel[]>>
@@ -45,6 +46,7 @@ export interface QoderModelSettingsSection {
   webSearchMode?: QoderWebSearchMode
   imageSearchEnabled?: boolean
   imageGenEnabled?: boolean
+  replaceSystemPrompt?: boolean
   showModelRates?: boolean
 }
 

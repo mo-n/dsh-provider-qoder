@@ -127,6 +127,7 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
     storeWebSearchMode: (mode: import('../dsh/config.ts').QoderWebSearchMode) => setting('storeWebSearchMode', () => form.set('webSearchMode', mode)),
     storeImageSearchEnabled: (enabled: boolean) => setting('storeImageSearchEnabled', () => form.set('imageSearchEnabled', enabled)),
     storeImageGenEnabled: (enabled: boolean) => setting('storeImageGenEnabled', () => form.set('imageGenEnabled', enabled)),
+    storeReplaceSystemPrompt: (enabled: boolean) => setting('storeReplaceSystemPrompt', () => form.set('replaceSystemPrompt', enabled)),
     readSessionTier: async (scope: QoderSessionTierScope): Promise<OperationResult<QoderSessionTierSelection>> => {
       try { const result = await readTier(scope); return result.ok ? result : failure('readSessionTier', 'read-context-tier', result.error, { context: scope }) }
       catch (error) { return failure('readSessionTier', 'read-context-tier', error, { context: scope }) }

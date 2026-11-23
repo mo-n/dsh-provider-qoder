@@ -14,6 +14,7 @@ import { QoderLlmError } from '../src/qoder/errors.ts'
 import { normalizeQoderModels } from '../src/qoder/catalog.ts'
 import { buildQoderRequestBody, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
 import {
+  messagesForTurnIdentity,
   validateAndTranslateMessages,
   type QoderImageAttachments,
   type QoderImageResolver,
@@ -99,6 +100,30 @@ test('validateAndTranslateMessages processes DSH text history', async () => {
     { role: 'system', content: 'System' },
     { role: 'user', content: 'Hello' },
     { role: 'assistant', content: 'Hi there!' },
+  ])
+})
+
+test('Qoder requests skip empty user messages while preserving retry identity', async () => {
+  const prompt = createUserMessage({ content: [{ type: 'text', text: 'Hello' }], source: { kind: 'user' } })
+  // The pinned DSH types predate the retry source found in newer session logs.
+  const empty = createUserMessage({ content: [], source: { kind: 'user' } })
+  const retry = { ...empty, source: { kind: 'retry' } }
+  const translated = await validateAndTranslateMessages([prompt, retry])
+
+  assert.deepEqual(translated, [{ role: 'user', content: 'Hello' }])
+  assert.equal(messagesForTurnIdentity(translated).at(-1)?.id, retry.id)
+
+  const body = await buildQoderRequestBody({
+    provider: 'dsh-provider-qoder', model: 'model',
+    messages: [prompt, empty, createUserMessage({
+      content: [{ type: 'text', text: ' \n\t' }], source: { kind: 'user' },
+    }), createUserMessage({
+      content: [{ type: 'text', text: ' Continue ' }], source: { kind: 'user' },
+    })],
+  }, 'user-test')
+  assert.deepEqual(body.messages, [
+    { role: 'user', content: 'Hello' },
+    { role: 'user', content: ' Continue ' },
   ])
 })
 

@@ -21,6 +21,7 @@ export interface Config {
   streamIdleTimeoutMs?: number
   responseHeaderTimeoutMs?: number
   preserveThinking?: boolean
+  replaceSystemPrompt?: boolean
   webSearchMode?: QoderWebSearchMode
   imageSearchEnabled?: boolean
   imageGenEnabled?: boolean
@@ -70,6 +71,7 @@ export const Config: z<Config> = z.object({
   streamIdleTimeoutMs: z.number().step(1).min(1).default(defaultStreamIdleTimeoutMs),
   responseHeaderTimeoutMs: z.number().step(1).min(1).default(defaultResponseHeaderTimeoutMs),
   preserveThinking: z.boolean().default(true),
+  replaceSystemPrompt: z.boolean().default(true),
   webSearchMode: z.union(['auto', 'always', 'disabled'] as const).default('auto'),
   imageSearchEnabled: z.boolean().default(true),
   imageGenEnabled: z.boolean().default(true),

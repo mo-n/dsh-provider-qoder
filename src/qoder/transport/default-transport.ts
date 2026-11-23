@@ -61,6 +61,7 @@ export class DefaultQoderTransport implements QoderTransport {
   private readonly imageUploader: QoderImageUploader
   private readonly credentialLeases = new WeakMap<CosyCredentials, QoderCredentialLease>()
   private readonly preserveThinking?: boolean
+  private readonly replaceSystemPrompt?: boolean
   private readonly modelQueueMaxWaitMs?: number
   private readonly onQueueUpdate: QoderTransportOptions['onQueueUpdate']
   private readonly onModelRefusal: QoderTransportOptions['onModelRefusal']
@@ -93,6 +94,7 @@ export class DefaultQoderTransport implements QoderTransport {
     this.metadataTimeoutMs = options.metadataTimeoutMs
     this.attachments = options.attachments
     this.preserveThinking = options.preserveThinking
+    this.replaceSystemPrompt = options.replaceSystemPrompt
     this.auth = new QoderAuthManager({
       fetch: this.fetchImpl,
       logger: this.logger,
@@ -250,6 +252,7 @@ export class DefaultQoderTransport implements QoderTransport {
       uploader: this.imageUploader,
       credentials,
       preserveThinking: this.preserveThinking,
+      replaceSystemPrompt: this.replaceSystemPrompt,
       onImagesTrimmed: counts => this.logger?.debug?.('[Qoder Stream] Trimmed request history images', counts),
     })
     // Image publication may have refreshed a rejected job token.

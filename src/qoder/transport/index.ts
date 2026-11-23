@@ -58,6 +58,7 @@ export interface QoderTransportOptions {
   imageUrlCacheTtlMs?: number
   /** Whether prior assistant reasoning content is preserved across turns. */
   preserveThinking?: boolean
+  replaceSystemPrompt?: boolean
 }
 
 export function createQoderTransport(options: QoderTransportOptions): QoderTransport {
