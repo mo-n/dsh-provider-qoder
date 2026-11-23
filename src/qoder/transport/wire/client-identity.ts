@@ -1,7 +1,7 @@
 /** Client identity shared by Qoder model protocols and Open API exchanges. */
 import { hostname } from 'node:os'
 
-export const qoderIdeVersion = '1.1.92'
+export const qoderIdeVersion = '1.1.95'
 export const qoderClientType = '5'
 export const defaultUserAgent = `qoder/${qoderIdeVersion}`
 
