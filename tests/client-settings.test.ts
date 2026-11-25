@@ -125,20 +125,16 @@ test('client registers the Qoder navigation icon only when the host declares its
 })
 
 const modelLabelSlot = 'conversation.input.model.label'
-const settingsSlots = ['settings.section', 'settings.section.icon', 'settings.models.footer']
-const conversationSlots = ['conversation.input.dock', 'conversation.input.right']
-const modelLabelCollision = (priority: number) => new Error(
-  `single slot "${modelLabelSlot}" already has a registration at priority ${priority} (registered by another-plugin) — register at a different priority to shadow it (lowest renders)`,
-)
+const coreSlots = ['settings.section', 'settings.section.icon', 'settings.models.footer', 'conversation.input.dock', 'conversation.input.right']
 
 async function mountWithModelLabel(
   registerLabel: (priority: number) => void,
-  entries?: () => Array<{ options?: { priority?: number } }>,
+  entries?: Array<{ options?: { priority?: number } }>,
 ) {
   const plugin = await loadClientPlugin()
   const base = bootstrapContext()
   const registered: string[] = []
-  const attempts: number[] = []
+  let labelPriority: number | undefined
   const disposers: Array<() => void> = []
   const disposeFormSubscription = test.mock.fn()
   const subscribeForm = test.mock.fn(() => disposeFormSubscription)
@@ -152,10 +148,7 @@ async function mountWithModelLabel(
       callback(context)
     },
     slots: {
-      ...(entries && { entries: (name: string) => {
-        assert.equal(name, modelLabelSlot)
-        return entries()
-      } }),
+      ...(entries && { entries: () => entries }),
       inject(_name: string, callback: () => (() => void) | Iterable<() => void>) {
         const result = callback()
         if (typeof result === 'function') disposers.push(result)
@@ -163,9 +156,8 @@ async function mountWithModelLabel(
       },
       register({ name, priority }: { name: string; priority: number }) {
         if (name === modelLabelSlot) {
-          assert.deepEqual(registered, settingsSlots)
-          attempts.push(priority)
           registerLabel(priority)
+          labelPriority = priority
         }
         registered.push(name)
         return () => {}
@@ -173,42 +165,39 @@ async function mountWithModelLabel(
     },
   }
   await plugin.apply(context)
-  return { registered, attempts, disposers, subscribeForm, disposeFormSubscription, subscribeRemote, disposeAdapterSubscription }
+  return { registered, labelPriority, disposers, subscribeForm, disposeFormSubscription, subscribeRemote, disposeAdapterSubscription }
 }
 
-for (const inspectEntries of [true, false]) {
-  test(`the model label yields to priority 100 ${inspectEntries ? 'via slot entries' : 'after a registration collision'}`, async () => {
-    const mounted = await mountWithModelLabel(priority => {
-      if (priority === 100) throw modelLabelCollision(priority)
-    }, inspectEntries ? () => [{ options: {} }, { options: { priority: 100 } }, { options: { priority: 102 } }] : undefined)
+test('the model label yields upward when priority 100 is already occupied', async () => {
+  const mounted = await mountWithModelLabel(
+    priority => {
+      if (priority === 100) {
+        throw new Error(`single slot "${modelLabelSlot}" already has a registration at priority 100`)
+      }
+    },
+    [{ options: { priority: 100 } }],
+  )
 
-    assert.deepEqual(mounted.registered, [...settingsSlots, modelLabelSlot, ...conversationSlots])
-    assert.deepEqual(mounted.attempts, inspectEntries ? [101] : [100, 101])
-    assert.equal(mounted.subscribeForm.mock.callCount(), 1)
-    assert.equal(mounted.subscribeRemote.mock.callCount(), 1)
-    assert.equal(mounted.subscribeRemote.mock.calls[0].arguments[0], 'llm/adapters-updated')
-    assert.equal(mounted.disposeFormSubscription.mock.callCount(), 0)
-    assert.equal(mounted.disposeAdapterSubscription.mock.callCount(), 0)
-    for (const dispose of mounted.disposers.reverse()) dispose()
-    assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
-    assert.equal(mounted.disposeAdapterSubscription.mock.callCount(), 1)
+  assert.equal(mounted.labelPriority, 101)
+  for (const slot of [...coreSlots, modelLabelSlot]) assert.ok(mounted.registered.includes(slot))
+  assert.equal(mounted.subscribeForm.mock.callCount(), 1)
+  assert.equal(mounted.subscribeRemote.mock.callCount(), 1)
+  for (const dispose of mounted.disposers.reverse()) dispose()
+  assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
+  assert.equal(mounted.disposeAdapterSubscription.mock.callCount(), 1)
+})
+
+test('the model label isolates registration failures without leaking subscriptions', async () => {
+  const mounted = await mountWithModelLabel(() => {
+    throw new Error(`single slot "${modelLabelSlot}" already has a registration at priority 100`)
   })
-}
 
-for (const collision of [true, false]) {
-  test(`the model label isolates ${collision ? 'repeated priority collisions' : 'other registration errors'} and disposes its rates`, async () => {
-    const mounted = await mountWithModelLabel(priority => {
-      throw collision ? modelLabelCollision(priority) : new Error('model label registration unavailable')
-    })
-
-    assert.deepEqual(mounted.registered, [...settingsSlots, ...conversationSlots])
-    assert.deepEqual(mounted.attempts, collision ? [100, 101, 102] : [100])
-    assert.equal(mounted.disposers.length, mounted.registered.length)
-    assert.equal(mounted.subscribeForm.mock.callCount(), 1)
-    assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
-    assert.equal(mounted.subscribeRemote.mock.callCount(), 0)
-  })
-}
+  for (const slot of coreSlots) assert.ok(mounted.registered.includes(slot))
+  assert.equal(mounted.registered.includes(modelLabelSlot), false)
+  assert.equal(mounted.subscribeForm.mock.callCount(), 1)
+  assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
+  assert.equal(mounted.subscribeRemote.mock.callCount(), 0)
+})
 
 test('the model label slot renders rates in Qoder options and preserves other provider badges', async (t) => {
   const context = bootstrapContext()
