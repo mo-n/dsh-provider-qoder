@@ -124,6 +124,81 @@ test('client registers the Qoder navigation icon only when the host declares its
   assert.match(String(icon.props.style.mask), /data:image\/svg\+xml,/u)
 })
 
+const modelLabelSlot = 'conversation.input.model.label'
+const coreSlots = ['settings.section', 'settings.section.icon', 'settings.models.footer', 'conversation.input.dock', 'conversation.input.right']
+
+async function mountWithModelLabel(
+  registerLabel: (priority: number) => void,
+  entries?: Array<{ options?: { priority?: number } }>,
+) {
+  const plugin = await loadClientPlugin()
+  const base = bootstrapContext()
+  const registered: string[] = []
+  let labelPriority: number | undefined
+  const disposers: Array<() => void> = []
+  const disposeFormSubscription = test.mock.fn()
+  const subscribeForm = test.mock.fn(() => disposeFormSubscription)
+  const disposeAdapterSubscription = test.mock.fn()
+  const subscribeRemote = test.mock.fn((_event: string, _listener: () => void) => disposeAdapterSubscription)
+  const context = {
+    ...base,
+    configForms: { get: (namespace: string) => ({ ...base.configForms.get(namespace), subscribe: subscribeForm }) },
+    remote: { ...base.remote, $on: subscribeRemote },
+    inject(_services: string[], callback: (scope: unknown) => void) {
+      callback(context)
+    },
+    slots: {
+      ...(entries && { entries: () => entries }),
+      inject(_name: string, callback: () => (() => void) | Iterable<() => void>) {
+        const result = callback()
+        if (typeof result === 'function') disposers.push(result)
+        else disposers.push(...result)
+      },
+      register({ name, priority }: { name: string; priority: number }) {
+        if (name === modelLabelSlot) {
+          registerLabel(priority)
+          labelPriority = priority
+        }
+        registered.push(name)
+        return () => {}
+      },
+    },
+  }
+  await plugin.apply(context)
+  return { registered, labelPriority, disposers, subscribeForm, disposeFormSubscription, subscribeRemote, disposeAdapterSubscription }
+}
+
+test('the model label yields upward when priority 100 is already occupied', async () => {
+  const mounted = await mountWithModelLabel(
+    priority => {
+      if (priority === 100) {
+        throw new Error(`single slot "${modelLabelSlot}" already has a registration at priority 100`)
+      }
+    },
+    [{ options: { priority: 100 } }],
+  )
+
+  assert.equal(mounted.labelPriority, 101)
+  for (const slot of [...coreSlots, modelLabelSlot]) assert.ok(mounted.registered.includes(slot))
+  assert.equal(mounted.subscribeForm.mock.callCount(), 1)
+  assert.equal(mounted.subscribeRemote.mock.callCount(), 1)
+  for (const dispose of mounted.disposers.reverse()) dispose()
+  assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
+  assert.equal(mounted.disposeAdapterSubscription.mock.callCount(), 1)
+})
+
+test('the model label isolates registration failures without leaking subscriptions', async () => {
+  const mounted = await mountWithModelLabel(() => {
+    throw new Error(`single slot "${modelLabelSlot}" already has a registration at priority 100`)
+  })
+
+  for (const slot of coreSlots) assert.ok(mounted.registered.includes(slot))
+  assert.equal(mounted.registered.includes(modelLabelSlot), false)
+  assert.equal(mounted.subscribeForm.mock.callCount(), 1)
+  assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
+  assert.equal(mounted.subscribeRemote.mock.callCount(), 0)
+})
+
 test('the model label slot renders rates in Qoder options and preserves other provider badges', async (t) => {
   const context = bootstrapContext()
   const slot = 'conversation.input.model.label'
@@ -512,7 +587,7 @@ test('client settings mounts with declared services and reports rejected writes'
   ctx.remote.credentials = validCredentials
   await plugin.apply(guardedContext(declared))
   assert.equal(namespace, 'provider-qoder')
-  assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
+  assert.deepEqual(registeredSlots, ['settings.section', 'settings.models.footer', 'conversation.input.dock'])
   assert.equal((await operations.storeRegion('china')).ok, true)
   accepted = false
   assert.equal((await operations.storeRegion('global')).ok, false)

@@ -141,26 +141,6 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
    */
   const activeLocale = (): string => ctx.locale.getLocale().active
 
-  ctx.slots.inject('conversation.input.model.label', function* () {
-    const rates = createModelRates(rpc, modelScope)
-    yield () => rates.dispose()
-    yield ctx.remote.$on('llm/adapters-updated', rates.refresh)
-    yield ctx.slots.register({
-      name: 'conversation.input.model.label',
-      priority: 100,
-      locale: localeNamespace,
-      inject: () => ({
-        rates,
-        t,
-        resolveBadgeText: ctx.locale.resolveText.bind(ctx.locale),
-      }),
-    }, QoderModelLabel)
-  })
-  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-    name: 'conversation.input.dock', id: 'qoder-model-queue', order: 30,
-    locale: localeNamespace,
-    inject: (sessionId: string) => ({ sessionId, rpc, t }),
-  }, QoderQueueStatus))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: settingsSectionId,
@@ -179,6 +159,43 @@ function mount(ctx: ClientContext, modelScope: ModelForm, rpc: ReturnType<typeof
     order: 15,
     inject: () => ({ operations, t, activeLocale }),
   }, QoderCredentialCard))
+
+  const modelLabelSlot = 'conversation.input.model.label'
+  ctx.slots.inject(modelLabelSlot, function* () {
+    const occupied = new Set(ctx.slots.entries?.(modelLabelSlot).map(entry => entry.options?.priority ?? 0))
+    const rates = createModelRates(rpc, modelScope)
+    // DSH renders the lowest priority. Move upward to yield to existing entries.
+    let priority = 100
+    for (let attempt = 0; attempt < 3; attempt++, priority++) {
+      while (occupied.has(priority)) priority++
+      let unregister: () => void
+      try {
+        unregister = ctx.slots.register({
+          name: modelLabelSlot,
+          priority,
+          locale: localeNamespace,
+          inject: () => ({
+            rates,
+            t,
+            resolveBadgeText: ctx.locale.resolveText.bind(ctx.locale),
+          }),
+        }, QoderModelLabel)
+      } catch (error) {
+        if (String(error).includes(`single slot "${modelLabelSlot}" already has a registration at priority `)) continue
+        break
+      }
+      yield () => rates.dispose()
+      yield ctx.remote.$on('llm/adapters-updated', rates.refresh)
+      yield unregister
+      return
+    }
+    rates.dispose()
+  })
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock', id: 'qoder-model-queue', order: 30,
+    locale: localeNamespace,
+    inject: (sessionId: string) => ({ sessionId, rpc, t }),
+  }, QoderQueueStatus))
   // Bind the control to the live model-directory service and its session faces.
   // A setup-time optional lookup does not follow service readiness or replacement.
   ctx.inject(['modelDirectories', 'sessions', 'remote.session'], (scope: ClientContext) => {
