@@ -40,6 +40,8 @@ export interface QoderBusiness {
   name: string
   begin_at: number
   model_key?: string
+  orphan?: boolean
+  feature_switches?: Record<string, unknown>
 }
 
 export type QoderContextConfig = Record<string, { token_count?: number; is_default?: boolean }>

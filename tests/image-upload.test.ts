@@ -403,3 +403,22 @@ test('cancelled queued uploads do not block later publications', async () => {
   }
   assert.equal(started, 1, 'the live queued upload must receive the released slot')
 })
+
+test('default upload request_id and multipart boundary omit UUID hyphens', async () => {
+  const { boundary } = buildQoderImageMultipart(new Uint8Array([1, 2, 3]), 'image/png')
+  assert.match(boundary, /^----qodercli-[0-9a-f]{32}$/u)
+
+  let seenUrl!: URL
+  let contentType = ''
+  const uploader = new QoderImageUploader({
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seenUrl = new URL(String(input))
+      contentType = (init?.headers as Record<string, string>)['Content-Type'] ?? ''
+      return okUpload()
+    }) as typeof fetch,
+  })
+
+  await uploader.resolveImageUrl(requestImage(), credentials)
+  assert.match(seenUrl.searchParams.get('request_id') ?? '', /^[0-9a-f]{32}$/u)
+  assert.match(contentType, /^multipart\/form-data; boundary=----qodercli-[0-9a-f]{32}$/u)
+})

@@ -594,3 +594,36 @@ test('QoderUsageReader redacts plan and status failure logs while preserving par
   assert.doesNotMatch(JSON.stringify(warnings), /arbitrary-private-value|nested-private-value/)
   assert.match(JSON.stringify(warnings), /TRANSPORT/)
 })
+
+test('QoderUsageReader forwards explicit machineToken to user status headers without inventing UMID for whitespace', async () => {
+  const seenHeaders: Array<Record<string, string>> = []
+  const fetchMock: typeof fetch = async (input, init) => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-umid' }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-umid' }))
+    if (url.includes('/quota/usage')) return new Response(JSON.stringify({ userQuota: { total: 10, used: 1 } }))
+    if (url.includes('/user/plan')) return new Response(JSON.stringify({}))
+    if (url.includes('/user/status')) {
+      seenHeaders.push({ ...(init?.headers as Record<string, string>) })
+      return new Response(JSON.stringify({ featureSwitches: { allow_byok: 1 } }))
+    }
+    throw new Error(`unexpected URL: ${url}`)
+  }
+
+  for (const rawToken of ['  umid-token-123  ', '   ']) {
+    const reader = new QoderUsageReader({
+      authService: new QoderAuthService({
+        fetch: fetchMock,
+        resolveMachineId: () => 'machine-id-123',
+        resolveMachineToken: () => rawToken,
+      }),
+      fetch: fetchMock,
+    })
+    await reader.readAccount(`pat-${rawToken}`)
+  }
+
+  assert.equal(seenHeaders[0]?.['Cosy-MachineToken'], 'umid-token-123')
+  assert.equal(seenHeaders[0]?.['Cosy-MachineType'], '5')
+  assert.equal(seenHeaders[1]?.['Cosy-MachineToken'], undefined)
+  assert.equal(seenHeaders[1]?.['Cosy-MachineType'], undefined)
+})

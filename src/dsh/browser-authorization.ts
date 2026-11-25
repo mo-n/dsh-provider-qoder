@@ -34,11 +34,18 @@ function decode(record: CredentialRecord | undefined, region: QoderRegion): Save
   }
   if (value.grant) {
     const grant = value.grant
+    const machineToken = (grant.credentials as { machineToken?: unknown } | undefined)?.machineToken
     if (grant.region !== region || typeof grant.id !== 'string' || !grant.id
       || typeof grant.refreshToken !== 'string' || !grant.refreshToken || !Number.isFinite(grant.expiresAt)
       || !grant.credentials || typeof grant.credentials.userID !== 'string' || !grant.credentials.userID
-      || typeof grant.credentials.authToken !== 'string' || !grant.credentials.authToken) {
+      || typeof grant.credentials.authToken !== 'string' || !grant.credentials.authToken
+      || (machineToken !== undefined && typeof machineToken !== 'string')) {
       throw new QoderLlmError('Saved Qoder browser authorization is invalid.', 'AUTH')
+    }
+    if (typeof machineToken === 'string') {
+      const normalized = machineToken.trim()
+      if (normalized.length === 0) delete grant.credentials.machineToken
+      else grant.credentials.machineToken = normalized
     }
   }
   return value as SavedAuthorization

@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto'
 import { QoderLlmError, qoderHttpError, qoderRequestId } from '../errors.ts'
-import { logParsedResponse, redactLogPayload, type QoderLogger } from './logging.ts'
+import { logParsedResponse, redactLogPayload, redactLogUrl, type QoderLogger } from './logging.ts'
 import { qoderMachineOs } from './wire/cosy.ts'
 import { defaultUserAgent, qoderClientType, qoderIdeVersion } from './wire/client-identity.ts'
 
@@ -16,6 +16,44 @@ const modelAuthErrorBodyTimeoutMs = 1_000
 
 export function opaqueCredentialKey(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+/** Race an asynchronous operation against an optional `AbortSignal`. */
+export async function awaitWithAbort<T>(
+  operation: Promise<T> | T,
+  signal: AbortSignal | undefined,
+  onAbort: () => Error,
+): Promise<T> {
+  const promise = Promise.resolve(operation)
+  if (signal === undefined) return promise
+  if (signal.aborted) {
+    void promise.catch(() => undefined)
+    throw onAbort()
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const onSignalAbort = (): void => {
+      if (settled) return
+      settled = true
+      void promise.catch(() => undefined)
+      reject(onAbort())
+    }
+    signal.addEventListener('abort', onSignalAbort, { once: true })
+    promise.then(
+      value => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', onSignalAbort)
+        resolve(value)
+      },
+      error => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', onSignalAbort)
+        reject(error)
+      },
+    )
+  })
 }
 
 function retryableMetadataError(error: unknown): error is QoderLlmError {
@@ -212,7 +250,7 @@ export async function openApiJsonRequest<T>(
     : AbortSignal.any([options.signal, timeoutSignal])
   const startedAt = performance.now()
 
-  options.logger?.debug?.(`[Qoder ${options.operation}] Requesting`, { url: options.url, method })
+  options.logger?.debug?.(`[Qoder ${options.operation}] Requesting`, { url: redactLogUrl(options.url), method })
 
   try {
     const headers: Record<string, string> = {

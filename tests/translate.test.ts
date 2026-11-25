@@ -15,6 +15,7 @@ import { normalizeQoderModels } from '../src/qoder/catalog.ts'
 import { buildQoderRequestBody, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
 import {
   messagesForTurnIdentity,
+  sanitizeToolCallArguments,
   validateAndTranslateMessages,
   type QoderImageAttachments,
   type QoderImageResolver,
@@ -304,14 +305,51 @@ test('legacy tool results preserve user and tool sibling images and nested assis
   }
 })
 
-test('tool-call validation preserves empty string arguments', async () => {
+test('tool-call validation accepts empty string arguments and sanitizes them to {}', async () => {
   const [message] = await validateAndTranslateMessages([{
     role: 'assistant',
     content: [{ type: 'tool-call', id: ToolCallId('call-empty'), name: 'ping', arguments: '' }],
   }])
   assert.deepEqual(message.tool_calls, [{
-    id: 'call-empty', type: 'function', function: { name: 'ping', arguments: '' },
+    id: 'call-empty', type: 'function', function: { name: 'ping', arguments: '{}' },
   }])
+})
+
+test('sanitizeToolCallArguments keeps valid JSON objects intact and falls back to {} otherwise', async () => {
+  const formattedValid = '{\n  "path": "src/index.ts",\n  "line": 12\n}'
+  const jsonWhitespace = ' \n\t{"path":"a"}\r\n '
+  assert.equal(sanitizeToolCallArguments(formattedValid), formattedValid)
+  assert.equal(sanitizeToolCallArguments(jsonWhitespace), jsonWhitespace)
+  assert.equal(sanitizeToolCallArguments('\uFEFF{}'), '{}')
+  assert.equal(sanitizeToolCallArguments('\u00A0{"a":1}'), '{"a":1}')
+  assert.equal(sanitizeToolCallArguments('\u000B{"a":1}'), '{"a":1}')
+  assert.equal(sanitizeToolCallArguments('{\u00A0"a":1}'), '{}')
+  assert.equal(sanitizeToolCallArguments('{"truncated": "abc'), '{}')
+  assert.equal(sanitizeToolCallArguments('   \t\n '), '{}')
+  for (const nonObject of ['[]', '[1,2]', 'null', '42', '"str"', 'true', 'false']) {
+    assert.equal(sanitizeToolCallArguments(nonObject), '{}')
+  }
+  for (const sample of [formattedValid, jsonWhitespace, '\uFEFF{}', '\u00A0{"a":1}', '{\u00A0"a":1}', '{"truncated": "abc']) {
+    const sanitized = sanitizeToolCallArguments(sample)
+    const parsed = JSON.parse(sanitized)
+    assert.equal(typeof parsed, 'object')
+    assert.notEqual(parsed, null)
+    assert.equal(Array.isArray(parsed), false)
+  }
+
+  const [translated] = await validateAndTranslateMessages([{
+    role: 'assistant',
+    content: [
+      { type: 'tool-call', id: ToolCallId('call-valid'), name: 'read', arguments: formattedValid },
+      { type: 'tool-call', id: ToolCallId('call-cut'), name: 'write', arguments: '{"path": "a.txt' },
+      { type: 'tool-call', id: ToolCallId('call-arr'), name: 'list', arguments: '[1, 2]' },
+    ],
+  }])
+  assert.deepEqual(translated.tool_calls, [
+    { id: 'call-valid', type: 'function', function: { name: 'read', arguments: formattedValid } },
+    { id: 'call-cut', type: 'function', function: { name: 'write', arguments: '{}' } },
+    { id: 'call-arr', type: 'function', function: { name: 'list', arguments: '{}' } },
+  ])
 })
 
 test('buildQoderRequestBody uses the resolved identity and configured model', async () => {

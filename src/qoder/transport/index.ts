@@ -51,6 +51,9 @@ export interface QoderTransportOptions {
   responseHeaderTimeoutMs?: number
   metadataTimeoutMs?: number
   resolveMachineId?: () => string | Promise<string>
+  resolveMachineToken?: () => string | undefined | Promise<string | undefined>
+  outerProviders?: readonly string[]
+  includeEnterpriseByok?: boolean
   attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
   /** Deadline for one center image publication attempt. */
   imageUploadTimeoutMs?: number

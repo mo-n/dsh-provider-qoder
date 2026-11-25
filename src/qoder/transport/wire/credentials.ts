@@ -5,6 +5,7 @@ export interface QoderCredentials {
   name: string
   email: string
   machineID?: string
+  machineToken?: string
   organizationId?: string
   organizationTags?: string[]
   dataPolicyAgreed?: boolean

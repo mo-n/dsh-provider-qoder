@@ -455,3 +455,150 @@ test('browser authorization streams model output and retries a pre-stream reject
   assert.equal(bodies[0], bodies[1])
   await f.manager.dispose()
 })
+
+test('browser authorization forwards explicit machineToken across selectAccounts, poll, userinfo and refresh', async () => {
+  let pollUrl!: URL
+  let userInfoUrl!: URL
+  let refreshBody: Record<string, unknown> = {}
+  const auth = new QoderBrowserAuthorization({
+    region: 'global',
+    resolveMachineId: async () => 'browser-machine',
+    resolveMachineToken: async () => '  umid-browser-token  ',
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/deviceToken/poll')) {
+        pollUrl = url
+        return json({ token: 'device-1', refresh_token: 'refresh-1', expires_in: 3600 })
+      }
+      if (url.pathname.endsWith('/userinfo')) {
+        userInfoUrl = url
+        return json({ id: 'user-browser', name: 'Browser User', email: 'b@example.test' })
+      }
+      if (url.pathname.endsWith('/deviceToken/refresh')) {
+        refreshBody = JSON.parse(String(init?.body))
+        return json({ device_token: 'device-2', refresh_token: 'refresh-2', expires_in: 3600 })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+
+  const flow = await auth.begin(new AbortController().signal)
+  const website = new URL(flow.url)
+  assert.equal(website.searchParams.get('machine_token'), 'umid-browser-token')
+
+  const initial = await flow.complete()
+  assert.equal(pollUrl.searchParams.get('machine_token'), 'umid-browser-token')
+  assert.equal(userInfoUrl.searchParams.get('machine_token'), 'umid-browser-token')
+  assert.equal(initial.credentials.machineToken, 'umid-browser-token')
+
+  const rotated = await auth.refresh(initial, undefined, initial.credentials.authToken)
+  assert.deepEqual(refreshBody, {
+    refresh_token: 'refresh-1',
+    machine_id: 'browser-machine',
+    machine_token: 'umid-browser-token',
+  })
+  assert.equal(rotated.credentials.machineToken, 'umid-browser-token')
+})
+
+test('browser begin and refresh honor abort and timeout when resolveMachineToken stalls', async t => {
+  const time = mockTime(t)
+  const pendingAuth = new QoderBrowserAuthorization({
+    region: 'global',
+    loginTimeoutMs: 10,
+    resolveMachineId: () => 'browser-machine',
+    resolveMachineToken: () => new Promise<string>(() => {}),
+    fetch: (async () => { throw new Error('unexpected network call') }) as typeof fetch,
+  })
+
+  const caller = new AbortController()
+  const abortedBegin = assert.rejects(
+    pendingAuth.begin(caller.signal),
+    (error: unknown) => error instanceof QoderLlmError && error.code === 'ABORTED',
+  )
+  caller.abort()
+  await abortedBegin
+
+  const timedOutBegin = assert.rejects(
+    pendingAuth.begin(new AbortController().signal),
+    (error: unknown) => error instanceof QoderLlmError && error.code === 'TIMEOUT',
+  )
+  await nextTurn()
+  time.tick(10)
+  await timedOutBegin
+
+  const legacyGrant = grant('global')
+  legacyGrant.credentials.machineID = undefined
+  const refreshCaller = new AbortController()
+  const abortedRefresh = assert.rejects(
+    pendingAuth.refresh(legacyGrant, refreshCaller.signal, legacyGrant.credentials.authToken),
+    (error: unknown) => error instanceof QoderLlmError && error.code === 'ABORTED',
+  )
+  refreshCaller.abort()
+  await abortedRefresh
+})
+
+test('browser refresh keeps bound machineID without mixing current machineToken, binds legacy grants, and strips blank tokens', async () => {
+  const bodies: Array<Record<string, unknown>> = []
+  let tokenResolutions = 0
+  const auth = new QoderBrowserAuthorization({
+    region: 'global',
+    resolveMachineId: async () => 'current-machine',
+    resolveMachineToken: async () => {
+      tokenResolutions++
+      return 'current-umid-token'
+    },
+    fetch: (async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)))
+      return json({ device_token: 'rotated-device', refresh_token: 'rotated-refresh', expires_in: 3600 })
+    }) as typeof fetch,
+  })
+
+  const boundWithoutToken = grant('global')
+  const refreshedBound = await auth.refresh(boundWithoutToken, undefined, boundWithoutToken.credentials.authToken)
+  assert.equal(tokenResolutions, 0)
+  assert.deepEqual(bodies[0], { refresh_token: 'refresh-global', machine_id: 'test-machine' })
+  assert.equal('machineToken' in refreshedBound.credentials, false)
+
+  const blankTokenGrant = grant('global')
+  blankTokenGrant.credentials.machineToken = '   '
+  const refreshedBlank = await auth.refresh(blankTokenGrant, undefined, blankTokenGrant.credentials.authToken)
+  assert.equal(tokenResolutions, 0)
+  assert.deepEqual(bodies[1], { refresh_token: 'refresh-global', machine_id: 'test-machine' })
+  assert.equal('machineToken' in refreshedBlank.credentials, false)
+
+  const legacyGrant = grant('global')
+  legacyGrant.credentials.machineID = undefined
+  const upgraded = await auth.refresh(legacyGrant, undefined, legacyGrant.credentials.authToken)
+  assert.equal(tokenResolutions, 1)
+  assert.deepEqual(bodies[2], {
+    refresh_token: 'refresh-global',
+    machine_id: 'current-machine',
+    machine_token: 'current-umid-token',
+  })
+  assert.equal(upgraded.credentials.machineID, 'current-machine')
+  assert.equal(upgraded.credentials.machineToken, 'current-umid-token')
+})
+
+test('saved non-string machineToken fails with AUTH error and whitespace machineToken is stripped on decode', async () => {
+  const store = storage()
+  const invalidGrant = grant('global')
+  ;(invalidGrant.credentials as unknown as Record<string, unknown>).machineToken = 7
+  store.seed(invalidGrant)
+  const manager = new QoderBrowserAuthorizationManager({
+    credentials: store.provider,
+    transport: () => ({ begin: async () => { throw new Error('unused') }, refresh: async value => value }),
+    changed: () => {},
+  })
+  await assert.rejects(
+    manager.lease('global'),
+    (error: unknown) => error instanceof QoderLlmError && error.code === 'AUTH',
+  )
+
+  const blankGrant = grant('global')
+  blankGrant.credentials.machineToken = '  \t  '
+  store.seed(blankGrant)
+  const lease = (await manager.lease('global'))!
+  const creds = await lease.resolve()
+  assert.equal('machineToken' in creds, false)
+  await manager.dispose()
+})

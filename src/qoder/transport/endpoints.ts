@@ -60,9 +60,16 @@ export function getQoderModelServerUrl(region: QoderRegion = 'global'): string {
   return `https://${host}/model/v1/chat/completions`
 }
 
-export function getQoderModelListUrl(region: QoderRegion = 'global'): string {
+export function getQoderModelListUrl(
+  region: QoderRegion = 'global',
+  options?: { outerProviders?: readonly string[] },
+): string {
   const { baseUrl } = resolveQoderEndpoints(region)
-  return `${baseUrl}algo/api/v2/model/list?Encode=1`
+  const providers = (options?.outerProviders ?? [])
+    .map(provider => provider.trim())
+    .filter(provider => provider.length > 0)
+  const base = `${baseUrl}algo/api/v2/model/list?Encode=1`
+  return providers.length > 0 ? `${base}&outerProviders=${encodeURIComponent(providers.join(','))}` : base
 }
 
 export function getQoderImageUploadUrl(region: QoderRegion = 'global', requestId?: string): string {

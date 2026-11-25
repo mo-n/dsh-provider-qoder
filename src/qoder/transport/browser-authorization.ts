@@ -6,7 +6,7 @@ import { QoderLlmError } from '../errors.ts'
 import { QoderAuthService } from './auth.ts'
 import { resolveQoderEndpoints, type QoderRegion } from './endpoints.ts'
 import { getMachineId, qoderMachineIdPaths } from './machine-id.ts'
-import { defaultMaxJsonBytes, openApiJsonRequest, readLimitedText } from './request.ts'
+import { awaitWithAbort, defaultMaxJsonBytes, openApiJsonRequest, readLimitedText } from './request.ts'
 import { defaultUserAgent } from './wire/cosy.ts'
 
 interface DeviceTokenResponse {
@@ -24,6 +24,7 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
     region: QoderRegion
     fetch?: typeof fetch
     resolveMachineId?: () => string | Promise<string>
+    resolveMachineToken?: () => string | undefined | Promise<string | undefined>
     pollIntervalMs?: number
     loginTimeoutMs?: number
   }
@@ -34,25 +35,37 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
     return await this.options.resolveMachineId?.() || getMachineId(qoderMachineIdPaths(this.options.region))
   }
 
+  private async resolveMachineToken(): Promise<string | undefined> {
+    const token = await this.options.resolveMachineToken?.()
+    return typeof token === 'string' ? token.trim() || undefined : undefined
+  }
+
   async begin(signal: AbortSignal): Promise<QoderBrowserLoginFlow> {
     signal.throwIfAborted()
     const verifier = randomBytes(48).toString('base64url')
     const challenge = createHash('sha256').update(verifier).digest('base64url')
     const nonce = randomUUID()
-    const machineID = await this.resolveMachineId()
-    signal.throwIfAborted()
-    const query = new URLSearchParams({ challenge, challenge_method: 'S256', nonce, machine_id: machineID,
-      client_id: 'e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb' })
-    const origin = this.options.region === 'china' ? 'https://qoder.cn' : 'https://qoder.com'
     const expiresAt = Date.now() + (this.options.loginTimeoutMs ?? 300_000)
     const deadline = AbortSignal.timeout(Math.max(1, expiresAt - Date.now()))
     const combined = AbortSignal.any([signal, deadline])
+    const [machineID, machineToken] = await awaitWithAbort(
+      Promise.all([this.resolveMachineId(), this.resolveMachineToken()]),
+      combined,
+      () => signal.aborted
+        ? new QoderLlmError('Qoder browser login was cancelled.', 'ABORTED')
+        : new QoderLlmError('Qoder browser login timed out.', 'TIMEOUT'),
+    )
+    const query = new URLSearchParams({ challenge, challenge_method: 'S256', nonce, machine_id: machineID,
+      client_id: 'e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb', ...machineToken ? { machine_token: machineToken } : {} })
+    const origin = this.options.region === 'china' ? 'https://qoder.cn' : 'https://qoder.com'
     return {
       url: `${origin}/device/selectAccounts?${query}`, expiresAt,
       complete: async () => {
         try {
           const poll = new URL(`${resolveQoderEndpoints(this.options.region).openApiUrl}/api/v1/deviceToken/poll`)
-          poll.search = new URLSearchParams({ nonce, verifier, challenge_method: 'S256' }).toString()
+          poll.search = new URLSearchParams({
+            nonce, verifier, challenge_method: 'S256', ...machineToken ? { machine_token: machineToken } : {},
+          }).toString()
           while (!combined.aborted) {
             let response: Response
             try {
@@ -76,7 +89,7 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
               throw new QoderLlmError('Qoder browser authorization was rejected.', 'AUTH')
             }
             const raw = JSON.parse(await readLimitedText(response, defaultMaxJsonBytes, 'Qoder browser authorization')) as DeviceTokenResponse
-            return await this.grant(raw, machineID, combined)
+            return await this.grant(raw, machineID, combined, machineToken)
           }
           throw new QoderLlmError('Qoder browser login timed out.', 'TIMEOUT')
         } catch (error) {
@@ -96,11 +109,24 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
     if (grant.refreshExpiresAt !== undefined && grant.refreshExpiresAt <= Date.now()) {
       throw new QoderLlmError('Qoder browser authorization expired. Sign in again.', 'AUTH')
     }
-    const machineID = grant.credentials.machineID || await this.resolveMachineId()
+    const boundMachineID = typeof grant.credentials.machineID === 'string' && grant.credentials.machineID.trim().length > 0
+      ? grant.credentials.machineID : undefined
+    const boundMachineToken = typeof grant.credentials.machineToken === 'string'
+      ? grant.credentials.machineToken.trim() || undefined : undefined
+    const [machineID, machineToken] = boundMachineID !== undefined
+      ? [boundMachineID, boundMachineToken]
+      : await awaitWithAbort(
+        Promise.all([
+          this.resolveMachineId(),
+          boundMachineToken === undefined ? this.resolveMachineToken() : Promise.resolve(boundMachineToken),
+        ]),
+        signal,
+        () => new QoderLlmError('Qoder browser refresh was aborted.', 'ABORTED'),
+      )
     signal?.throwIfAborted()
     const raw = await openApiJsonRequest<DeviceTokenResponse>(this.options.fetch ?? fetch, {
       url: `${resolveQoderEndpoints(this.options.region).openApiUrl}/api/v1/deviceToken/refresh`,
-      body: { refresh_token: grant.refreshToken, machine_id: machineID }, signal,
+      body: { refresh_token: grant.refreshToken, machine_id: machineID, ...machineToken ? { machine_token: machineToken } : {} }, signal,
       operation: 'BrowserRefresh',
     })
     const token = raw.device_token ?? raw.token
@@ -108,17 +134,18 @@ export class QoderBrowserAuthorization implements QoderAuthorizationTransport {
       throw new QoderLlmError('Qoder refresh returned incomplete credentials.', 'MALFORMED_RESPONSE')
     }
     // Rotation must be saved even if a subsequent optional profile lookup would fail.
-    return { ...grant, credentials: { ...grant.credentials, authToken: token, machineID }, refreshToken: raw.refresh_token,
+    const { machineToken: _staleMachineToken, ...baseCredentials } = grant.credentials
+    return { ...grant, credentials: { ...baseCredentials, authToken: token, machineID, ...machineToken ? { machineToken } : {} }, refreshToken: raw.refresh_token,
       expiresAt: deviceExpiry(raw.expires_at, raw.expires_in) ?? Date.now() + 86_400_000,
       refreshExpiresAt: refreshExpiry(raw) ?? grant.refreshExpiresAt }
   }
 
-  private async grant(raw: DeviceTokenResponse, machineID: string, signal: AbortSignal): Promise<QoderBrowserGrant> {
+  private async grant(raw: DeviceTokenResponse, machineID: string, signal: AbortSignal, machineToken?: string): Promise<QoderBrowserGrant> {
     if (!raw.token || typeof raw.token !== 'string' || !raw.refresh_token || typeof raw.refresh_token !== 'string') {
       throw new QoderLlmError('Qoder browser authorization returned incomplete credentials.', 'MALFORMED_RESPONSE')
     }
     const auth = new QoderAuthService({ region: this.options.region, fetch: this.options.fetch })
-    const credentials = await auth.credentialsForToken(raw.token, machineID, signal)
+    const credentials = await auth.credentialsForToken(raw.token, machineID, signal, undefined, machineToken)
     return { id: randomUUID(), region: this.options.region, credentials, refreshToken: raw.refresh_token,
       expiresAt: deviceExpiry(raw.expires_at, raw.expires_in) ?? Date.now() + 86_400_000, refreshExpiresAt: refreshExpiry(raw) }
   }

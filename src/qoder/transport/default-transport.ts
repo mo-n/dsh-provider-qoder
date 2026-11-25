@@ -43,6 +43,9 @@ export class DefaultQoderTransport implements QoderTransport {
   readonly authorization: QoderBrowserAuthorization
   private readonly resolveCredential: QoderTransportOptions['resolveCredential']
   private readonly resolveMachineId: NonNullable<QoderTransportOptions['resolveMachineId']>
+  private readonly resolveMachineToken: QoderTransportOptions['resolveMachineToken']
+  private readonly outerProviders?: readonly string[]
+  private readonly includeEnterpriseByok?: boolean
   private readonly region: QoderRegion
   private readonly requestCompression: boolean
   private readonly requestCompressionMinChars: number
@@ -80,6 +83,9 @@ export class DefaultQoderTransport implements QoderTransport {
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
     this.resolveMachineId = options.resolveMachineId ?? (() => getMachineId(qoderMachineIdPaths(this.region)))
+    this.resolveMachineToken = options.resolveMachineToken
+    this.outerProviders = options.outerProviders?.slice()
+    this.includeEnterpriseByok = options.includeEnterpriseByok
     this.authorization = new QoderBrowserAuthorization(options)
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.logger = options.logger
@@ -100,6 +106,7 @@ export class DefaultQoderTransport implements QoderTransport {
       logger: this.logger,
       region: this.region,
       resolveMachineId: this.resolveMachineId,
+      resolveMachineToken: this.resolveMachineToken,
     })
     this.usage = new QoderUsageReader({
       authService: this.auth,
@@ -140,6 +147,8 @@ export class DefaultQoderTransport implements QoderTransport {
           logger: this.logger,
           region: this.region,
           timeoutMs: this.metadataTimeoutMs,
+          outerProviders: this.outerProviders,
+          includeEnterpriseByok: this.includeEnterpriseByok,
         }))
         try { return await read(credentials) } catch (error) {
           if (!(error instanceof QoderLlmError) || error.code !== 'AUTH') throw error

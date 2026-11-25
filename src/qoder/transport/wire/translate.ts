@@ -148,6 +148,31 @@ export function translateTools(tools: readonly ToolSchema[] | undefined): QoderW
   }))
 }
 
+function isJsonObjectText(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Ensure historical tool-call arguments carry a valid JSON object string.
+ *
+ * Truncated or malformed arguments left behind by interrupted generations
+ * cause upstream model endpoints to reject subsequent turns, so invalid,
+ * empty, or non-object payloads fall back to `'{}'`.
+ */
+export function sanitizeToolCallArguments(raw: string): string {
+  if (isJsonObjectText(raw)) return raw
+  const trimmed = raw.trim()
+  if (trimmed.length > 0 && trimmed !== raw && isJsonObjectText(trimmed)) {
+    return trimmed
+  }
+  return '{}'
+}
+
 /** Read a named property from an untyped object, returning it only if present. */
 function prop(obj: unknown, key: string): unknown {
   return obj !== null && obj !== undefined && typeof obj === 'object'
@@ -430,7 +455,7 @@ export async function validateAndTranslateMessages(
         toolCalls.push({
           id: String(block.id),
           type: 'function',
-          function: { name: block.name, arguments: block.arguments },
+          function: { name: block.name, arguments: sanitizeToolCallArguments(block.arguments) },
         })
         continue
       }

@@ -483,3 +483,40 @@ test('validation failure and pre-cancellation do not register a business or reso
   assert.equal(resolutions, 0)
   assert.equal(calls, 0)
 })
+
+test('business finish forwards optional orphan and feature_switches snapshots when present and omits them when absent', async () => {
+  const runs = new QoderQueueLeases()
+  const sent: FinishEvent[] = []
+  const deps: QoderBusinessFinishDependencies = {
+    region: 'global',
+    resolveCredentials: async () => credentials,
+    fetch: (async (_input, init) => { sent.push(finishEvent(init)); return Response.json({}) }) as typeof fetch,
+  }
+
+  runs.start('opt-session', 1)
+  const switches: Record<string, unknown> = { agent_mode: true, tier: 'pro', nested: { enabled: true }, flags: ['a'] }
+  const withOptionals = dispatched()
+  withOptionals.business.orphan = true
+  withOptionals.business.feature_switches = switches
+  retainQoderBusiness(runs.capture('opt-session')?.run, withOptionals, deps)
+  // Mutating the caller object (including nested structures) after retention must not alter the captured finish snapshot.
+  switches.agent_mode = false
+  ;(switches.nested as { enabled: boolean }).enabled = false
+  ;(switches.flags as string[]).push('b')
+  await runs.end('opt-session', 1)
+
+  runs.start('plain-session', 1)
+  retainQoderBusiness(runs.capture('plain-session')?.run, dispatched(), deps)
+  await runs.end('plain-session', 1)
+
+  assert.equal(sent.length, 2)
+  assert.equal(sent[0]?.event_data.business.orphan, true)
+  assert.deepEqual(sent[0]?.event_data.business.feature_switches, {
+    agent_mode: true,
+    tier: 'pro',
+    nested: { enabled: true },
+    flags: ['a'],
+  })
+  assert.equal('orphan' in (sent[1]?.event_data.business ?? {}), false)
+  assert.equal('feature_switches' in (sent[1]?.event_data.business ?? {}), false)
+})

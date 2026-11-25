@@ -35,6 +35,14 @@ interface BusinessState {
 // Shared across replaced transports; completed runs have no global strong owner.
 const hostedBusinesses = new WeakMap<QoderHostRun, Map<string, BusinessState>>()
 
+function cloneFeatureSwitches(switches: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return JSON.parse(JSON.stringify(switches)) as Record<string, unknown>
+  } catch {
+    return structuredClone(switches)
+  }
+}
+
 /** Called immediately after dispatch, so rejected preparation never opens a business. */
 export function retainQoderBusiness(run: QoderHostRun | undefined, request: QoderBusinessRequest, dependencies: QoderBusinessFinishDependencies): void {
   if (!run?.onEnd || !request.business.id) return
@@ -46,7 +54,11 @@ export function retainQoderBusiness(run: QoderHostRun | undefined, request: Qode
   // metadata instead of letting a tool prompt or later injected context rename it.
   if (previous?.started) return
   const snapshot: QoderBusinessRequest = {
-    ...request, business: { ...request.business },
+    ...request,
+    business: {
+      ...request.business,
+      ...request.business.feature_switches === undefined ? {} : { feature_switches: cloneFeatureSwitches(request.business.feature_switches) },
+    },
     credentials: { ...request.credentials, organizationTags: request.credentials.organizationTags?.slice() },
   }
   if (previous) {
@@ -140,6 +152,8 @@ async function reportQoderBusinessFinish(request: QoderBusinessRequest, end: Qod
           type: request.business.type, id: request.business.id,
           ...modelKey === undefined ? {} : { model_key: modelKey },
           end_at: end.endedAt, stage: end.stage, name: request.business.name,
+          ...request.business.orphan === undefined ? {} : { orphan: request.business.orphan },
+          ...request.business.feature_switches === undefined ? {} : { feature_switches: request.business.feature_switches },
         },
       },
     }
