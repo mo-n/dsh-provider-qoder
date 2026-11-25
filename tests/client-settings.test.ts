@@ -124,6 +124,92 @@ test('client registers the Qoder navigation icon only when the host declares its
   assert.match(String(icon.props.style.mask), /data:image\/svg\+xml,/u)
 })
 
+const modelLabelSlot = 'conversation.input.model.label'
+const settingsSlots = ['settings.section', 'settings.section.icon', 'settings.models.footer']
+const conversationSlots = ['conversation.input.dock', 'conversation.input.right']
+const modelLabelCollision = (priority: number) => new Error(
+  `single slot "${modelLabelSlot}" already has a registration at priority ${priority} (registered by another-plugin) — register at a different priority to shadow it (lowest renders)`,
+)
+
+async function mountWithModelLabel(
+  registerLabel: (priority: number) => void,
+  entries?: () => Array<{ options?: { priority?: number } }>,
+) {
+  const plugin = await loadClientPlugin()
+  const base = bootstrapContext()
+  const registered: string[] = []
+  const attempts: number[] = []
+  const disposers: Array<() => void> = []
+  const disposeFormSubscription = test.mock.fn()
+  const subscribeForm = test.mock.fn(() => disposeFormSubscription)
+  const disposeAdapterSubscription = test.mock.fn()
+  const subscribeRemote = test.mock.fn((_event: string, _listener: () => void) => disposeAdapterSubscription)
+  const context = {
+    ...base,
+    configForms: { get: (namespace: string) => ({ ...base.configForms.get(namespace), subscribe: subscribeForm }) },
+    remote: { ...base.remote, $on: subscribeRemote },
+    inject(_services: string[], callback: (scope: unknown) => void) {
+      callback(context)
+    },
+    slots: {
+      ...(entries && { entries: (name: string) => {
+        assert.equal(name, modelLabelSlot)
+        return entries()
+      } }),
+      inject(_name: string, callback: () => (() => void) | Iterable<() => void>) {
+        const result = callback()
+        if (typeof result === 'function') disposers.push(result)
+        else disposers.push(...result)
+      },
+      register({ name, priority }: { name: string; priority: number }) {
+        if (name === modelLabelSlot) {
+          assert.deepEqual(registered, settingsSlots)
+          attempts.push(priority)
+          registerLabel(priority)
+        }
+        registered.push(name)
+        return () => {}
+      },
+    },
+  }
+  await plugin.apply(context)
+  return { registered, attempts, disposers, subscribeForm, disposeFormSubscription, subscribeRemote, disposeAdapterSubscription }
+}
+
+for (const inspectEntries of [true, false]) {
+  test(`the model label yields to priority 100 ${inspectEntries ? 'via slot entries' : 'after a registration collision'}`, async () => {
+    const mounted = await mountWithModelLabel(priority => {
+      if (priority === 100) throw modelLabelCollision(priority)
+    }, inspectEntries ? () => [{ options: {} }, { options: { priority: 100 } }, { options: { priority: 102 } }] : undefined)
+
+    assert.deepEqual(mounted.registered, [...settingsSlots, modelLabelSlot, ...conversationSlots])
+    assert.deepEqual(mounted.attempts, inspectEntries ? [101] : [100, 101])
+    assert.equal(mounted.subscribeForm.mock.callCount(), 1)
+    assert.equal(mounted.subscribeRemote.mock.callCount(), 1)
+    assert.equal(mounted.subscribeRemote.mock.calls[0].arguments[0], 'llm/adapters-updated')
+    assert.equal(mounted.disposeFormSubscription.mock.callCount(), 0)
+    assert.equal(mounted.disposeAdapterSubscription.mock.callCount(), 0)
+    for (const dispose of mounted.disposers.reverse()) dispose()
+    assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
+    assert.equal(mounted.disposeAdapterSubscription.mock.callCount(), 1)
+  })
+}
+
+for (const collision of [true, false]) {
+  test(`the model label isolates ${collision ? 'repeated priority collisions' : 'other registration errors'} and disposes its rates`, async () => {
+    const mounted = await mountWithModelLabel(priority => {
+      throw collision ? modelLabelCollision(priority) : new Error('model label registration unavailable')
+    })
+
+    assert.deepEqual(mounted.registered, [...settingsSlots, ...conversationSlots])
+    assert.deepEqual(mounted.attempts, collision ? [100, 101, 102] : [100])
+    assert.equal(mounted.disposers.length, mounted.registered.length)
+    assert.equal(mounted.subscribeForm.mock.callCount(), 1)
+    assert.equal(mounted.disposeFormSubscription.mock.callCount(), 1)
+    assert.equal(mounted.subscribeRemote.mock.callCount(), 0)
+  })
+}
+
 test('the model label slot renders rates in Qoder options and preserves other provider badges', async (t) => {
   const context = bootstrapContext()
   const slot = 'conversation.input.model.label'
@@ -512,7 +598,7 @@ test('client settings mounts with declared services and reports rejected writes'
   ctx.remote.credentials = validCredentials
   await plugin.apply(guardedContext(declared))
   assert.equal(namespace, 'provider-qoder')
-  assert.deepEqual(registeredSlots, ['conversation.input.dock', 'settings.section', 'settings.models.footer'])
+  assert.deepEqual(registeredSlots, ['settings.section', 'settings.models.footer', 'conversation.input.dock'])
   assert.equal((await operations.storeRegion('china')).ok, true)
   accepted = false
   assert.equal((await operations.storeRegion('global')).ok, false)
