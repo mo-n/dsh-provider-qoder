@@ -61,20 +61,17 @@ export class QoderQueueLeases {
     this.runs.set(sessionId, owner)
   }
 
-  retain = (lease: QoderQueueLease): boolean => {
-    const run = this.runs.get(lease.sessionId)
-    if (this.disposed || !run) return false
-    if (!run.leases.has(lease.key)) run.leases.set(lease.key, lease)
-    return true
-  }
-
   /** Bind ownership before provider I/O; a late old call cannot join a newer turn. */
   capture = (sessionId: string): QoderQueueOwner | undefined => {
     const owner = this.runs.get(sessionId)
     if (!owner || this.disposed) return undefined
     return {
       run: owner.run,
-      retain: lease => lease.sessionId === sessionId && this.runs.get(sessionId) === owner && this.retain(lease),
+      retain: lease => {
+        if (this.disposed || lease.sessionId !== sessionId || this.runs.get(sessionId) !== owner) return false
+        if (!owner.leases.has(lease.key)) owner.leases.set(lease.key, lease)
+        return true
+      },
     }
   }
 
