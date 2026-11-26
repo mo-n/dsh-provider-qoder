@@ -70,6 +70,7 @@ export interface QoderModelSettingsSnapshot {
 
 export interface QoderCredentialStatus {
   configured: boolean
+  browserSubscriberId?: string
   source?: string
   writable: boolean
 }

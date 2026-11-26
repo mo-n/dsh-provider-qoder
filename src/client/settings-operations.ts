@@ -61,7 +61,12 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
         // method is not a credential source, and probing PAT storage here can
         // make a browser-only installation look like it has a managed PAT.
         if (authorizationView.method !== 'pat') {
-          return success({ configured: authorizationConfigured, writable: authorizationView.writable })
+          const browserSubscriberId = authorizationView.method === 'browser' ? authorizationView.profile?.id : undefined
+          return success({
+            configured: authorizationConfigured,
+            writable: authorizationView.writable,
+            ...browserSubscriberId ? { browserSubscriberId } : {},
+          })
         }
         const pat = await describePat()
         if (!pat.ok) return pat

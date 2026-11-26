@@ -7,11 +7,12 @@ export interface QoderSubscriberProfile {
 }
 
 export interface QoderQuota {
-  total: number
-  used: number
-  remaining: number
-  percentage: number
+  total?: number
+  used?: number
+  remaining?: number
+  percentage?: number
   unit: string
+  available?: boolean
 }
 
 /**
@@ -28,19 +29,15 @@ export interface QoderLocalizedText {
 }
 
 /** One dedicated (entitlement-scoped) resource package carved out of the plan. */
-export interface QoderResourcePackage {
+export interface QoderResourcePackage extends QoderQuota {
   id?: string
   title?: QoderLocalizedText
   description?: QoderLocalizedText
-  total: number
-  used: number
-  remaining: number
-  percentage: number
-  unit: string
   /** Package expiry, distinct from the usage-level subscription expiry. */
   expiresAt?: string
-  available?: boolean
   status?: string
+  modelFamilies?: string[]
+  modelKeys?: string[]
 }
 
 export interface QoderQuotaUsage {
@@ -56,6 +53,7 @@ export interface QoderQuotaUsage {
   totalUsagePercentage?: number
   isQuotaExceeded?: boolean
   expiresAt?: string
+  /** Original quota response, including resource package metadata. */
   raw?: unknown
 }
 

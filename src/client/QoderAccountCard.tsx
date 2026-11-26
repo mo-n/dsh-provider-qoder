@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { isEnvironmentCredentialSource } from '../dsh/credential-contract.ts'
-import type { QoderAccountInfo, QoderQuota } from '../qoder/account.ts'
+import type { QoderAccountInfo, QoderResourcePackage } from '../qoder/account.ts'
 import {
   modelsOf,
   regionOf,
@@ -24,18 +24,16 @@ type CredentialViewState =
 type AccountViewState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'ready'; account: QoderAccountInfo }
+  | { status: 'ready'; account: QoderAccountInfo; refreshFailed?: boolean }
   | { status: 'failed' }
 
-function formatResetDate(dateStr?: string): string | undefined {
+function formatAccountDate(locale: string, dateStr?: string): string | undefined {
   if (!dateStr) return undefined
   const date = new Date(dateStr)
   if (Number.isNaN(date.getTime())) return undefined
-  return date.toLocaleString(undefined, {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+  return date.toLocaleString(locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
   })
 }
 
@@ -59,60 +57,68 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
   const [credentialState, setCredentialState] = useState<CredentialViewState>({ status: 'loading' })
   const [accountState, setAccountState] = useState<AccountViewState>({ status: 'idle' })
   const [refreshing, setRefreshing] = useState(false)
-  const [credentialRevision, setCredentialRevision] = useState(0)
   const latestAccountRequest = useRef(0)
   const latestCredentialRequest = useRef(0)
+  const browserSubscriber = useRef<string | undefined>(undefined)
   useLayoutEffect(() => () => {
     // Invalidate reads at unmount, before late results can publish or clear pending state.
     latestAccountRequest.current++
     latestCredentialRequest.current++
   }, [])
 
-  const loadCredential = useCallback(async () => {
-    const requestId = ++latestCredentialRequest.current
-    const info = await operations.describe()
-    if (requestId !== latestCredentialRequest.current) return
-    setCredentialState(!info.ok ? { status: 'failed' } : { status: 'ready', info: info.value })
-  }, [operations])
-
   const loadAccount = useCallback(async (force = false) => {
     const requestId = ++latestAccountRequest.current
-    if (force) setRefreshing(true)
-    else setAccountState({ status: 'loading' })
+    if (force) {
+      setRefreshing(true)
+      setAccountState(current => current.status === 'ready' ? { ...current, refreshFailed: false } : current)
+    } else setAccountState({ status: 'loading' })
 
     try {
       const result = await operations.getAccount(force)
       if (requestId !== latestAccountRequest.current) return
-      if (result && result.ok) setAccountState({ status: 'ready', account: result.value })
-      else setAccountState({ status: 'failed' })
+      if (result?.ok) {
+        setAccountState({ status: 'ready', account: result.value })
+        return
+      }
     } catch {
-      if (requestId !== latestAccountRequest.current) return
-      setAccountState({ status: 'failed' })
+      // Both RPC failures and exceptions use the localized account status.
     } finally {
       if (requestId === latestAccountRequest.current) setRefreshing(false)
     }
+    if (requestId !== latestAccountRequest.current) return
+    setAccountState(current => current.status === 'ready' && force
+      ? { ...current, refreshFailed: true }
+      : { status: 'failed' })
   }, [operations])
+
+  const loadCredential = useCallback(async () => {
+    const requestId = ++latestCredentialRequest.current
+    setCredentialState({ status: 'loading' })
+    const result = await operations.describe()
+    if (requestId !== latestCredentialRequest.current) return
+    const info = result.ok ? result.value : undefined
+    const configured = info?.configured === true && !isEnvironmentCredentialSource(info.source)
+    const subscriber = configured ? info.browserSubscriberId : undefined
+    // Browser token rotation updates the record without switching subscribers.
+    const sameSubscriber = subscriber !== undefined && subscriber === browserSubscriber.current
+    browserSubscriber.current = subscriber
+    if (!sameSubscriber) {
+      latestAccountRequest.current++
+      setRefreshing(false)
+      if (configured) void loadAccount()
+      else setAccountState({ status: 'idle' })
+    }
+    setCredentialState(info ? { status: 'ready', info } : { status: 'failed' })
+  }, [loadAccount, operations])
 
   useEffect(() => {
     void loadCredential()
-    return operations.subscribe(() => {
-      void loadCredential()
-      setCredentialRevision(revision => revision + 1)
-    })
+    return operations.subscribe(() => { void loadCredential() })
   }, [loadCredential, operations])
 
   const configured = credentialState.status === 'ready'
     && credentialState.info.configured
     && !isEnvironmentCredentialSource(credentialState.info.source)
-
-  useEffect(() => {
-    if (configured) void loadAccount(false)
-    else {
-      latestAccountRequest.current++
-      setRefreshing(false)
-      setAccountState({ status: 'idle' })
-    }
-  }, [configured, credentialRevision, loadAccount])
 
   if (credentialState.status === 'loading') {
     return <section className={css.credential}><p>{t('loading')}</p></section>
@@ -128,47 +134,58 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
     )
   }
 
-  /**
-   * Render one quota block.
-   *
-   * `expiresAt` wins over `resetDate` when both are supplied, because a
-   * dedicated package expires on its own date rather than on the subscription
-   * reset horizon. A package with no size renders nothing.
-   */
+  const locale = activeLocale()
+  const formatCredits = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format
   const renderQuota = (
     key: string,
     label: string,
-    quota: QoderQuota | undefined,
-    options?: { resetDate?: string; expiresAt?: string; description?: string },
+    quota: QoderResourcePackage | undefined,
   ) => {
-    if (!quota || quota.total <= 0) return null
-    const remainingPercent = Math.max(0, Math.min(100, Math.round((quota.remaining / quota.total) * 100)))
-    const meta = options?.expiresAt
-      ? t('dedicatedResourceExpiresAt', { value: options.expiresAt })
-      : (options?.resetDate ? t('resetsAt', { value: options.resetDate }) : undefined)
+    if (!quota) return null
+    const { total, used, remaining, unit, modelFamilies, modelKeys } = quota
+    let status: string | undefined
+    switch (quota.status) {
+      case 'QUOTA_DETAIL_STATUS_EXHAUSTED': status = t('quotaStatusExhausted'); break
+      case 'QUOTA_DETAIL_STATUS_EXPIRED': status = t('quotaStatusExpired'); break
+      case 'QUOTA_DETAIL_STATUS_SUSPENDED': status = t('quotaStatusSuspended'); break
+      default: if (quota.available === false) status = t('quotaStatusUnavailable')
+    }
+    if (total === undefined && used === undefined && remaining === undefined && !status) return null
+    const displayUnit = unit.toLowerCase() === 'credits' ? 'Credits' : unit
+    const balance = remaining === undefined ? undefined
+      : t('quotaRemaining', { value: formatCredits(remaining), unit: displayUnit })
+    const usage = used === undefined
+      ? (total === undefined ? undefined : t('quotaTotal', { total: formatCredits(total), unit: displayUnit }))
+      : (total === undefined
+        ? t('quotaUsedOnly', { used: formatCredits(used), unit: displayUnit })
+        : t('quotaUsed', { used: formatCredits(used), total: formatCredits(total), unit: displayUnit }))
+    const description = resolveLocalizedText(quota.description, locale)
+    const expiresAt = formatAccountDate(locale, quota.expiresAt)
     return (
       <div className={css.quotaBlock} key={key}>
         <div className={css.quotaHeader}>
           <span className={css.quotaLabel}>{label}</span>
-          <strong>{t('quotaRemaining', { value: remainingPercent })}</strong>
+          {status ? <strong className={css.quotaStatus}>{status}</strong> : null}
+          {balance ? status ? <span className={css.quotaMeta}>{balance}</span> : <strong>{balance}</strong> : null}
         </div>
-        <div className={css.quotaTop}>
-          <span>{t('quotaUsed', {
-            used: quota.used.toFixed(1),
-            total: quota.total.toFixed(1),
-            unit: quota.unit,
-          })}</span>
-        </div>
-        {options?.description ? (
-          <p className={css.quotaDescription}>{options.description}</p>
+        {usage ? <div className={css.quotaTop}>{usage}</div> : null}
+        {total !== undefined && total > 0 && used !== undefined ? (
+          <progress
+            className={css.quotaProgress}
+            max={total}
+            value={Math.max(0, Math.min(total, used))}
+            aria-label={`${label} ${usage}`}
+          />
         ) : null}
-        <progress
-          className={css.quotaProgress}
-          max={quota.total}
-          value={Math.min(quota.total, quota.used)}
-          aria-label={`${label} ${t('quotaRemaining', { value: remainingPercent })}`}
-        />
-        {meta ? <div className={css.quotaMeta}>{meta}</div> : null}
+        {description ? <p className={css.quotaDescription}>{description}</p> : null}
+        {expiresAt ? <div className={css.quotaMeta}>{t('dedicatedResourceExpiresAt', { value: expiresAt })}</div> : null}
+        {modelFamilies?.length || modelKeys?.length ? (
+          <details className={css.quotaModelScope}>
+            <summary>{t('quotaModelScope')}</summary>
+            {modelFamilies?.length ? <div>{t('quotaModelFamilies', { value: modelFamilies.join(', ') })}</div> : null}
+            {modelKeys?.length ? <div>{t('quotaModelKeys', { value: modelKeys.join(', ') })}</div> : null}
+          </details>
+        ) : null}
       </div>
     )
   }
@@ -198,20 +215,21 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
     }
     if (accountState.status !== 'ready') return null
 
-    const { profile, usage, plan } = accountState.account
-    const userQuota = usage?.userQuota
-    const orgPackage = usage?.orgResourcePackage
-    const addOnQuota = usage?.addOnQuota
-    const dedicatedPackages = usage?.dedicatedResourcePackages ?? []
-    const locale = activeLocale()
+    const { profile, usage, plan, updatedAt } = accountState.account
     const avatarInitial = (profile.name || profile.email || 'Q').charAt(0).toUpperCase()
-    const resetDate = formatResetDate(usage?.expiresAt)
-    const planExpiry = plan?.endDate ? formatResetDate(plan.endDate) : undefined
+    const planExpiry = formatAccountDate(locale, plan?.endDate)
+    const lastUpdated = formatAccountDate(locale, updatedAt)
     const isSuspended = plan?.organization?.isSuspended === true
-    const hasQuota = (userQuota?.total ?? 0) > 0
-      || (orgPackage?.total ?? 0) > 0
-      || (addOnQuota?.total ?? 0) > 0
-      || dedicatedPackages.some(pkg => pkg.total > 0)
+    const quotaBlocks = [
+      renderQuota('userQuota', t('userQuotaTitle'), usage?.userQuota),
+      renderQuota('addOnQuota', t('addOnQuotaTitle'), usage?.addOnQuota),
+      renderQuota('orgResource', t('orgResourceTitle'), usage?.orgResourcePackage),
+      ...(usage?.dedicatedResourcePackages ?? []).map((pkg, index) => renderQuota(
+        `dedicatedResource-${pkg.id ?? index}`,
+        resolveLocalizedText(pkg.title, locale) ?? t('dedicatedResourceTitle'),
+        pkg,
+      )),
+    ].filter(Boolean)
     return (
       <div className={css.accountSection}>
         {isSuspended ? (
@@ -226,15 +244,13 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
               <div className={css.userNameRow}>
                 <span className={css.userName}>{profile.name || 'Qoder Subscriber'}</span>
                 {plan?.planTierName ? (
-                  <span
-                    className={css.planBadge}
-                    title={planExpiry ? t('planExpiresAt', { value: planExpiry }) : undefined}
-                  >
+                  <span className={css.planBadge}>
                     {plan.planTierName}
                   </span>
                 ) : null}
               </div>
               {profile.email ? <span className={css.userEmail}>{profile.email}</span> : null}
+              {planExpiry ? <span className={css.quotaMeta}>{t('planExpiresAt', { value: planExpiry })}</span> : null}
               {plan?.organization?.orgName ? (
                 <span className={css.orgTag}>
                   {t('organization', { name: plan.organization.orgName })}
@@ -248,23 +264,17 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
             disabled={refreshing}
             onClick={() => { void loadAccount(true) }}
           >
-            {refreshing ? t('refreshing') : t('refresh')}
+            {refreshing ? t('refreshing') : (accountState.refreshFailed ? t('retry') : t('refresh'))}
           </button>
         </div>
-        {usage?.isQuotaExceeded ? <p className={css.error}>{t('quotaExceeded')}</p> : null}
-        {renderQuota('userQuota', t('userQuotaTitle'), userQuota, { resetDate })}
-        {renderQuota('orgResource', t('orgResourceTitle'), orgPackage, { resetDate })}
-        {renderQuota('addOnQuota', t('addOnQuotaTitle'), addOnQuota)}
-        {dedicatedPackages.map((pkg, index) => renderQuota(
-          `dedicatedResource-${pkg.id ?? index}`,
-          resolveLocalizedText(pkg.title, locale) ?? t('dedicatedResourceTitle'),
-          pkg,
-          {
-            expiresAt: formatResetDate(pkg.expiresAt),
-            description: resolveLocalizedText(pkg.description, locale),
-          },
-        ))}
-        {hasQuota ? null : <p className={css.accountEmptyText}>{t('noQuota')}</p>}
+        {accountState.refreshFailed ? (
+          <div className={css.accountRefreshStatus} role="status">
+            <span className={css.error}>{t('accountRefreshFailed')}</span>
+            {lastUpdated ? <time className={css.quotaMeta} dateTime={updatedAt}>{t('accountLastUpdated', { value: lastUpdated })}</time> : null}
+          </div>
+        ) : null}
+        {usage?.isQuotaExceeded ? <p className={css.error} role="status">{t('quotaExceeded')}</p> : null}
+        {quotaBlocks.length ? quotaBlocks : <p className={css.accountEmptyText}>{t('noQuota')}</p>}
       </div>
     )
   }

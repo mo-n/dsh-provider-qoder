@@ -43,53 +43,31 @@ export interface QoderUsageReaderOptions {
 }
 
 
-interface RawQuota {
-  total?: number
-  cap?: number
-  used?: number
-  remaining?: number
-  percentage?: number
-  unit?: string
-  available?: boolean
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-interface RawUsageInfo {
-  userQuota?: RawQuota
-  orgResourcePackage?: RawQuota
-  addOnQuota?: RawQuota
-  add_on_quota?: RawQuota
-  dedicatedResourcePackages?: unknown
-  totalUsagePercentage?: number
-  isQuotaExceeded?: boolean
-  expiresAt?: number | string
-  userType?: string
-  upgradeUrl?: string
+function normalizePercentage(value: unknown): number | undefined {
+  const percentage = finiteNumber(value)
+  if (percentage === undefined) return undefined
+  return Number((percentage >= 0 && percentage <= 1 ? percentage * 100 : percentage).toFixed(2))
 }
 
-function normalizeQuota(raw?: RawQuota): QoderQuota | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const total = typeof raw.total === 'number' && Number.isFinite(raw.total)
-    ? raw.total
-    : (typeof raw.cap === 'number' && Number.isFinite(raw.cap)
-      ? raw.cap
-      : (typeof raw.remaining === 'number' && typeof raw.used === 'number'
-        ? raw.used + raw.remaining
-        : 0))
-  const used = typeof raw.used === 'number' && Number.isFinite(raw.used) ? raw.used : 0
-  const remaining = typeof raw.remaining === 'number' && Number.isFinite(raw.remaining)
-    ? raw.remaining
-    : Math.max(0, total - used)
-
-  let percentage: number
-  if (typeof raw.percentage === 'number' && Number.isFinite(raw.percentage)) {
-    percentage = raw.percentage <= 1 && total > 1 ? raw.percentage * 100 : raw.percentage
-  } else {
-    percentage = total > 0 ? (used / total) * 100 : 0
-  }
-
-  const unit = typeof raw.unit === 'string' && raw.unit.length > 0 ? raw.unit : 'credits'
-
-  return { total, used, remaining, percentage, unit }
+function normalizeQuota(raw: unknown, preferCap = false): QoderQuota | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const obj = raw as Record<string, unknown>
+  const reportedTotal = finiteNumber(obj.total)
+  const cap = finiteNumber(obj.cap)
+  const used = finiteNumber(obj.used)
+  const reportedRemaining = finiteNumber(obj.remaining)
+  const total = (preferCap ? cap ?? reportedTotal : reportedTotal ?? cap)
+    ?? (used !== undefined && reportedRemaining !== undefined ? finiteNumber(used + reportedRemaining) : undefined)
+  const remaining = reportedRemaining
+    ?? (total !== undefined && used !== undefined ? finiteNumber(Math.max(0, total - used)) : undefined)
+  const percentage = normalizePercentage(obj.percentage)
+    ?? (total !== undefined && total > 0 && used !== undefined ? finiteNumber(used / total * 100) : undefined)
+  const available = asBoolean(obj.available)
+  return { total, used, remaining, percentage, unit: asString(obj.unit) ?? 'credits', available }
 }
 
 
@@ -100,7 +78,7 @@ function normalizeQuota(raw?: RawQuota): QoderQuota | undefined {
  * outside the `Date` range: an unusable value resolves to `undefined` instead
  * of throwing, so one bad field cannot abort the whole account read.
  */
-function normalizeExpiresAt(rawExpires?: number | string): string | undefined {
+function normalizeExpiresAt(rawExpires: unknown): string | undefined {
   if (rawExpires === undefined || rawExpires === null) return undefined
   const parsed = typeof rawExpires === 'number'
     ? rawExpires
@@ -129,9 +107,8 @@ function asNumber(value: unknown): number | undefined {
 }
 
 /**
- * The provider names a resource package with internal identifiers (campaign
- * ids) that must never reach the UI, so the subscriber-facing copy only ever
- * comes from `displayLabels`.
+ * Subscriber-facing copy comes from `displayLabels`. Package names can be
+ * internal campaign identifiers.
  */
 function findDisplayLabel(raw: unknown, dimension: string): unknown {
   if (!Array.isArray(raw)) return undefined
@@ -166,13 +143,28 @@ function normalizeLocalizedText(raw: unknown): QoderLocalizedText | undefined {
   return { values, fallback: fallback ?? '' }
 }
 
+function resourceModelScope(labels: unknown): Pick<QoderResourcePackage, 'modelFamilies' | 'modelKeys'> {
+  if (!Array.isArray(labels)) return {}
+  const modelFamilies = new Set<string>()
+  const modelKeys = new Set<string>()
+  for (const label of labels) {
+    if (!label || typeof label !== 'object') continue
+    const value = asString(label.value)
+    if (value === undefined) continue
+    if (label.dimension === 'model_family') modelFamilies.add(value)
+    if (label.dimension === 'model_key') modelKeys.add(value)
+  }
+  return {
+    ...modelFamilies.size > 0 ? { modelFamilies: [...modelFamilies] } : {},
+    ...modelKeys.size > 0 ? { modelKeys: [...modelKeys] } : {},
+  }
+}
+
 /**
  * Normalize the dedicated (entitlement-scoped) resource packages.
  *
  * Copy is read from `displayLabels` only, never from `name`/`description`,
- * which carry internal campaign identifiers. Entries without a usable size are
- * dropped and a non-array value yields `undefined`, so an unexpected payload
- * never fails the account read that also feeds the model catalog.
+ * which can carry internal campaign identifiers.
  */
 function normalizeResourcePackages(raw: unknown): QoderResourcePackage[] | undefined {
   if (!Array.isArray(raw)) return undefined
@@ -180,24 +172,24 @@ function normalizeResourcePackages(raw: unknown): QoderResourcePackage[] | undef
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object') continue
     const obj = entry as Record<string, unknown>
-    const quota = normalizeQuota(obj as RawQuota)
-    // A malformed entry carries no usable size at all: dropping it keeps the
-    // rest of the quota panel readable instead of failing the account read.
-    if (quota === undefined || (quota.total <= 0 && quota.used <= 0 && quota.remaining <= 0)) continue
-    const id = asString(obj.id)
-    const title = normalizeLocalizedText(findDisplayLabel(obj.displayLabels ?? obj.display_labels, 'title'))
-    const description = normalizeLocalizedText(findDisplayLabel(obj.displayLabels ?? obj.display_labels, 'description'))
-    const expiresAt = normalizeExpiresAt(obj.expiresAt as number | string | undefined)
-    const available = asBoolean(obj.available)
+    const quota = normalizeQuota(obj)
     const status = asString(obj.status)
+    if (quota === undefined) continue
+    if (quota.total === undefined && quota.used === undefined && quota.remaining === undefined
+      && quota.available === undefined && status === undefined) continue
+    const id = asString(obj.id)
+    const labels = obj.display_labels ?? obj.displayLabels
+    const title = normalizeLocalizedText(findDisplayLabel(labels, 'title'))
+    const description = normalizeLocalizedText(findDisplayLabel(labels, 'description'))
+    const expiresAt = normalizeExpiresAt(obj.expires_at) ?? normalizeExpiresAt(obj.expiresAt)
     packages.push({
       ...id !== undefined ? { id } : {},
       ...title !== undefined ? { title } : {},
       ...description !== undefined ? { description } : {},
       ...quota,
       ...expiresAt !== undefined ? { expiresAt } : {},
-      ...available !== undefined ? { available } : {},
       ...status !== undefined ? { status } : {},
+      ...resourceModelScope(labels),
     })
   }
   return packages.length > 0 ? packages : undefined
@@ -388,21 +380,8 @@ export class QoderUsageReader {
     }
   }
 
-  /**
-   * Read `GET /api/v2/quota/usage` and normalize it for the host/client seam.
-   *
-   * The `raw` echo keeps the upstream fields for diagnostics, but never
-   * `dedicatedResourcePackages`: those entries carry the campaign identifiers
-   * that the normalized list deliberately discards, and this payload crosses
-   * the seam into the browser.
-   *
-   * `addOnQuota` is the pool a plan holds separately from its own subscription
-   * quota. A plan whose subscription quota is zero — Free in particular —
-   * reports its whole balance there, so dropping the bucket left the card with
-   * nothing to render.
-   */
   private async fetchUsage(jobToken: string, signal?: AbortSignal): Promise<QoderQuotaUsage> {
-    const data = await openApiJsonRequest<RawUsageInfo>(this.fetchImpl, {
+    const raw = await openApiJsonRequest<unknown>(this.fetchImpl, {
       url: getQoderUsageUrl(this.region),
       token: jobToken,
       signal,
@@ -412,19 +391,26 @@ export class QoderUsageReader {
       logCategory: 'account.usage',
     })
 
-    const dedicatedResourcePackages = normalizeResourcePackages(data.dedicatedResourcePackages)
-    const rawUsage: RawUsageInfo = { ...data }
-    delete rawUsage.dedicatedResourcePackages
+    const data = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+    const dedicatedResourcePackages = normalizeResourcePackages(
+      data.dedicated_resource_packages ?? data.dedicatedResourcePackages,
+    )
+    const totalUsagePercentage = normalizePercentage(data.total_usage_percentage)
+      ?? normalizePercentage(data.totalUsagePercentage)
+    const isQuotaExceeded = asBoolean(data.is_quota_exceeded) ?? asBoolean(data.isQuotaExceeded)
 
     return {
-      userQuota: normalizeQuota(data.userQuota),
-      orgResourcePackage: normalizeQuota(data.orgResourcePackage),
+      userQuota: normalizeQuota(data.user_quota ?? data.userQuota),
+      orgResourcePackage: normalizeQuota(
+        data.org_resource_package ?? data.orgResourcePackage ?? data.shared_quota ?? data.sharedQuota,
+        true,
+      ),
       addOnQuota: normalizeQuota(data.add_on_quota ?? data.addOnQuota),
       ...dedicatedResourcePackages !== undefined ? { dedicatedResourcePackages } : {},
-      totalUsagePercentage: typeof data.totalUsagePercentage === 'number' ? data.totalUsagePercentage : undefined,
-      isQuotaExceeded: typeof data.isQuotaExceeded === 'boolean' ? data.isQuotaExceeded : false,
-      expiresAt: normalizeExpiresAt(data.expiresAt),
-      raw: rawUsage,
+      totalUsagePercentage,
+      isQuotaExceeded: isQuotaExceeded ?? (totalUsagePercentage === undefined ? undefined : totalUsagePercentage >= 100),
+      expiresAt: normalizeExpiresAt(data.expires_at) ?? normalizeExpiresAt(data.expiresAt),
+      raw,
     }
   }
 

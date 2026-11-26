@@ -22,17 +22,17 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
         JSON.stringify({
           userId: 'user-123',
           userType: 'teams',
-          totalUsagePercentage: 0.03,
-          isQuotaExceeded: false,
-          expiresAt: 1790756471159,
-          userQuota: {
+          total_usage_percentage: quotaCalls === 1 ? 0.03 : 1,
+          ...(quotaCalls === 1 ? { is_quota_exceeded: false } : {}),
+          expires_at: 1790756471159,
+          user_quota: {
             total: 3000.0,
             used: 84.0,
             remaining: 2916.0,
             percentage: 0.03,
             unit: 'credits',
           },
-          orgResourcePackage: {
+          shared_quota: {
             used: 0.0,
             remaining: 3000.0,
             percentage: 0.0,
@@ -70,6 +70,10 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
   assert.equal(first.usage?.orgResourcePackage?.total, 3000)
   assert.equal(first.usage?.orgResourcePackage?.used, 0)
   assert.equal(first.usage?.orgResourcePackage?.remaining, 3000)
+  assert.equal(first.usage?.orgResourcePackage?.available, true)
+  assert.equal(first.usage?.totalUsagePercentage, 3)
+  assert.equal(first.usage?.isQuotaExceeded, false)
+  assert.equal(first.usage?.expiresAt, new Date(1790756471159).toISOString())
   assert.equal(first.usage?.dedicatedResourcePackages, undefined)
   assert.equal(quotaCalls, 1)
   assert.match(diagnostics.join('\n'), /account\.usage/)
@@ -84,6 +88,7 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
   const third = await reader.readAccount('pt-test', { force: true })
   assert.equal(quotaCalls, 2)
   assert.equal(third.profile.name, 'Qoder Dev')
+  assert.equal(third.usage?.isQuotaExceeded, true)
 })
 
 test('QoderUsageReader surfaces quota failures and does not cache them', async t => {
@@ -359,11 +364,11 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   const usagePayload = {
     userId: 'user-pkg',
     userType: 'teams',
-    totalUsagePercentage: 0.89,
+    totalUsagePercentage: 1,
     isQuotaExceeded: false,
     expiresAt: 1790822453000,
     userQuota: { total: 3000, used: 3000, remaining: 0, percentage: 1, unit: 'credits' },
-    dedicatedResourcePackages: [
+    dedicated_resource_packages: [
       {
         id: 'pkg-0001',
         name: 'act-20260918-468',
@@ -373,10 +378,12 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
         remaining: 575,
         percentage: 0.72,
         unit: 'credits',
-        expiresAt: 1789790399000,
+        expires_at: 1789790399000,
         available: true,
         status: 'QUOTA_DETAIL_STATUS_ACTIVE',
         displayLabels: [
+          { dimension: 'model_family', value: 'sonus' },
+          { dimension: 'model_key', value: 'sonus-latest' },
           {
             dimension: 'description',
             value: 'sota model series description',
@@ -405,7 +412,7 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
         // A malformed container must degrade to "no copy" instead of throwing.
         displayLabels: { dimension: 'title', value: 'not an array' },
       },
-      { name: 'empty', total: 0, used: 0, remaining: 0 },
+      { name: 'empty' },
       null,
     ],
   }
@@ -429,6 +436,7 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   const reader = new QoderUsageReader({ authService, fetch: fetchMock as typeof fetch })
 
   const account = await reader.readAccount('pt-package-test')
+  assert.equal(account.usage?.isQuotaExceeded, false, 'an explicit flag overrides reported usage')
   const packages = account.usage?.dedicatedResourcePackages
   assert.ok(packages)
   assert.equal(packages.length, 2)
@@ -443,18 +451,16 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   assert.equal(first.expiresAt, new Date(1789790399000).toISOString())
   assert.equal(first.available, true)
   assert.equal(first.status, 'QUOTA_DETAIL_STATUS_ACTIVE')
+  assert.deepEqual(first.modelFamilies, ['sonus'])
+  assert.deepEqual(first.modelKeys, ['sonus-latest'])
   assert.equal(first.title?.fallback, 'sota model series')
   assert.equal(first.title?.values['zh-CN'], 'SOTA 专属积分')
   assert.equal(first.title?.values['en-US'], 'SOTA Exclusive Credits')
   assert.equal(first.description?.fallback, 'sota model series description')
   assert.equal(first.description?.values['zh-CN'], 'SOTA 专属积分：在模型选择器中选择 Sonus 模型时优先抵扣该积分。')
-  // The internal growth-campaign identifiers must never ride the normalized copy.
+  // Subscriber-facing copy uses display labels.
   assert.doesNotMatch(JSON.stringify(packages), /act-20260918-468/u)
-  // ...nor the raw upstream echo that shares the payload sent to the client.
-  assert.doesNotMatch(JSON.stringify(account.usage), /act-20260918-468|growth-campaign/u)
-  const rawUsage = account.usage?.raw as Record<string, unknown> | undefined
-  assert.equal(rawUsage?.dedicatedResourcePackages, undefined)
-  assert.equal(rawUsage?.userType, 'teams')
+  assert.deepEqual(account.usage?.raw, usagePayload)
 
   assert.equal(second.id, 'pkg-0002')
   assert.equal(second.total, 500)
