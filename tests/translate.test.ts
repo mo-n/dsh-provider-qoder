@@ -13,7 +13,7 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { normalizeQoderModels } from '../src/qoder/catalog.ts'
-import { buildQoderRequestBody, translateQoderMessages, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
+import { buildQoderRequestBody, translateQoderMessages } from '../src/qoder/transport/wire/serialize.ts'
 import {
   messagesForTurnIdentity,
   sanitizeToolCallArguments,
@@ -634,28 +634,6 @@ test('validateAndTranslateMessages rejects a batch that exceeds the image policy
       return true
     },
   )
-})
-
-test('validateQoderRequestShape rejects images for a non-vision model with no I/O', () => {
-  let reads = 0
-  const options = {
-    provider: 'dsh-provider-qoder',
-    model: 'text-only',
-    messages: [createUserMessage({
-      content: [{ type: 'image', attachment: imageRef }],
-      source: { kind: 'user' },
-    })],
-  } as GenerateOptions
-
-  assert.throws(
-    () => validateQoderRequestShape(options, { id: 'text-only', name: 'Text', supportsImages: false }),
-    (error: Error) => {
-      assert.ok(error instanceof QoderLlmError)
-      assert.equal((error as QoderLlmError).code, 'UNSUPPORTED_CONTENT')
-      return true
-    },
-  )
-  assert.equal(reads, 0)
 })
 
 test('validateAndTranslateMessages preserves tool_call_id for direct tool role messages', async () => {

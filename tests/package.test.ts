@@ -1158,7 +1158,7 @@ test('session tier RPC awaits host restoration before reading or saving historic
     const saving = call('sessionTier', { ...scope, tierKey: 'large' })
     await started
     finishRestore()
-    assert.equal((await saving).value.tierKey, 'large')
+    assert.deepEqual(await saving, { ok: true, value: { ...scope, tierKey: 'large', tokenCount: 1_000_000 } })
     assert.equal((await call('readSessionTier', scope)).value.tierKey, 'large')
     assert.equal(restores, 2)
 

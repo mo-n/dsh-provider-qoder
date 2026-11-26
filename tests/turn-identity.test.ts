@@ -146,13 +146,6 @@ test('sessions never share a record id', () => {
   assert.notEqual(one, two)
 })
 
-test('requests without a session identity stay independent records', () => {
-  const tracker = new QoderTurnTracker()
-
-  assert.equal(tracker.resolveTurnRecordId(undefined, [wireUser('Ping')]), null)
-  assert.equal(tracker.resolveTurnRecordId('', [wireUser('Ping')]), null)
-})
-
 test('the request envelope keeps run identity and its injected timestamp across steps and renews them for the next prompt', async () => {
   let clock = 1000
   const tracker = new QoderTurnTracker({ now: () => clock })

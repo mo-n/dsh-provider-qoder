@@ -173,7 +173,7 @@ const imageRef = {
   height: 1,
 }
 
-function transportAttachments() {
+function transportAttachments(onRead?: () => void) {
   return {
     imageLimits: {
       maxImageBytes: 5 * 1024 * 1024,
@@ -184,6 +184,7 @@ function transportAttachments() {
       mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const,
     },
     async readImageRequest(attachment: unknown) {
+      onRead?.()
       return {
         variantId: 'sha256:variant-1',
         attachment,
@@ -243,8 +244,9 @@ test('QoderTransport publishes images to the center service before streaming', a
   assert.ok(chatBody.length < 4_000, `chat body unexpectedly large: ${chatBody.length}`)
 })
 
-test('QoderTransport rejects images for a non-vision model before authenticating', async () => {
+test('QoderTransport rejects images for a non-vision model before credentials, attachment reads or network I/O', async () => {
   let patCalls = 0
+  let attachmentReads = 0
   let fetchCalls = 0
   const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
@@ -253,7 +255,7 @@ test('QoderTransport rejects images for a non-vision model before authenticating
       return Promise.resolve('pt-none')
     },
     resolveMachineId: () => 'machine-test',
-    attachments: transportAttachments(),
+    attachments: transportAttachments(() => { attachmentReads++ }),
     fetch: (async (): Promise<Response> => {
       fetchCalls++
       return new Response('{}')
@@ -261,11 +263,12 @@ test('QoderTransport rejects images for a non-vision model before authenticating
   })
 
   await assert.rejects(async () => {
-    for await (const _chunk of transport.stream(imageRequest(), { id: 'cmodel', name: 'Text only' })) continue
+    for await (const _chunk of transport.stream(imageRequest(), { id: 'cmodel', name: 'Text only', supportsImages: false })) continue
   }, (error: Error) => (
     error instanceof QoderLlmError && error.code === 'UNSUPPORTED_CONTENT'
   ))
   assert.equal(patCalls, 0)
+  assert.equal(attachmentReads, 0)
   assert.equal(fetchCalls, 0)
 })
 
