@@ -6,8 +6,8 @@ export interface QoderLogger {
   error?(message: string, ...details: unknown[]): void
 }
 
-const sensitiveKey = /(?:authorization|credential|password|secret|token)/iu
-const sensitiveQueryKey = /(?:authorization|credential|password|secret|token|verifier)/iu
+const sensitiveKey = /(?:authorization|credential|password|secret|token|machine[_-]?code)/iu
+const sensitiveQueryKey = /(?:authorization|credential|password|secret|token|verifier|machine[_-]?code)/iu
 const identifierKey = /^(?:accountId|id|uid|userId|user_id)$/iu
 const tokenValue = /\b(?:jrt|jt|pt)-[\w.-]+\b/giu
 const bearerValue = /Bearer\s+[^\s,;]+/giu

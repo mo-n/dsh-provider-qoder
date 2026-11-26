@@ -23,6 +23,7 @@ import { QoderLlmError } from '../qoder/errors.ts'
 import { redactLogValue } from '../qoder/transport/logging.ts'
 import {
   createQoderTransport,
+  readQoderUmidCache,
   type QoderTransport,
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
@@ -75,6 +76,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   let current = (): QoderConfig => baseConfig
   const createTransport = (value: QoderRuntimeConfig, resolvePat?: () => Promise<string>): QoderTransport => createQoderTransport({
     ...value,
+    resolveMachineIdentity: () => readQoderUmidCache(value.region),
     resolvePat: resolvePat ?? (() => resolveManagedQoderPat(ctx.credentials)),
     resolveCredential: resolvePat ? undefined : signal => authorization.lease(value.region, signal),
     logger,
@@ -106,7 +108,11 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     transport: region => {
       let transport = authorizationTransports.get(region)
       if (!transport) {
-        transport = createQoderTransport({ region, resolvePat: () => Promise.resolve('') }).authorization!
+        transport = createQoderTransport({
+          region,
+          resolvePat: () => Promise.resolve(''),
+          resolveMachineIdentity: () => readQoderUmidCache(region),
+        }).authorization!
         authorizationTransports.set(region, transport)
       }
       return transport

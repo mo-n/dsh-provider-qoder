@@ -683,5 +683,6 @@ test('createQoderTransport forwards resolveMachineToken, outerProviders, and inc
 
   await transport.readAccount()
   assert.equal(statusHeaders['Cosy-MachineToken'], 'factory-umid-token')
-  assert.equal(statusHeaders['Cosy-MachineType'], '5')
+  assert.equal(statusHeaders['Cosy-MachineType'], undefined)
+  assert.equal(statusHeaders['Cosy-MachineCode'], undefined)
 })

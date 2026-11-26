@@ -349,6 +349,7 @@ test('QoderUsageReader reads subscriber plan and user status without fabricating
   assert.equal(statusHeaders?.authorization, 'Bearer jt-plan-test')
   assert.equal(statusHeaders?.['Cosy-MachineToken'], undefined)
   assert.equal(statusHeaders?.['Cosy-MachineType'], undefined)
+  assert.equal(statusHeaders?.['Cosy-MachineCode'], undefined)
   assert.equal(planHeaders?.['cosy-clienttype'], '5')
   assert.equal(statusHeaders?.['cosy-clienttype'], '5')
   assert.equal(quotaHeaders?.['cosy-clienttype'], '5')
@@ -623,7 +624,27 @@ test('QoderUsageReader forwards explicit machineToken to user status headers wit
   }
 
   assert.equal(seenHeaders[0]?.['Cosy-MachineToken'], 'umid-token-123')
-  assert.equal(seenHeaders[0]?.['Cosy-MachineType'], '5')
+  assert.equal(seenHeaders[0]?.['Cosy-MachineType'], undefined)
+  assert.equal(seenHeaders[0]?.['Cosy-MachineCode'], undefined)
   assert.equal(seenHeaders[1]?.['Cosy-MachineToken'], undefined)
   assert.equal(seenHeaders[1]?.['Cosy-MachineType'], undefined)
+  assert.equal(seenHeaders[1]?.['Cosy-MachineCode'], undefined)
+
+  const reader = new QoderUsageReader({
+    authService: new QoderAuthService({ fetch: fetchMock, resolveMachineId: () => 'machine-id-123' }),
+    fetch: fetchMock,
+  })
+  await reader.readWithCredentials('browser-triplet', async () => ({
+    userID: 'user-umid', authToken: 'device-token', name: '', email: '',
+    machineToken: 'device-umid', machineType: '9', machineCode: 'device-code',
+  }))
+  assert.equal(seenHeaders[2]?.['Cosy-MachineToken'], 'device-umid')
+  assert.equal(seenHeaders[2]?.['Cosy-MachineType'], '9')
+  assert.equal(seenHeaders[2]?.['Cosy-MachineCode'], 'device-code')
+  await reader.readWithCredentials('browser-orphan-fields', async () => ({
+    userID: 'user-umid', authToken: 'device-token', name: '', email: '',
+    machineToken: '  ', machineType: '9', machineCode: 'device-code',
+  }))
+  assert.ok(seenHeaders[3])
+  assert.deepEqual(Object.keys(seenHeaders[3]).filter(key => /^cosy-machine(?:token|type|code)$/i.test(key)), [])
 })

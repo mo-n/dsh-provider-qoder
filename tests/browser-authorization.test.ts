@@ -500,6 +500,56 @@ test('browser authorization forwards explicit machineToken across selectAccounts
   assert.equal(rotated.credentials.machineToken, 'umid-browser-token')
 })
 
+test('browser authorization carries the UMID triplet through login, persistence and device token rotation', async () => {
+  const identity = { machineToken: 'umid-token', machineType: '8', machineCode: 'umid-code' }
+  const params = { machine_token: 'umid-token', machine_type: '8', machine_code: 'umid-code' }
+  let resolutions = 0
+  const checkParams = (url: URL) => {
+    for (const [key, value] of Object.entries(params)) assert.equal(url.searchParams.get(key), value)
+  }
+  const auth = new QoderBrowserAuthorization({
+    region: 'global',
+    resolveMachineId: () => 'bound-machine-id',
+    resolveMachineIdentity: () => { resolutions++; return identity },
+    fetch: async (input, init) => {
+      const url = new URL(String(input))
+      switch (url.pathname) {
+        case '/api/v1/deviceToken/poll':
+          checkParams(url)
+          return json({ token: 'device-1', refresh_token: 'refresh-1' })
+        case '/api/v1/userinfo':
+          checkParams(url)
+          return json({ id: 'subscriber' })
+        case '/api/v1/deviceToken/refresh':
+          assert.deepEqual(JSON.parse(String(init?.body)), {
+            refresh_token: 'refresh-1', machine_id: 'bound-machine-id', ...params,
+          })
+          return json({ device_token: 'device-2', refresh_token: 'refresh-2' })
+        default: throw new Error('Unexpected mocked route')
+      }
+    },
+  })
+  const f = fixture()
+  await f.manager.begin('global')
+  const flow = await auth.begin(new AbortController().signal)
+  checkParams(new URL(flow.url))
+  await f.finish('global', await flow.complete())
+  await f.manager.dispose()
+
+  const restarted = fixture(f.store, auth.refresh.bind(auth))
+  const lease = (await restarted.manager.lease('global'))!
+  const initial = await lease.resolve()
+  const rotated = await lease.resolve(undefined, initial.authToken)
+  for (const credentials of [initial, rotated]) {
+    const { machineToken, machineType, machineCode, machineID } = credentials
+    assert.deepEqual({ machineToken, machineType, machineCode }, identity)
+    assert.equal(machineID, 'bound-machine-id')
+  }
+  assert.equal(rotated.authToken, 'device-2')
+  assert.equal(resolutions, 1)
+  await restarted.manager.dispose()
+})
+
 test('browser begin and refresh honor abort and timeout when resolveMachineToken stalls', async t => {
   const time = mockTime(t)
   const pendingAuth = new QoderBrowserAuthorization({
@@ -601,4 +651,22 @@ test('saved non-string machineToken fails with AUTH error and whitespace machine
   const creds = await lease.resolve()
   assert.equal('machineToken' in creds, false)
   await manager.dispose()
+})
+
+test('saved UMID machine type and code must be strings and blanks are stripped on decode', async () => {
+  const f = fixture()
+  for (const field of ['machineType', 'machineCode'] as const) {
+    const invalid = grant()
+    Object.assign(invalid.credentials, { [field]: 7 })
+    f.store.seed(invalid)
+    await assert.rejects(f.manager.lease('global'), { code: 'AUTH' })
+  }
+  const blank = grant()
+  Object.assign(blank.credentials, { machineToken: 'token', machineType: ' ', machineCode: '\t' })
+  f.store.seed(blank)
+  const creds = await (await f.manager.lease('global'))!.resolve()
+  assert.equal(creds.machineToken, 'token')
+  assert.equal('machineType' in creds, false)
+  assert.equal('machineCode' in creds, false)
+  await f.manager.dispose()
 })

@@ -27,7 +27,7 @@
     "dev": "tsdown --config tsdown.config.mjs --watch",
     "typecheck": "tsc --noEmit",
     "typecheck:src": "tsc -p tsconfig.src.json",
-    "test": "node --test --test-isolation=none --experimental-strip-types tests/*.test.ts",
+    "test": "node --test --test-isolation=none --experimental-strip-types --import ./tests/helpers/offline.ts tests/*.test.ts",
     "build": "tsdown --config tsdown.config.mjs",
     "verify": "pnpm run build && pnpm run typecheck && pnpm run typecheck:src && pnpm test",
     "check": "pnpm run verify && pnpm pack --dry-run",

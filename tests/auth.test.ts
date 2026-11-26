@@ -459,12 +459,13 @@ test('synchronous caller cancellation while starting an exchange observes the sh
 test('QoderAuthService forwards explicit machineToken to exchange and userinfo without leaking it in debug logs', async () => {
   const seen: Array<{ exchangeBody: Record<string, unknown>; userInfoUrl: URL }> = []
   const debugLogs: string[] = []
-  const runCase = async (machineToken?: string) => {
+  const runCase = async (machineToken?: string, identity?: { machineToken: string; machineType: string; machineCode: string }) => {
     let exchangeBody: Record<string, unknown> = {}
     let userInfoUrl!: URL
     const service = new QoderAuthService({
       resolveMachineId: () => 'machine-1',
       ...machineToken === undefined ? {} : { resolveMachineToken: async () => machineToken },
+      ...identity === undefined ? {} : { resolveMachineIdentity: async () => identity },
       logger: {
         debug: (message, ...details) => debugLogs.push(JSON.stringify([message, ...details])),
       },
@@ -507,6 +508,17 @@ test('QoderAuthService forwards explicit machineToken to exchange and userinfo w
   })
   assert.equal(seen[1]?.userInfoUrl.searchParams.has('machine_token'), false)
   assert.equal(withoutToken.machineToken, undefined)
+
+  const machineCode = 'private+umid&code'
+  const full = await runCase('legacy-token', { machineToken: secretToken, machineType: '9', machineCode })
+  const triplet = { machine_token: secretToken, machine_type: '9', machine_code: machineCode }
+  assert.deepEqual(seen[2]?.exchangeBody, { personal_token: 'pt-token', machine_id: 'machine-1', ...triplet })
+  assert.deepEqual(Object.fromEntries(seen[2]!.userInfoUrl.searchParams), triplet)
+  assert.equal(full.machineToken, secretToken)
+  assert.equal(full.machineType, '9')
+  assert.equal(full.machineCode, machineCode)
+  assert.ok(!debugLogs.join('\n').includes(encodeURIComponent(machineCode)))
+  assert.match(debugLogs.join('\n'), /machine_code=REDACTED/)
 })
 
 test('QoderAuthService honors timeout and caller abort when resolveMachineToken stalls', async t => {

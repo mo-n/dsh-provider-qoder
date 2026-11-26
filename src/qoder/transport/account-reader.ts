@@ -1,7 +1,8 @@
 /** Qoder subscriber profile and quota usage querying. */
 
 import type { QoderAuthService } from './auth.ts'
-import type { CosyCredentials } from './wire/cosy.ts'
+import { normalizeMachineIdentity, type QoderCredentials } from './wire/credentials.ts'
+import type { QoderMachineIdentity } from './umid-cache.ts'
 import {
   getQoderUsageUrl,
   getQoderUserPlanUrl,
@@ -313,8 +314,8 @@ export class QoderUsageReader {
 
   async readWithCredentials(
     key: string,
-    resolve: (signal?: AbortSignal) => Promise<CosyCredentials>,
-    options?: { force?: boolean; signal?: AbortSignal; refresh?: (rejected: CosyCredentials, signal: AbortSignal) => Promise<CosyCredentials> },
+    resolve: (signal?: AbortSignal) => Promise<QoderCredentials>,
+    options?: { force?: boolean; signal?: AbortSignal; refresh?: (rejected: QoderCredentials, signal: AbortSignal) => Promise<QoderCredentials> },
   ): Promise<QoderAccountInfo> {
     const cacheKey = `${this.region}:${key}`
 
@@ -329,7 +330,7 @@ export class QoderUsageReader {
       cacheKey,
       options?.signal,
       async sharedSignal => {
-        let credentials: CosyCredentials | undefined
+        let credentials: QoderCredentials | undefined
         try {
           return await this.loadAccount(async signal => {
             credentials = await resolve(signal)
@@ -346,7 +347,7 @@ export class QoderUsageReader {
   }
 
   private async loadAccount(
-    resolve: (signal?: AbortSignal) => Promise<CosyCredentials>,
+    resolve: (signal?: AbortSignal) => Promise<QoderCredentials>,
     signal: AbortSignal,
     cacheKey: string,
   ): Promise<QoderAccountInfo> {
@@ -360,7 +361,7 @@ export class QoderUsageReader {
     const [usage, plan, status] = await Promise.all([
       retryMetadataRead(signal, () => this.fetchUsage(creds.authToken, signal)),
       this.safeFetchPlan(creds.authToken, signal),
-      this.safeFetchStatus(creds.authToken, signal, creds.machineToken),
+      this.safeFetchStatus(creds.authToken, signal, creds),
     ])
 
     const accountInfo: QoderAccountInfo = {
@@ -453,13 +454,17 @@ export class QoderUsageReader {
   private async fetchStatus(
     jobToken: string,
     signal?: AbortSignal,
-    machineToken?: string,
+    machineIdentity?: Partial<QoderMachineIdentity>,
   ): Promise<QoderSubscriberStatus | undefined> {
-    const token = typeof machineToken === 'string' ? machineToken.trim() : ''
+    const { machineToken, machineType, machineCode } = normalizeMachineIdentity(machineIdentity)
     const data = await openApiJsonRequest<unknown>(this.fetchImpl, {
       url: getQoderUserStatusUrl(this.region),
       token: jobToken,
-      ...token ? { headers: { 'Cosy-MachineToken': token, 'Cosy-MachineType': '5' } } : {},
+      ...machineToken ? { headers: {
+        'Cosy-MachineToken': machineToken,
+        ...machineType ? { 'Cosy-MachineType': machineType } : {},
+        ...machineCode ? { 'Cosy-MachineCode': machineCode } : {},
+      } } : {},
       signal,
       timeoutMs: this.timeoutMs,
       logger: this.logger,
@@ -472,10 +477,10 @@ export class QoderUsageReader {
   private async safeFetchStatus(
     jobToken: string,
     signal?: AbortSignal,
-    machineToken?: string,
+    machineIdentity?: Partial<QoderMachineIdentity>,
   ): Promise<QoderSubscriberStatus | undefined> {
     try {
-      return await this.fetchStatus(jobToken, signal, machineToken)
+      return await this.fetchStatus(jobToken, signal, machineIdentity)
     } catch (error) {
       if (signal?.aborted) throw error
       this.logger?.warn?.('[Qoder Status] Failed to load user status (degraded)', redactLogValue(error))

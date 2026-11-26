@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ConnectionFetchRoute } from '@deepseek-ai/dsh-client-connection'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
@@ -398,6 +401,56 @@ async function modelRuntime(config: plugin.Config) {
   const readRate = async () => (await readRates()).rates.find(model => model.id === 'chosen')
   return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace, readRate, readRates, request, call }
 }
+
+test('plugin injects the China UMID cache into account and browser authorization transports', async t => {
+  const config = await mkdtemp(join(tmpdir(), 'qoder-plugin-umid-'))
+  const previous = process.env.QODERCN_CONFIG_DIR
+  process.env.QODERCN_CONFIG_DIR = config
+  t.after(async () => {
+    if (previous === undefined) delete process.env.QODERCN_CONFIG_DIR
+    else process.env.QODERCN_CONFIG_DIR = previous
+    await rm(config, { recursive: true, force: true })
+  })
+  await mkdir(join(config, '.auth'))
+  await writeFile(join(config, '.auth', 'machine_id'), 'china-machine-id')
+  await writeFile(join(config, 'umid-cache.json'), JSON.stringify({
+    version: 1, environment: 0, platform: process.platform, arch: process.arch,
+    info: { machineToken: 'china-umid', machineType: '8', machineCode: 'china-code' },
+  }))
+  t.mock.method(TestCredentials.prototype, 'resolve', async () => ({ value: 'pt-offline', source: 'memory' }))
+  let statusHeaders: Headers | undefined
+  const poll = Promise.withResolvers<URL>()
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    assert.equal(url.hostname, 'openapi.qoder.com.cn')
+    switch (url.pathname) {
+      case '/api/v1/jobToken/exchange': return Response.json({ token: 'job-token-test' })
+      case '/api/v1/userinfo': return Response.json({ id: 'subscriber' })
+      case '/api/v2/quota/usage':
+      case '/api/v2/user/plan': return Response.json({})
+      case '/api/v1/deviceToken/poll':
+        poll.resolve(url)
+        return new Response(null, { status: 401 })
+      case '/api/v3/user/status':
+        statusHeaders = new Headers(init?.headers)
+        return Response.json({})
+      default: throw new Error('Unexpected mocked route')
+    }
+  })
+  const { call, ctx } = await modelRuntime({ region: 'china' })
+  try {
+    assert.equal((await call('account', {})).ok, true)
+    assert.ok(statusHeaders)
+    assert.deepEqual(['Token', 'Type', 'Code'].map(field => statusHeaders!.get(`Cosy-Machine${field}`)), ['china-umid', '8', 'china-code'])
+    assert.equal((await call('beginLogin', { region: 'china' })).ok, true)
+    const deadline = AbortSignal.timeout(2000)
+    const url = await Promise.race([
+      poll.promise,
+      new Promise<never>((_, reject) => deadline.addEventListener('abort', () => reject(deadline.reason), { once: true })),
+    ])
+    assert.deepEqual(['token', 'type', 'code'].map(field => url.searchParams.get(`machine_${field}`)), ['china-umid', '8', 'china-code'])
+  } finally { await ctx.fiber.dispose() }
+})
 
 /** Let background settings writes and their revision retries settle. */
 async function drain(): Promise<void> {

@@ -43,7 +43,6 @@ export class DefaultQoderTransport implements QoderTransport {
   readonly authorization: QoderBrowserAuthorization
   private readonly resolveCredential: QoderTransportOptions['resolveCredential']
   private readonly resolveMachineId: NonNullable<QoderTransportOptions['resolveMachineId']>
-  private readonly resolveMachineToken: QoderTransportOptions['resolveMachineToken']
   private readonly outerProviders?: readonly string[]
   private readonly includeEnterpriseByok?: boolean
   private readonly region: QoderRegion
@@ -83,7 +82,6 @@ export class DefaultQoderTransport implements QoderTransport {
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
     this.resolveMachineId = options.resolveMachineId ?? (() => getMachineId(qoderMachineIdPaths(this.region)))
-    this.resolveMachineToken = options.resolveMachineToken
     this.outerProviders = options.outerProviders?.slice()
     this.includeEnterpriseByok = options.includeEnterpriseByok
     this.authorization = new QoderBrowserAuthorization(options)
@@ -106,7 +104,8 @@ export class DefaultQoderTransport implements QoderTransport {
       logger: this.logger,
       region: this.region,
       resolveMachineId: this.resolveMachineId,
-      resolveMachineToken: this.resolveMachineToken,
+      resolveMachineIdentity: options.resolveMachineIdentity,
+      resolveMachineToken: options.resolveMachineToken,
     })
     this.usage = new QoderUsageReader({
       authService: this.auth,

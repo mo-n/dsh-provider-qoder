@@ -1,6 +1,7 @@
 /** PAT exchange and in-memory Qoder job-token lifecycle. */
 
-import type { QoderCredentials } from './wire/credentials.ts'
+import { machineIdentityParams, normalizeMachineIdentity, resolveQoderMachineIdentity, type QoderCredentials, type QoderMachineIdentityResolvers } from './wire/credentials.ts'
+import type { QoderMachineIdentity } from './umid-cache.ts'
 import { getQoderExchangeUrl, getQoderUserInfoUrl, resolveQoderEndpoints, type QoderRegion } from './endpoints.ts'
 import { QoderLlmError } from '../errors.ts'
 import type { QoderLogger } from './logging.ts'
@@ -62,13 +63,12 @@ export interface QoderCredentialSnapshot extends QoderCredentials {
   readonly version: number
 }
 
-export interface QoderAuthServiceOptions {
+export interface QoderAuthServiceOptions extends QoderMachineIdentityResolvers {
   fetch?: typeof fetch
   timeoutMs?: number
   /** Independent budget for optional organization metadata, including retries. */
   organizationTagsTimeoutMs?: number
   resolveMachineId?: () => string | Promise<string>
-  resolveMachineToken?: () => string | undefined | Promise<string | undefined>
   region?: QoderRegion
   logger?: QoderLogger
 }
@@ -101,7 +101,7 @@ export class QoderAuthManager {
   private readonly timeoutMs: number
   private readonly organizationTagsTimeoutMs: number
   private readonly resolveMachineId: () => string | Promise<string>
-  private readonly resolveMachineToken?: () => string | undefined | Promise<string | undefined>
+  private readonly resolveMachineIdentity: () => Promise<Partial<QoderMachineIdentity>>
   private readonly region: QoderRegion
   private readonly logger?: QoderLogger
 
@@ -111,7 +111,7 @@ export class QoderAuthManager {
     this.organizationTagsTimeoutMs = options.organizationTagsTimeoutMs ?? defaultOrganizationTagsTimeoutMs
     this.region = options.region ?? 'global'
     this.resolveMachineId = options.resolveMachineId ?? (() => getMachineId(qoderMachineIdPaths(this.region)))
-    this.resolveMachineToken = options.resolveMachineToken
+    this.resolveMachineIdentity = () => resolveQoderMachineIdentity(options)
     this.logger = options.logger
   }
 
@@ -213,16 +213,15 @@ export class QoderAuthManager {
     onAuthenticated: () => void,
     epoch: number,
   ): Promise<QoderCredentialSnapshot> {
-    const [resolvedMachineID, resolvedMachineToken] = await awaitWithAbort(
+    const [resolvedMachineID, machineIdentity] = await awaitWithAbort(
       Promise.all([
         this.resolveMachineId(),
-        this.resolveMachineToken?.(),
+        this.resolveMachineIdentity(),
       ]),
       signal,
       abortedError,
     )
     const machineID = resolvedMachineID.trim()
-    const rawMachineToken = typeof resolvedMachineToken === 'string' ? resolvedMachineToken.trim() || undefined : undefined
     if (signal.aborted) throw abortedError()
     const data = await openApiJsonRequest<QoderTokenExchange>(
       this.fetchImpl,
@@ -231,7 +230,7 @@ export class QoderAuthManager {
         body: {
           personal_token: pat,
           ...machineID && machineID !== 'unknown' ? { machine_id: machineID } : {},
-          ...rawMachineToken ? { machine_token: rawMachineToken } : {},
+          ...machineIdentityParams(machineIdentity),
         },
         signal,
         timeoutMs: this.timeoutMs,
@@ -246,7 +245,7 @@ export class QoderAuthManager {
     }
     const expiresAt = jobTokenExpiry(data)
 
-    const resolved = await this.credentialsForToken(jobToken, machineID, signal, onAuthenticated, rawMachineToken)
+    const resolved = await this.credentialsForToken(jobToken, machineID, signal, onAuthenticated, machineIdentity)
     const creds: QoderCredentialSnapshot = { ...resolved, expiresAt, version: ++this.nextVersion }
     const cacheKey = `${this.region}:${opaqueCredentialKey(pat)}`
     if ((this.epochs.get(cacheKey) ?? 0) !== epoch || signal.aborted) throw abortedError()
@@ -260,10 +259,10 @@ export class QoderAuthManager {
     machineID: string,
     signal: AbortSignal,
     onAuthenticated = () => {},
-    machineToken?: string,
+    machineIdentity?: Partial<QoderMachineIdentity> | string,
   ): Promise<QoderCredentials> {
-    const normalizedMachineToken = typeof machineToken === 'string' ? machineToken.trim() || undefined : undefined
-    const userInfo = await retryMetadataRead(signal, () => this.fetchUserInfo(jobToken, signal, normalizedMachineToken))
+    const identity = normalizeMachineIdentity(machineIdentity)
+    const userInfo = await retryMetadataRead(signal, () => this.fetchUserInfo(jobToken, signal, identity))
     if (signal.aborted) throw abortedError()
     // The authentication deadline protects the required exchange and identity
     // lookup only. Optional tags have their own budget and share caller cancellation.
@@ -274,7 +273,7 @@ export class QoderAuthManager {
       name: userInfo.name || 'Qoder User',
       email: userInfo.email,
       machineID,
-      ...normalizedMachineToken === undefined ? {} : { machineToken: normalizedMachineToken },
+      ...identity,
       ...userInfo.organizationId === undefined ? {} : { organizationId: userInfo.organizationId },
       ...userInfo.organizationTags === undefined ? {} : { organizationTags: userInfo.organizationTags },
       ...userInfo.dataPolicyAgreed === undefined ? {} : { dataPolicyAgreed: userInfo.dataPolicyAgreed },
@@ -290,10 +289,12 @@ export class QoderAuthManager {
   private async fetchUserInfo(
     jobToken: string,
     signal: AbortSignal,
-    machineToken?: string,
+    machineIdentity: Partial<QoderMachineIdentity>,
   ): Promise<Omit<QoderCredentials, 'authToken' | 'machineID'>> {
     const userInfoUrl = new URL(getQoderUserInfoUrl(this.region))
-    if (machineToken) userInfoUrl.searchParams.set('machine_token', machineToken)
+    for (const [key, value] of Object.entries(machineIdentityParams(machineIdentity))) {
+      userInfoUrl.searchParams.set(key, value)
+    }
     const info = await openApiJsonRequest<{
       id?: string
       user_id?: string
