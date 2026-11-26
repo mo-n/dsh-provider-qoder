@@ -48,6 +48,8 @@ export interface QoderCatalogLifecycleOptions {
   persistenceConflictBackoffMs?: readonly number[]
 }
 
+type QoderCatalogHostChange = 'browser-authorization' | 'managed-pat' | 'settings-binding' | 'settings-changed'
+
 const defaultPersistenceConflictBackoffMs = [50, 100, 200] as const
 const contextFields = ['contextTier', 'contextWindow', 'contextOptions', 'maxContextWindow'] as const
 const contextFieldSet = new Set<keyof QoderCatalogModel>(contextFields)
@@ -132,8 +134,17 @@ export class QoderCatalogLifecycle {
     this.publish(region)
   }
 
+  /** Apply a host change after the active transport has been updated. */
+  hostChanged(reason: QoderCatalogHostChange, publishHostState?: () => void): void {
+    if (reason === 'browser-authorization' || reason === 'managed-pat') this.clearDiscovered()
+    this.observeTransport()
+    publishHostState?.()
+    if (reason === 'browser-authorization') void this.refresh()
+    if (reason === 'settings-changed') this.retryPersistence()
+  }
+
   /** Observe transport changes, including switching away and back. */
-  observeTransport(): void {
+  private observeTransport(): void {
     const transport = this.options.resolveTransport()
     const region = this.options.region()
     if (transport === this.activeTransport && region === this.activeRegion) return
@@ -156,7 +167,7 @@ export class QoderCatalogLifecycle {
     return mergeQoderDiscoveryMetadata(models, state.models)
   }
 
-  clearDiscovered(): void {
+  private clearDiscovered(): void {
     for (const region of ['global', 'china'] as const) {
       this.catalogs[region].models = []
       this.invalidate(region)
@@ -427,7 +438,7 @@ export class QoderCatalogLifecycle {
   }
 
   /** Persist an accepted discovery when settings first become available. */
-  retryPersistence(): void {
+  private retryPersistence(): void {
     this.observeTransport()
     const region = this.activeRegion!
     const state = this.catalogs[region]

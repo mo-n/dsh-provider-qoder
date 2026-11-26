@@ -46,6 +46,14 @@ test('getQoderModelListUrl builds model catalog URLs for global and china', () =
     getQoderModelListUrl('china'),
     'https://gateway.qoder.com.cn/algo/api/v2/model/list?Encode=1',
   )
+  assert.equal(
+    getQoderModelListUrl('global', { outerProviders: [' ', 'openai', 'anthropic '] }),
+    'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1&outerProviders=openai%2Canthropic',
+  )
+  assert.equal(
+    getQoderModelListUrl('china', { outerProviders: ['  ', ''] }),
+    'https://gateway.qoder.com.cn/algo/api/v2/model/list?Encode=1',
+  )
   assert.equal(getQoderModelListUrl(), getQoderModelListUrl('global'))
 })
 

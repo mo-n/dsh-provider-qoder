@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   logParsedResponse,
   redactLogPayload,
+  redactLogUrl,
   redactLogValue,
 } from '../src/qoder/transport/logging.ts'
 
@@ -134,4 +135,17 @@ test('error diagnostics redact arbitrary credentials inside nested JSON causes a
   assert.equal(logged.httpStatus, 200)
   assert.equal((logged.failure as Record<string, unknown>).status, 403)
   assert.ok(!JSON.stringify(logged).includes('arbitrary-private-value'))
+})
+
+test('redactLogUrl strips sensitive query tokens while preserving non-sensitive parameters', () => {
+  const token = 'fake+machine&value'
+  const url = `https://openapi.qoder.sh/api/v1/userinfo?Encode=1&machine_token=${encodeURIComponent(token)}&verifier=pkce-secret`
+  const redacted = redactLogUrl(url)
+  assert.equal(redacted, 'https://openapi.qoder.sh/api/v1/userinfo?Encode=1&machine_token=REDACTED&verifier=REDACTED')
+  assert.ok(!redacted.includes(token))
+  assert.ok(!redacted.includes(encodeURIComponent(token)))
+  assert.ok(!redacted.includes('pkce-secret'))
+
+  const cleanUrl = 'https://openapi.qoder.sh/api/v1/userinfo?Encode=1'
+  assert.equal(redactLogUrl(cleanUrl), cleanUrl)
 })

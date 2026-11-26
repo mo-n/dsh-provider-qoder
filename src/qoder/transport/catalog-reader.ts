@@ -24,13 +24,15 @@ export interface FetchQoderModelsOptions {
   region?: QoderRegion
   logger?: QoderLogger
   timeoutMs?: number
+  outerProviders?: readonly string[]
+  includeEnterpriseByok?: boolean
 }
 
 export async function fetchQoderModels(
   credentials: CosyCredentials,
   options: FetchQoderModelsOptions = {},
 ): Promise<QoderCatalogModel[]> {
-  const url = getQoderModelListUrl(options.region)
+  const url = getQoderModelListUrl(options.region, { outerProviders: options.outerProviders })
   const fetchImpl = options.fetch ?? globalThis.fetch
   const startedAt = performance.now()
   const deadline = withDeadline(options.signal, options.timeoutMs ?? defaultMetadataTimeoutMs)
@@ -64,7 +66,7 @@ export async function fetchQoderModels(
     }
     const models = normalizeQoderModels(payload, conflict => {
       options.logger?.warn?.('[Qoder Models] Conflicting catalog defaults; using fallback', { conflict })
-    })
+    }, { includeEnterpriseByok: options.includeEnterpriseByok })
     if (models.length === 0) throw new QoderLlmError('Qoder model discovery returned no enabled models.', 'EMPTY_RESPONSE')
     return models
   } catch (error) {

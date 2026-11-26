@@ -72,7 +72,7 @@ function aborted(): QoderLlmError {
 export function buildQoderImageMultipart(
   data: Uint8Array,
   mediaType: string,
-  boundaryId: string = crypto.randomUUID(),
+  boundaryId: string = crypto.randomUUID().replaceAll('-', ''),
 ): QoderMultipartBody {
   const boundary = `----qodercli-${boundaryId}`
   const extension = mediaTypeExtensions[mediaType] ?? 'png'
@@ -316,7 +316,7 @@ export class QoderImageUploader {
     credentials: CosyCredentials,
     signal: AbortSignal,
   ): Promise<{ url?: string; retryable: boolean; reason: string }> {
-    const requestId = crypto.randomUUID()
+    const requestId = crypto.randomUUID().replaceAll('-', '')
     const url = getQoderImageUploadUrl(this.region, requestId)
     const multipart = buildQoderImageMultipart(image.data, image.mediaType)
     // The Qoder client signs the body *length*, not the body: prepareRequest

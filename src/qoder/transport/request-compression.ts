@@ -46,6 +46,7 @@ function vpcEndpoint(url: string): boolean {
   return host === 'vpc.qoder.com.cn' || host.endsWith('.vpc.qoder.com.cn')
 }
 
+export const defaultRequestCompression = true
 export const defaultRequestCompressionMinChars = 4096
 export const defaultRequestCompressionLevel = 1
 

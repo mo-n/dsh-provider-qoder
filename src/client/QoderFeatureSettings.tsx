@@ -88,14 +88,6 @@ export function QoderFeatureSettings({ operations, snapshot, t }: Pick<QoderCred
         checked={snapshot.value?.imageGenEnabled ?? true} disabled={!writable}
         onChange={enabled => { void save(() => operations.storeImageGenEnabled(enabled)) }} />
     </div>
-    <div className={`${css.featureSetting} ${css.featureToggleRow}`}>
-      <span className={css.featureDescription}>
-        <span className={css.featureTitle}>{t('replaceSystemPromptLabel')}</span>
-      </span>
-      <Switch label={t('replaceSystemPromptLabel')}
-        checked={snapshot.value?.replaceSystemPrompt ?? true} disabled={!writable}
-        onChange={enabled => { void save(() => operations.storeReplaceSystemPrompt(enabled)) }} />
-    </div>
     {failed ? <p className={css.error} role="alert">{t(failed)}</p> : null}
   </section>
 }

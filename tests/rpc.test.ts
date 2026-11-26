@@ -137,25 +137,26 @@ test('the RPC disposer closes active streams before unregistering routes', async
   assert.equal((await reader.read()).done, true)
 })
 
-test('registration rollback preserves its original error and catches cleanup rejection', async () => {
+test('registration rollback cleans up in reverse order despite a rejection and preserves the original error', async () => {
   const registrationError = new Error('route registration failed')
   const cleanupError = new Error('sensitive rollback diagnostic')
+  const active = new Set<string>()
   const cleaned: string[] = []
   const warnings: unknown[][] = []
-  const { context } = captureConnection(route => () => {
-    cleaned.push(route.path)
-    return Promise.reject(cleanupError)
+  const { context } = captureConnection(route => {
+    if (active.size === 2) throw registrationError
+    active.add(route.path)
+    return () => {
+      active.delete(route.path)
+      cleaned.push(route.path)
+      if (route.path.endsWith('/models')) return Promise.reject(cleanupError)
+    }
   })
   Object.assign(context, { logger: { warn: (...args: unknown[]) => { warnings.push(args) } } })
-  const fetchRegistry = (context.connection as any).fetch
-  const register = fetchRegistry.register
-  fetchRegistry.register = (route: ConnectionFetchRoute) => {
-    if (route.path.endsWith('/models')) throw registrationError
-    return register(route)
-  }
   assert.throws(() => registerQoderRpc(context, async () => ({ ok: true, value: {} })), error => error === registrationError)
   await new Promise<void>(resolve => setImmediate(resolve))
-  assert.deepEqual(cleaned, ['/api/qoder-subscription/account'])
+  assert.deepEqual(cleaned, ['/api/qoder-subscription/models', '/api/qoder-subscription/account'])
+  assert.equal(active.size, 0)
   assert.deepEqual(warnings, [['[Qoder RPC] Registration rollback cleanup failed', { failedCleanups: 1 }]])
   assert.doesNotMatch(JSON.stringify(warnings), /sensitive rollback diagnostic/u)
 })

@@ -40,6 +40,16 @@ function decode(record: CredentialRecord | undefined, region: QoderRegion): Save
       || typeof grant.credentials.authToken !== 'string' || !grant.credentials.authToken) {
       throw new QoderLlmError('Saved Qoder browser authorization is invalid.', 'AUTH')
     }
+    for (const field of ['machineToken', 'machineType', 'machineCode'] as const) {
+      const value = grant.credentials[field]
+      if (value === undefined) continue
+      if (typeof value !== 'string') {
+        throw new QoderLlmError('Saved Qoder browser authorization is invalid.', 'AUTH')
+      }
+      const normalized = value.trim()
+      if (normalized.length === 0) delete grant.credentials[field]
+      else grant.credentials[field] = normalized
+    }
   }
   return value as SavedAuthorization
 }

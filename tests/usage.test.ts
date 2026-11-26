@@ -22,17 +22,17 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
         JSON.stringify({
           userId: 'user-123',
           userType: 'teams',
-          totalUsagePercentage: 0.03,
-          isQuotaExceeded: false,
-          expiresAt: 1790756471159,
-          userQuota: {
+          total_usage_percentage: [0.03, 0.99999, 1][quotaCalls - 1],
+          ...(quotaCalls === 1 ? { is_quota_exceeded: false } : {}),
+          expires_at: 1790756471159,
+          user_quota: {
             total: 3000.0,
             used: 84.0,
             remaining: 2916.0,
             percentage: 0.03,
             unit: 'credits',
           },
-          orgResourcePackage: {
+          shared_quota: {
             used: 0.0,
             remaining: 3000.0,
             percentage: 0.0,
@@ -70,6 +70,10 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
   assert.equal(first.usage?.orgResourcePackage?.total, 3000)
   assert.equal(first.usage?.orgResourcePackage?.used, 0)
   assert.equal(first.usage?.orgResourcePackage?.remaining, 3000)
+  assert.equal(first.usage?.orgResourcePackage?.available, true)
+  assert.equal(first.usage?.totalUsagePercentage, 3)
+  assert.equal(first.usage?.isQuotaExceeded, false)
+  assert.equal(first.usage?.expiresAt, new Date(1790756471159).toISOString())
   assert.equal(first.usage?.dedicatedResourcePackages, undefined)
   assert.equal(quotaCalls, 1)
   assert.match(diagnostics.join('\n'), /account\.usage/)
@@ -84,6 +88,10 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
   const third = await reader.readAccount('pt-test', { force: true })
   assert.equal(quotaCalls, 2)
   assert.equal(third.profile.name, 'Qoder Dev')
+  assert.equal(third.usage?.totalUsagePercentage, 100)
+  assert.equal(third.usage?.isQuotaExceeded, false)
+  const exhausted = await reader.readAccount('pt-test', { force: true })
+  assert.equal(exhausted.usage?.isQuotaExceeded, true)
 })
 
 test('QoderUsageReader surfaces quota failures and does not cache them', async t => {
@@ -349,6 +357,7 @@ test('QoderUsageReader reads subscriber plan and user status without fabricating
   assert.equal(statusHeaders?.authorization, 'Bearer jt-plan-test')
   assert.equal(statusHeaders?.['Cosy-MachineToken'], undefined)
   assert.equal(statusHeaders?.['Cosy-MachineType'], undefined)
+  assert.equal(statusHeaders?.['Cosy-MachineCode'], undefined)
   assert.equal(planHeaders?.['cosy-clienttype'], '5')
   assert.equal(statusHeaders?.['cosy-clienttype'], '5')
   assert.equal(quotaHeaders?.['cosy-clienttype'], '5')
@@ -358,11 +367,11 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   const usagePayload = {
     userId: 'user-pkg',
     userType: 'teams',
-    totalUsagePercentage: 0.89,
+    totalUsagePercentage: 1,
     isQuotaExceeded: false,
     expiresAt: 1790822453000,
     userQuota: { total: 3000, used: 3000, remaining: 0, percentage: 1, unit: 'credits' },
-    dedicatedResourcePackages: [
+    dedicated_resource_packages: [
       {
         id: 'pkg-0001',
         name: 'act-20260918-468',
@@ -372,10 +381,12 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
         remaining: 575,
         percentage: 0.72,
         unit: 'credits',
-        expiresAt: 1789790399000,
+        expires_at: 1789790399000,
         available: true,
         status: 'QUOTA_DETAIL_STATUS_ACTIVE',
         displayLabels: [
+          { dimension: 'model_family', value: 'sonus' },
+          { dimension: 'model_key', value: 'sonus-latest' },
           {
             dimension: 'description',
             value: 'sota model series description',
@@ -404,7 +415,11 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
         // A malformed container must degrade to "no copy" instead of throwing.
         displayLabels: { dimension: 'title', value: 'not an array' },
       },
-      { name: 'empty', total: 0, used: 0, remaining: 0 },
+      {
+        id: 'pkg-model-access',
+        displayLabels: [{ dimension: 'model_family', value: 'sonus' }],
+      },
+      { name: 'empty' },
       null,
     ],
   }
@@ -428,11 +443,12 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   const reader = new QoderUsageReader({ authService, fetch: fetchMock as typeof fetch })
 
   const account = await reader.readAccount('pt-package-test')
+  assert.equal(account.usage?.isQuotaExceeded, false, 'an explicit flag overrides reported usage')
   const packages = account.usage?.dedicatedResourcePackages
   assert.ok(packages)
-  assert.equal(packages.length, 2)
+  assert.equal(packages.length, 3)
 
-  const [first, second] = packages
+  const [first, second, modelAccess] = packages
   assert.equal(first.id, 'pkg-0001')
   assert.equal(first.total, 2000)
   assert.equal(first.used, 1425)
@@ -442,18 +458,16 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   assert.equal(first.expiresAt, new Date(1789790399000).toISOString())
   assert.equal(first.available, true)
   assert.equal(first.status, 'QUOTA_DETAIL_STATUS_ACTIVE')
+  assert.deepEqual(first.modelFamilies, ['sonus'])
+  assert.deepEqual(first.modelKeys, ['sonus-latest'])
   assert.equal(first.title?.fallback, 'sota model series')
   assert.equal(first.title?.values['zh-CN'], 'SOTA 专属积分')
   assert.equal(first.title?.values['en-US'], 'SOTA Exclusive Credits')
   assert.equal(first.description?.fallback, 'sota model series description')
   assert.equal(first.description?.values['zh-CN'], 'SOTA 专属积分：在模型选择器中选择 Sonus 模型时优先抵扣该积分。')
-  // The internal growth-campaign identifiers must never ride the normalized copy.
+  // Subscriber-facing copy uses display labels.
   assert.doesNotMatch(JSON.stringify(packages), /act-20260918-468/u)
-  // ...nor the raw upstream echo that shares the payload sent to the client.
-  assert.doesNotMatch(JSON.stringify(account.usage), /act-20260918-468|growth-campaign/u)
-  const rawUsage = account.usage?.raw as Record<string, unknown> | undefined
-  assert.equal(rawUsage?.dedicatedResourcePackages, undefined)
-  assert.equal(rawUsage?.userType, 'teams')
+  assert.deepEqual(account.usage?.raw, usagePayload)
 
   assert.equal(second.id, 'pkg-0002')
   assert.equal(second.total, 500)
@@ -463,6 +477,9 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   assert.equal(second.title, undefined)
   assert.equal(second.description, undefined)
   assert.equal(second.expiresAt, undefined)
+  assert.equal(modelAccess.id, 'pkg-model-access')
+  assert.equal(modelAccess.total, undefined)
+  assert.deepEqual(modelAccess.modelFamilies, ['sonus'])
 })
 
 test('QoderUsageReader tolerates an out-of-range expiry instead of failing the account read', async () => {
@@ -593,4 +610,57 @@ test('QoderUsageReader redacts plan and status failure logs while preserving par
   assert.equal(warnings.length, 2)
   assert.doesNotMatch(JSON.stringify(warnings), /arbitrary-private-value|nested-private-value/)
   assert.match(JSON.stringify(warnings), /TRANSPORT/)
+})
+
+test('QoderUsageReader forwards explicit machineToken to user status headers without inventing UMID for whitespace', async () => {
+  const seenHeaders: Array<Record<string, string>> = []
+  const fetchMock: typeof fetch = async (input, init) => {
+    const url = String(input)
+    if (url.includes('/jobToken/exchange')) return new Response(JSON.stringify({ token: 'jt-umid' }))
+    if (url.includes('/userinfo')) return new Response(JSON.stringify({ id: 'user-umid' }))
+    if (url.includes('/quota/usage')) return new Response(JSON.stringify({ userQuota: { total: 10, used: 1 } }))
+    if (url.includes('/user/plan')) return new Response(JSON.stringify({}))
+    if (url.includes('/user/status')) {
+      seenHeaders.push({ ...(init?.headers as Record<string, string>) })
+      return new Response(JSON.stringify({ featureSwitches: { allow_byok: 1 } }))
+    }
+    throw new Error(`unexpected URL: ${url}`)
+  }
+
+  for (const rawToken of ['  umid-token-123  ', '   ']) {
+    const reader = new QoderUsageReader({
+      authService: new QoderAuthService({
+        fetch: fetchMock,
+        resolveMachineId: () => 'machine-id-123',
+        resolveMachineToken: () => rawToken,
+      }),
+      fetch: fetchMock,
+    })
+    await reader.readAccount(`pat-${rawToken}`)
+  }
+
+  assert.equal(seenHeaders[0]?.['Cosy-MachineToken'], 'umid-token-123')
+  assert.equal(seenHeaders[0]?.['Cosy-MachineType'], undefined)
+  assert.equal(seenHeaders[0]?.['Cosy-MachineCode'], undefined)
+  assert.equal(seenHeaders[1]?.['Cosy-MachineToken'], undefined)
+  assert.equal(seenHeaders[1]?.['Cosy-MachineType'], undefined)
+  assert.equal(seenHeaders[1]?.['Cosy-MachineCode'], undefined)
+
+  const reader = new QoderUsageReader({
+    authService: new QoderAuthService({ fetch: fetchMock, resolveMachineId: () => 'machine-id-123' }),
+    fetch: fetchMock,
+  })
+  await reader.readWithCredentials('browser-triplet', async () => ({
+    userID: 'user-umid', authToken: 'device-token', name: '', email: '',
+    machineToken: 'device-umid', machineType: '9', machineCode: 'device-code',
+  }))
+  assert.equal(seenHeaders[2]?.['Cosy-MachineToken'], 'device-umid')
+  assert.equal(seenHeaders[2]?.['Cosy-MachineType'], '9')
+  assert.equal(seenHeaders[2]?.['Cosy-MachineCode'], 'device-code')
+  await reader.readWithCredentials('browser-orphan-fields', async () => ({
+    userID: 'user-umid', authToken: 'device-token', name: '', email: '',
+    machineToken: '  ', machineType: '9', machineCode: 'device-code',
+  }))
+  assert.ok(seenHeaders[3])
+  assert.deepEqual(Object.keys(seenHeaders[3]).filter(key => /^cosy-machine(?:token|type|code)$/i.test(key)), [])
 })

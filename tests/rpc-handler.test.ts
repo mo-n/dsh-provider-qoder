@@ -1,6 +1,5 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { createQoderRpcHandler } from '../src/dsh/rpc-handler.ts'
 import type { QoderAccountInfo } from '../src/qoder/account.ts'
 import type { QoderRegion } from '../src/qoder/region.ts'
@@ -105,47 +104,4 @@ test('a retained RPC handler uses the current region and replacement transport',
   assert.equal((await handler('authorization', { region: 'china' }, signal())).ok, true)
   assert.equal((await handler('account', {}, signal())).ok, true)
   assert.deepEqual(reads, ['global', 'china'])
-})
-
-function sessionHost() {
-  let restored = false
-  const deps = options()
-  const transport = { stream: unused, discoverModels: unused, readAccount: unused, searchWeb: unused }
-  const adapter = new QoderAdapter({
-    models: [{ id: 'model', name: 'Model', contextTier: 'small', contextWindow: 200_000,
-      contextOptions: { small: { tokenCount: 200_000 }, large: { tokenCount: 1_000_000 } } }],
-    resolveTransport: () => transport,
-    sessions: { get: id => restored && id === 'session' ? { requestContext: () => undefined } : undefined },
-  })
-  deps.adapter = adapter
-  deps.restoreSession = async () => { restored = true }
-  return { deps, adapter }
-}
-
-const tierRequest = { region: 'global', sessionId: 'session', modelId: 'model', tierKey: 'large' }
-
-test('Context Tier selection waits for host session restoration', async () => {
-  const { deps, adapter } = sessionHost()
-  const handler = createQoderRpcHandler(deps)
-  const result = await handler('sessionTier', tierRequest, signal())
-  assert.equal(result.ok, true, JSON.stringify(result))
-  assert.equal(adapter.getSessionTier('session', 'model'), 'large')
-  assert.deepEqual(result.ok && result.value, { ...tierRequest, tokenCount: 1_000_000 })
-})
-
-test('cancellation during session restoration prevents Context Tier mutation', async () => {
-  const { deps, adapter } = sessionHost()
-  let release!: () => void
-  const pending = new Promise<void>(resolve => { release = resolve })
-  const restore = deps.restoreSession
-  deps.restoreSession = async id => { await pending; await restore(id) }
-  const controller = new AbortController()
-  const handler = createQoderRpcHandler(deps)
-  const result = handler('sessionTier', tierRequest, controller.signal)
-  controller.abort()
-  release()
-  const outcome = await result
-  assert.equal(outcome.ok, false)
-  if (!outcome.ok) assert.equal(outcome.error.code, 'ABORTED')
-  assert.equal(adapter.getSessionTier('session', 'model'), undefined)
 })

@@ -1,11 +1,11 @@
 /** Browser-safe contracts; grants and leases are host-only secrets, views are public. */
-import type { CosyCredentials } from './transport/wire/cosy.ts'
+import type { QoderCredentials } from './transport/wire/credentials.ts'
 import type { QoderRegion } from './region.ts'
 
 export interface QoderBrowserGrant {
   id: string
   region: QoderRegion
-  credentials: CosyCredentials
+  credentials: QoderCredentials
   refreshToken: string
   expiresAt: number
   refreshExpiresAt?: number
@@ -14,7 +14,7 @@ export interface QoderBrowserGrant {
 /** Captured once per operation, preserving subscriber identity across retries. */
 export interface QoderCredentialLease {
   key: string
-  resolve(signal?: AbortSignal, rejectedToken?: string): Promise<CosyCredentials>
+  resolve(signal?: AbortSignal, rejectedToken?: string): Promise<QoderCredentials>
 }
 
 export interface QoderBrowserLoginFlow {

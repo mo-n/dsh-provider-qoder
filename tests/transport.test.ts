@@ -173,7 +173,7 @@ const imageRef = {
   height: 1,
 }
 
-function transportAttachments() {
+function transportAttachments(onRead?: () => void) {
   return {
     imageLimits: {
       maxImageBytes: 5 * 1024 * 1024,
@@ -184,6 +184,7 @@ function transportAttachments() {
       mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const,
     },
     async readImageRequest(attachment: unknown) {
+      onRead?.()
       return {
         variantId: 'sha256:variant-1',
         attachment,
@@ -243,8 +244,9 @@ test('QoderTransport publishes images to the center service before streaming', a
   assert.ok(chatBody.length < 4_000, `chat body unexpectedly large: ${chatBody.length}`)
 })
 
-test('QoderTransport rejects images for a non-vision model before authenticating', async () => {
+test('QoderTransport rejects images for a non-vision model before credentials, attachment reads or network I/O', async () => {
   let patCalls = 0
+  let attachmentReads = 0
   let fetchCalls = 0
   const transport = createQoderTransport({ modelTransport: 'legacy',
     region: 'global',
@@ -253,7 +255,7 @@ test('QoderTransport rejects images for a non-vision model before authenticating
       return Promise.resolve('pt-none')
     },
     resolveMachineId: () => 'machine-test',
-    attachments: transportAttachments(),
+    attachments: transportAttachments(() => { attachmentReads++ }),
     fetch: (async (): Promise<Response> => {
       fetchCalls++
       return new Response('{}')
@@ -261,11 +263,12 @@ test('QoderTransport rejects images for a non-vision model before authenticating
   })
 
   await assert.rejects(async () => {
-    for await (const _chunk of transport.stream(imageRequest(), { id: 'cmodel', name: 'Text only' })) continue
+    for await (const _chunk of transport.stream(imageRequest(), { id: 'cmodel', name: 'Text only', supportsImages: false })) continue
   }, (error: Error) => (
     error instanceof QoderLlmError && error.code === 'UNSUPPORTED_CONTENT'
   ))
   assert.equal(patCalls, 0)
+  assert.equal(attachmentReads, 0)
   assert.equal(fetchCalls, 0)
 })
 
@@ -631,3 +634,58 @@ for (const source of ['http', 'sse'] as const) {
     })
   }
 }
+
+test('createQoderTransport forwards resolveMachineToken, outerProviders, and includeEnterpriseByok', async () => {
+  let exchangeBody: Record<string, unknown> = {}
+  let userInfoUrl = ''
+  let statusHeaders: Record<string, string> = {}
+  let modelListUrl = ''
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: async () => 'pt-factory',
+    resolveMachineId: () => 'factory-machine',
+    resolveMachineToken: () => 'factory-umid-token',
+    outerProviders: ['openai', 'anthropic'],
+    includeEnterpriseByok: true,
+    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/jobToken/exchange')) {
+        exchangeBody = JSON.parse(String(init?.body))
+        return Response.json({ token: 'jt-factory', expires_in: 3600 })
+      }
+      if (url.includes('/userinfo')) {
+        userInfoUrl = url
+        return Response.json({ id: 'user-factory', name: 'Factory User', email: 'f@example.test' })
+      }
+      if (url.includes('/model/list')) {
+        modelListUrl = url
+        return Response.json({
+          assistant: [{ key: 'cmodel', enable: true, display_name: 'Cantus' }],
+          byok_enterprise: [{ key: 'ent-model', enable: true, display_name: 'Enterprise Model', source: 'byok' }],
+        })
+      }
+      if (url.includes('/quota/usage')) return Response.json({ userQuota: { total: 10, used: 1 } })
+      if (url.includes('/user/plan')) return Response.json({})
+      if (url.includes('/user/status')) {
+        statusHeaders = { ...(init?.headers as Record<string, string>) }
+        return Response.json({ featureSwitches: { allow_byok: 1 } })
+      }
+      throw new Error(`unexpected URL: ${url}`)
+    }) as typeof fetch,
+  })
+
+  const models = await transport.discoverModels()
+  assert.deepEqual(exchangeBody, {
+    personal_token: 'pt-factory',
+    machine_id: 'factory-machine',
+    machine_token: 'factory-umid-token',
+  })
+  assert.equal(new URL(userInfoUrl).searchParams.get('machine_token'), 'factory-umid-token')
+  assert.equal(modelListUrl, 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1&outerProviders=openai%2Canthropic')
+  assert.deepEqual(models.map(model => model.id), ['cmodel', 'ent-model'])
+
+  await transport.readAccount()
+  assert.equal(statusHeaders['Cosy-MachineToken'], 'factory-umid-token')
+  assert.equal(statusHeaders['Cosy-MachineType'], undefined)
+  assert.equal(statusHeaders['Cosy-MachineCode'], undefined)
+})

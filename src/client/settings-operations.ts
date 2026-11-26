@@ -61,7 +61,12 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
         // method is not a credential source, and probing PAT storage here can
         // make a browser-only installation look like it has a managed PAT.
         if (authorizationView.method !== 'pat') {
-          return success({ configured: authorizationConfigured, writable: authorizationView.writable })
+          const browserSubscriberId = authorizationView.method === 'browser' ? authorizationView.profile?.id : undefined
+          return success({
+            configured: authorizationConfigured,
+            writable: authorizationView.writable,
+            ...browserSubscriberId ? { browserSubscriberId } : {},
+          })
         }
         const pat = await describePat()
         if (!pat.ok) return pat
@@ -127,7 +132,6 @@ export function createSettingsOperations(credentials: QoderCredentialsRemote, fo
     storeWebSearchMode: (mode: import('../dsh/config.ts').QoderWebSearchMode) => setting('storeWebSearchMode', () => form.set('webSearchMode', mode)),
     storeImageSearchEnabled: (enabled: boolean) => setting('storeImageSearchEnabled', () => form.set('imageSearchEnabled', enabled)),
     storeImageGenEnabled: (enabled: boolean) => setting('storeImageGenEnabled', () => form.set('imageGenEnabled', enabled)),
-    storeReplaceSystemPrompt: (enabled: boolean) => setting('storeReplaceSystemPrompt', () => form.set('replaceSystemPrompt', enabled)),
     readSessionTier: async (scope: QoderSessionTierScope): Promise<OperationResult<QoderSessionTierSelection>> => {
       try { const result = await readTier(scope); return result.ok ? result : failure('readSessionTier', 'read-context-tier', result.error, { context: scope }) }
       catch (error) { return failure('readSessionTier', 'read-context-tier', error, { context: scope }) }

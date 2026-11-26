@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ConnectionFetchRoute } from '@deepseek-ai/dsh-client-connection'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
@@ -25,6 +28,7 @@ import { QoderLlmError } from '../src/qoder/errors.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
+import { managedQoderCredentialRef } from '../src/dsh/credential.ts'
 import { qoderRpcPath, type QoderJsonRpcEndpoint, type QoderRpcInput, type QoderRpcOutput, type QoderRpcResult } from '../src/dsh/rpc-channel.ts'
 
 interface MemorySection {
@@ -46,7 +50,7 @@ function mergeSettings(base: Record<string, unknown>, patch: Record<string, unkn
 
 /** In-memory settings seam for package integration tests. */
 class MemorySettings extends Service {
-  readonly writable = true
+  writable = true
   private readonly sections = new Map<SettingsNamespace, MemorySection>()
   private readonly queues = new Map<SettingsNamespace, Promise<void>>()
   private readonly hostContext: Context
@@ -399,6 +403,56 @@ async function modelRuntime(config: plugin.Config) {
   return { ctx, settings: ctx.settings as unknown as RecordingSettings, ns: 'provider-qoder' as SettingsNamespace, readRate, readRates, request, call }
 }
 
+test('plugin injects the China UMID cache into account and browser authorization transports', async t => {
+  const config = await mkdtemp(join(tmpdir(), 'qoder-plugin-umid-'))
+  const previous = process.env.QODERCN_CONFIG_DIR
+  process.env.QODERCN_CONFIG_DIR = config
+  t.after(async () => {
+    if (previous === undefined) delete process.env.QODERCN_CONFIG_DIR
+    else process.env.QODERCN_CONFIG_DIR = previous
+    await rm(config, { recursive: true, force: true })
+  })
+  await mkdir(join(config, '.auth'))
+  await writeFile(join(config, '.auth', 'machine_id'), 'china-machine-id')
+  await writeFile(join(config, 'umid-cache.json'), JSON.stringify({
+    version: 1, environment: 0, platform: process.platform, arch: process.arch,
+    info: { machineToken: 'china-umid', machineType: '8', machineCode: 'china-code' },
+  }))
+  t.mock.method(TestCredentials.prototype, 'resolve', async () => ({ value: 'pt-offline', source: 'memory' }))
+  let statusHeaders: Headers | undefined
+  const poll = Promise.withResolvers<URL>()
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input))
+    assert.equal(url.hostname, 'openapi.qoder.com.cn')
+    switch (url.pathname) {
+      case '/api/v1/jobToken/exchange': return Response.json({ token: 'job-token-test' })
+      case '/api/v1/userinfo': return Response.json({ id: 'subscriber' })
+      case '/api/v2/quota/usage':
+      case '/api/v2/user/plan': return Response.json({})
+      case '/api/v1/deviceToken/poll':
+        poll.resolve(url)
+        return new Response(null, { status: 401 })
+      case '/api/v3/user/status':
+        statusHeaders = new Headers(init?.headers)
+        return Response.json({})
+      default: throw new Error('Unexpected mocked route')
+    }
+  })
+  const { call, ctx } = await modelRuntime({ region: 'china' })
+  try {
+    assert.equal((await call('account', {})).ok, true)
+    assert.ok(statusHeaders)
+    assert.deepEqual(['Token', 'Type', 'Code'].map(field => statusHeaders!.get(`Cosy-Machine${field}`)), ['china-umid', '8', 'china-code'])
+    assert.equal((await call('beginLogin', { region: 'china' })).ok, true)
+    const deadline = AbortSignal.timeout(2000)
+    const url = await Promise.race([
+      poll.promise,
+      new Promise<never>((_, reject) => deadline.addEventListener('abort', () => reject(deadline.reason), { once: true })),
+    ])
+    assert.deepEqual(['token', 'type', 'code'].map(field => url.searchParams.get(`machine_${field}`)), ['china-umid', '8', 'china-code'])
+  } finally { await ctx.fiber.dispose() }
+})
+
 /** Let background settings writes and their revision retries settle. */
 async function drain(): Promise<void> {
   for (let turn = 0; turn < 20; turn++) await new Promise<void>(resolve => setImmediate(resolve))
@@ -421,6 +475,53 @@ test('browser credential updates rediscover models without waiting for a model-l
   await drain()
   assert.equal(discovery.mock.callCount(), calls + 1)
   assert.deepEqual((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'chosen' })).inputModalities, ['text', 'image'])
+})
+
+test('Managed Qoder PAT updates discard accepted discovery and wait for a model-list read', async t => {
+  let priceFactor = 2
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Chosen', priceFactor },
+  ])
+  const { ctx, settings, readRate } = await modelRuntime({
+    modelsByRegion: { global: [{ id: 'chosen', name: 'Chosen', priceFactor: 1 }] },
+  })
+  t.after(() => ctx.fiber.dispose())
+  settings.writable = false
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal((await readRate())?.priceFactor, 2)
+
+  priceFactor = 3
+  ctx.emit('credentials/reference-updated', managedQoderCredentialRef)
+  await drain()
+  assert.equal(discovery.mock.callCount(), 1)
+  assert.equal((await readRate())?.priceFactor, 1)
+  assert.equal(discovery.mock.callCount(), 1)
+
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal(discovery.mock.callCount(), 2)
+  assert.equal((await readRate())?.priceFactor, 3)
+})
+
+test('a settings update persists accepted catalog metadata without rediscovering models', async t => {
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Chosen', priceFactor: 2 },
+  ])
+  const { ctx, settings, ns, readRate } = await modelRuntime({
+    modelsByRegion: { global: [{ id: 'chosen', name: 'Chosen', priceFactor: 1 }] },
+  })
+  t.after(() => ctx.fiber.dispose())
+  settings.writable = false
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal((await readRate())?.priceFactor, 2)
+  assert.equal(settings.get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
+  assert.equal(settings.writes.length, 0)
+
+  settings.writable = true
+  await settings.update(ns, { webSearchMode: 'disabled' })
+  await drain()
+  assert.equal(settings.get(ns)?.modelsByRegion?.global?.[0].priceFactor, 2)
+  assert.equal(settings.writes.length, 2)
+  assert.equal(discovery.mock.callCount(), 1)
 })
 
 test('automatic discovery persists rates without changing selection and refreshes after five minutes', async (t) => {
@@ -1105,7 +1206,7 @@ test('session tier RPC awaits host restoration before reading or saving historic
     const saving = call('sessionTier', { ...scope, tierKey: 'large' })
     await started
     finishRestore()
-    assert.equal((await saving).value.tierKey, 'large')
+    assert.deepEqual(await saving, { ok: true, value: { ...scope, tierKey: 'large', tokenCount: 1_000_000 } })
     assert.equal((await call('readSessionTier', scope)).value.tierKey, 'large')
     assert.equal(restores, 2)
 

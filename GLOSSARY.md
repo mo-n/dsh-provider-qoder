@@ -54,6 +54,20 @@ _Avoid_: subscription level, billing plan
 The operational account standing, security fingerprint linkage, and client feature switches evaluated by the Qoder service.
 _Avoid_: account state, auth flags
 
+### Subscription Credits
+
+**Qoder subscription quota**:
+The Credits allowance included in a Qoder subscriber plan.
+
+**Qoder add-on quota**:
+A Credits balance tracked separately from the allowance included in a Qoder subscriber plan.
+
+**Qoder organization resource package**:
+A Credits allowance provided through the subscriber's Qoder organization.
+
+**Qoder dedicated resource package**:
+A Credits allowance tied to a specific entitlement. It can have its own model eligibility, expiry, and availability.
+
 ### Service & Regions
 
 **Qoder service region**:

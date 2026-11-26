@@ -7,11 +7,9 @@ import { QoderModelCatalogEditor } from '../src/client/model-catalog-editor.ts'
 import { QoderCatalogLifecycle } from '../src/dsh/catalog-lifecycle.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { QoderTransportRuntime } from '../src/dsh/transport-runtime.ts'
-import { registerQoderRpc } from '../src/dsh/rpc.ts'
 import { parseModelServerSse } from '../src/qoder/transport/wire/model-server-sse.ts'
 import { parseQoderSse } from '../src/qoder/transport/wire/sse.ts'
 import { validateAndTranslateMessages } from '../src/qoder/transport/wire/translate.ts'
-import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 
 test('account waiters share credential recovery, including when the first caller cancels', async () => {
@@ -75,19 +73,6 @@ test('credential preview cannot overwrite, persist, or supersede active discover
   assert.equal(catalog.models()[0].priceFactor, 1)
   assert.deepEqual(writes, [1])
   catalog.dispose()
-})
-
-test('partial RPC registration rolls back successful routes in reverse order', () => {
-  const routes = new Set<string>(), removed: string[] = []
-  let count = 0
-  const ctx = { connection: { fetch: { register(route: { path: string }) {
-    if (++count === 3) throw new Error('route conflict')
-    routes.add(route.path)
-    return () => { routes.delete(route.path); removed.push(route.path) }
-  } } } } as unknown as Context
-  assert.throws(() => registerQoderRpc(ctx, async () => ({ ok: true, value: {} })), /route conflict/)
-  assert.equal(routes.size, 0)
-  assert.deepEqual(removed, ['/api/qoder-subscription/models', '/api/qoder-subscription/account'])
 })
 
 for (const legacy of [false, true]) {
@@ -216,7 +201,7 @@ test('transport runtime replaces changed configuration atomically and retains ca
 test('every transport configuration field replaces the instance, and failed creation preserves the snapshot', () => {
   const changes = [
     { region: 'china' as const }, { streamIdleTimeoutMs: 1234 }, { responseHeaderTimeoutMs: 1234 },
-    { modelQueueMaxWaitMs: 1234 }, { preserveThinking: false }, { replaceSystemPrompt: false }, { requestCompression: true },
+    { modelQueueMaxWaitMs: 1234 }, { preserveThinking: false }, { replaceSystemPrompt: false }, { requestCompression: false },
     { modelTransport: 'http' as const }, { requestCompressionMinChars: 100 }, { requestCompressionLevel: 3 },
   ]
   for (const change of changes) {

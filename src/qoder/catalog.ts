@@ -177,56 +177,69 @@ function thinkingDefault(value: unknown, fallback: boolean, onConflict?: (confli
 export function normalizeQoderModels(
   payload: unknown,
   onConflict?: (conflict: CatalogConflict) => void,
+  options?: { includeEnterpriseByok?: boolean },
 ): QoderCatalogModel[] {
-  if (typeof payload !== 'object' || payload === null || !Array.isArray((payload as { assistant?: unknown }).assistant)) return []
+  if (typeof payload !== 'object' || payload === null) return []
+  const record = payload as { assistant?: unknown; byok_enterprise?: unknown }
+  const assistant = Array.isArray(record.assistant) ? record.assistant as QoderModelEntry[] : undefined
+  const byokEnterprise = options?.includeEnterpriseByok === true && Array.isArray(record.byok_enterprise)
+    ? record.byok_enterprise as QoderModelEntry[]
+    : undefined
+  if (!assistant && !byokEnterprise) return []
+
   const models: QoderCatalogModel[] = []
   const seen = new Set<string>()
-  for (const raw of (payload as { assistant: QoderModelEntry[] }).assistant) {
-    if (typeof raw !== 'object' || raw === null || raw.enable !== true) continue
-    const id = typeof raw.key === 'string' ? raw.key.trim() : ''
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    const contextOptions = contextOptionsOf(raw.context_config)
-    const defaultOptions = Object.values(contextOptions ?? {}).filter(option => option.isDefault && option.tokenCount !== undefined)
-    if (defaultOptions.length > 1) onConflict?.('context-defaults')
-    const contextWindow = (defaultOptions.length === 1 ? defaultOptions[0]?.tokenCount : undefined)
-      ?? positiveNumber(raw.max_input_tokens) ?? 180_000
-    const maxContextWindow = Math.max(
-      positiveNumber(raw.max_input_tokens) ?? 0,
-      contextWindow,
-      ...Object.values(contextOptions ?? {}).map(option => option.tokenCount ?? 0),
-    )
-    const isReasoning = thinkingDefault(raw.thinking_config, raw.is_reasoning === true, onConflict)
-    const priceFactor = nonNegativeNumber(raw.price_factor) ?? nonNegativeNumber(raw.priceFactor)
-    const rawOriginalPrice = nonNegativeNumber(raw.original_price_factor) ?? nonNegativeNumber(raw.originPriceFactor)
-    const promotionPrice = typeof raw.promotion === 'object' && raw.promotion !== null
-      && (raw.promotion as { active?: unknown }).active === true
-      ? nonNegativeNumber((raw.promotion as { before_promotion_price_factor?: unknown }).before_promotion_price_factor)
-      : undefined
-    const originalPriceFactor = rawOriginalPrice ?? promotionPrice
-    const isFree = priceFactor === undefined
-      ? raw.is_free === true || raw.isFree === true
-        || (Array.isArray(raw.tags) && raw.tags.includes('limited_time_free'))
-      : priceFactor === 0
-    const reasoning = reasoningEffortsOf(raw.thinking_config)
-    models.push({
-      id,
-      name: typeof raw.display_name === 'string' && raw.display_name.trim() ? raw.display_name.trim() : id,
-      contextWindow,
-      maxContextWindow,
-      maxTokens: positiveNumber(raw.max_output_tokens) ?? 32_768,
-      source: typeof raw.source === 'string' && raw.source.trim() ? raw.source.trim() : 'system',
-      isReasoning,
-      supportsEffort: reasoning.efforts !== undefined,
-      supportsImages: raw.is_vl === true,
-      ...reasoning.efforts === undefined ? {} : { reasoningEfforts: reasoning.efforts },
-      ...reasoning.defaultEffort === undefined ? {} : { defaultReasoningEffort: reasoning.defaultEffort },
-      ...priceFactor === undefined ? {} : { priceFactor },
-      ...originalPriceFactor === undefined ? {} : { originalPriceFactor },
-      ...isFree ? { isFree: true } : {},
-      ...contextOptions === undefined ? {} : { contextOptions },
-    })
+  const appendEntries = (entries: readonly QoderModelEntry[] | undefined): void => {
+    if (!entries) return
+    for (const raw of entries) {
+      if (typeof raw !== 'object' || raw === null || raw.enable !== true) continue
+      const id = typeof raw.key === 'string' ? raw.key.trim() : ''
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      const contextOptions = contextOptionsOf(raw.context_config)
+      const defaultOptions = Object.values(contextOptions ?? {}).filter(option => option.isDefault && option.tokenCount !== undefined)
+      if (defaultOptions.length > 1) onConflict?.('context-defaults')
+      const contextWindow = (defaultOptions.length === 1 ? defaultOptions[0]?.tokenCount : undefined)
+        ?? positiveNumber(raw.max_input_tokens) ?? 180_000
+      const maxContextWindow = Math.max(
+        positiveNumber(raw.max_input_tokens) ?? 0,
+        contextWindow,
+        ...Object.values(contextOptions ?? {}).map(option => option.tokenCount ?? 0),
+      )
+      const isReasoning = thinkingDefault(raw.thinking_config, raw.is_reasoning === true, onConflict)
+      const priceFactor = nonNegativeNumber(raw.price_factor) ?? nonNegativeNumber(raw.priceFactor)
+      const rawOriginalPrice = nonNegativeNumber(raw.original_price_factor) ?? nonNegativeNumber(raw.originPriceFactor)
+      const promotionPrice = typeof raw.promotion === 'object' && raw.promotion !== null
+        && (raw.promotion as { active?: unknown }).active === true
+        ? nonNegativeNumber((raw.promotion as { before_promotion_price_factor?: unknown }).before_promotion_price_factor)
+        : undefined
+      const originalPriceFactor = rawOriginalPrice ?? promotionPrice
+      const isFree = priceFactor === undefined
+        ? raw.is_free === true || raw.isFree === true
+          || (Array.isArray(raw.tags) && raw.tags.includes('limited_time_free'))
+        : priceFactor === 0
+      const reasoning = reasoningEffortsOf(raw.thinking_config)
+      models.push({
+        id,
+        name: typeof raw.display_name === 'string' && raw.display_name.trim() ? raw.display_name.trim() : id,
+        contextWindow,
+        maxContextWindow,
+        maxTokens: positiveNumber(raw.max_output_tokens) ?? 32_768,
+        source: typeof raw.source === 'string' && raw.source.trim() ? raw.source.trim() : 'system',
+        isReasoning,
+        supportsEffort: reasoning.efforts !== undefined,
+        supportsImages: raw.is_vl === true,
+        ...reasoning.efforts === undefined ? {} : { reasoningEfforts: reasoning.efforts },
+        ...reasoning.defaultEffort === undefined ? {} : { defaultReasoningEffort: reasoning.defaultEffort },
+        ...priceFactor === undefined ? {} : { priceFactor },
+        ...originalPriceFactor === undefined ? {} : { originalPriceFactor },
+        ...isFree ? { isFree: true } : {},
+        ...contextOptions === undefined ? {} : { contextOptions },
+      })
+    }
   }
+  appendEntries(assistant)
+  appendEntries(byokEnterprise)
   return models
 }
 

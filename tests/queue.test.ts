@@ -151,6 +151,34 @@ for (const delta of [{ content: 'partial' }, { reasoning_content: 'thinking' }, 
   })
 }
 
+test('QoderTransport stops before replay when queued after a buffered tool call', async () => {
+  const requests: string[] = []
+  const toolCall = { index: 0, id: 'call-1', function: { name: 'tool', arguments: '{' } }
+  const transport = createQoderTransport({
+    region: 'global',
+    resolvePat: async () => 'offline-pat',
+    resolveMachineId: () => 'test-machine',
+    fetch: async input => {
+      const { pathname } = new URL(String(input))
+      if (pathname.endsWith('/jobToken/exchange')) return Response.json({ token: 'offline-token' })
+      if (pathname.endsWith('/userinfo')) return Response.json({ id: 'test-user' })
+      requests.push(pathname)
+      if (pathname.endsWith('/ask/finish')) return Response.json({})
+      assert.match(pathname, /\/agent_chat_generation$/)
+      return new Response(envelope({ choices: [{ delta: { tool_calls: [toolCall] } }] }) + queueFrame)
+    },
+  })
+  const chunks: StreamChunk[] = []
+  await assert.rejects(async () => {
+    for await (const chunk of transport.stream(options())) chunks.push(chunk)
+  }, { code: 'QODER_QUEUE_AFTER_OUTPUT' })
+  assert.deepEqual(chunks, [])
+  assert.deepEqual(requests, [
+    '/algo/api/v2/service/pro/sse/agent_chat_generation',
+    '/algo/api/v2/service/ask/finish',
+  ])
+})
+
 test('HTTP queue error is recovered, but ordinary HTTP failure is not', async () => {
   let asks = 0
   const fetch = (async input => {

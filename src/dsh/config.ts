@@ -4,7 +4,7 @@ import { defaultModelQueueMaxWaitMs } from '../qoder/queue.ts'
 import z from '@deepseek-ai/schemastery'
 import { defaultModels, type QoderCatalogModel } from '../qoder/catalog.ts'
 import type { QoderRegion } from '../qoder/region.ts'
-import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel, defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs, type QoderModelTransport } from '../qoder/transport/index.ts'
+import { defaultRequestCompression, defaultRequestCompressionMinChars, defaultRequestCompressionLevel, defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs, type QoderModelTransport } from '../qoder/transport/index.ts'
 
 export interface QoderModelsByRegion {
   global?: QoderCatalogModel[]
@@ -77,7 +77,7 @@ export const Config: z<Config> = z.object({
   imageGenEnabled: z.boolean().default(true),
   showModelRates: z.boolean().default(true)
     .description('Display billing rates and promotion tags in model options; false hides them'),
-  requestCompression: z.boolean().default(false),
+  requestCompression: z.boolean().default(defaultRequestCompression),
   requestCompressionMinChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(defaultRequestCompressionMinChars),
   requestCompressionLevel: z.number().step(1).min(1).max(22).default(defaultRequestCompressionLevel),
   modelTransport: z.union(['http', 'legacy'] as const).default('legacy'),

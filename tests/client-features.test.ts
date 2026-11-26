@@ -42,7 +42,6 @@ async function mountFeatures(write: (field: string, value: unknown) => Promise<b
     storeWebSearchMode: (value: unknown) => write('webSearchMode', value).then(accepted),
     storeImageSearchEnabled: (value: unknown) => write('imageSearchEnabled', value).then(accepted),
     storeImageGenEnabled: (value: unknown) => write('imageGenEnabled', value).then(accepted),
-    storeReplaceSystemPrompt: (value: unknown) => write('replaceSystemPrompt', value).then(accepted),
   }
   const render = () => {
     cursor = 0; dirty = false
@@ -61,22 +60,15 @@ async function mountFeatures(write: (field: string, value: unknown) => Promise<b
 }
 
 test('feature settings show three search modes and default feature switches on', async () => {
-  const writes: unknown[] = []
-  const ui = await mountFeatures(async (...args) => { writes.push(args); return true })
+  const ui = await mountFeatures()
   const controls = ui.controls()
   assert.match(text(controls[0]), /Auto/)
   assert.equal(controls[0].props['aria-haspopup'], 'menu')
   assert.equal(ui.menu().props.selectedId, 'auto')
   assert.deepEqual(Array.from(ui.menu().props.items as Array<{ label: string }>, item => item.label), ['Auto', 'Always use Qoder', 'Disabled'])
-  assert.deepEqual(controls.slice(1).map(node => node.props.checked), [true, true, true])
-  assert.equal(controls[3].props.label, 'System prompt masking')
-  assert.equal(controls[3].props.title, undefined)
-  assert.equal(zh.replaceSystemPromptLabel, '系统提示词伪装')
-  ;(controls[3].props.onChange as (enabled: boolean) => void)(false)
-  await ui.settle()
-  assert.deepEqual(writes, [['replaceSystemPrompt', false]])
-  ui.update({ value: { webSearchMode: 'disabled', imageSearchEnabled: false, imageGenEnabled: false, replaceSystemPrompt: false } })
-  assert.deepEqual(ui.controls().slice(1).map(node => node.props.checked), [false, false, false])
+  assert.deepEqual(controls.slice(1).map(node => node.props.checked), [true, true])
+  ui.update({ value: { webSearchMode: 'disabled', imageSearchEnabled: false, imageGenEnabled: false } })
+  assert.deepEqual(ui.controls().slice(1).map(node => node.props.checked), [false, false])
   assert.equal(ui.menu().props.selectedId, 'disabled')
   assert.match(text(ui.controls()[0]), /Disabled/)
   assert.deepEqual([zh.searchModeAuto, zh.searchModeAlways, zh.searchModeDisabled], ['自动', '始终使用 Qoder', '关闭'])

@@ -265,10 +265,11 @@ test('compression tuning uses configuration and ignores former environment varia
 
 test('compression configuration supplies defaults and rejects invalid tuning', () => {
   const defaults = Config({})
-  assert.equal(defaults.requestCompression, false)
+  assert.equal(defaults.requestCompression, true)
   assert.equal(defaults.requestCompressionMinChars, 4096)
   assert.equal(defaults.requestCompressionLevel, 1)
-  assert.equal(Config({ requestCompression: true }).requestCompression, true)
+  assert.equal(Config({ requestCompression: false }).requestCompression, false)
+  assert.equal(transportConfig({}).requestCompression, true)
   for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => Config({ requestCompressionMinChars: value }))
   }
@@ -278,14 +279,18 @@ test('compression configuration supplies defaults and rejects invalid tuning', (
   assert.equal(Config({ requestCompressionLevel: 22 }).requestCompressionLevel, 22)
 })
 
-test('profile compression tuning reaches both model protocols', async () => {
+test('profile compression defaults and overrides reach both model protocols', async () => {
+  const cases = [
+    { config: { requestCompressionLevel: 3 }, compressed: true },
+    { config: { requestCompressionMinChars: Number.MAX_SAFE_INTEGER }, compressed: false },
+    { config: { requestCompression: false }, compressed: false },
+  ]
   for (const modelTransport of ['http', 'legacy'] as const) {
-    for (const requestCompressionMinChars of [1, Number.MAX_SAFE_INTEGER]) {
+    for (const { config, compressed } of cases) {
       const logs: unknown[][] = []
       let encoding: string | null | undefined
       const transport = createQoderTransport({
-        ...transportConfig(Config({ modelTransport, requestCompression: true,
-          requestCompressionMinChars, requestCompressionLevel: 3 })),
+        ...transportConfig(Config({ modelTransport, ...config })),
         resolvePat: async () => { throw new Error('unexpected PAT resolution') },
         resolveCredential: async () => ({ key: 'offline-compression', resolve: async () => ({
           userID: 'offline-compression', authToken: 'offline-token', name: '', email: '',
@@ -301,8 +306,8 @@ test('profile compression tuning reaches both model protocols', async () => {
           messages: [createUserMessage({ content: [{ type: 'text', text: 'history '.repeat(1000) }], source: { kind: 'user' } })],
         })) continue
       }, (error: unknown) => error instanceof QoderLlmError && error.code === 'SERVER')
-      assert.equal(encoding, requestCompressionMinChars === 1 ? 'zstd' : null)
-      if (requestCompressionMinChars === 1) {
+      assert.equal(encoding, compressed ? 'zstd' : null)
+      if (compressed) {
         assert.equal((logs.find(entry => entry[0] === '[Qoder Request] Sending zstd')?.[1] as { level: number }).level, 3)
       }
     }

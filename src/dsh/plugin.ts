@@ -23,6 +23,7 @@ import { QoderLlmError } from '../qoder/errors.ts'
 import { redactLogValue } from '../qoder/transport/logging.ts'
 import {
   createQoderTransport,
+  readQoderUmidCache,
   type QoderTransport,
   type QoderTransportOptions,
 } from '../qoder/transport/index.ts'
@@ -75,6 +76,7 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   let current = (): QoderConfig => baseConfig
   const createTransport = (value: QoderRuntimeConfig, resolvePat?: () => Promise<string>): QoderTransport => createQoderTransport({
     ...value,
+    resolveMachineIdentity: () => readQoderUmidCache(value.region),
     resolvePat: resolvePat ?? (() => resolveManagedQoderPat(ctx.credentials)),
     resolveCredential: resolvePat ? undefined : signal => authorization.lease(value.region, signal),
     logger,
@@ -106,7 +108,11 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
     transport: region => {
       let transport = authorizationTransports.get(region)
       if (!transport) {
-        transport = createQoderTransport({ region, resolvePat: () => Promise.resolve('') }).authorization!
+        transport = createQoderTransport({
+          region,
+          resolvePat: () => Promise.resolve(''),
+          resolveMachineIdentity: () => readQoderUmidCache(region),
+        }).authorization!
         authorizationTransports.set(region, transport)
       }
       return transport
@@ -139,30 +145,28 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
   })
 
   const registration = ctx.llm.registerAdapter([providerQoder], adapter)
-  const refreshAuthentication = (): void => {
+  const refreshAuthentication = (reason: 'browser-authorization' | 'managed-pat'): void => {
     const value = resolveConfig()
     runtime.update(value, true)
     authorization.activateRegion(runtime.config.region)
-    catalog.clearDiscovered()
-    catalog.observeTransport()
-    registration.replace([providerQoder])
+    catalog.hostChanged(reason, () => registration.replace([providerQoder]))
   }
   ctx.on('credentials/record-updated', key => {
     if (key === browserAuthorizationKey(runtime.config.region)) {
-      refreshAuthentication()
-      void catalog.refresh()
+      refreshAuthentication('browser-authorization')
     }
   })
   ctx.on('credentials/reference-updated', ref => {
-    if (ref === qoderCredentialRef) refreshAuthentication()
+    if (ref === qoderCredentialRef) refreshAuthentication('managed-pat')
   })
-  const refreshAdapter = (): void => {
+  const refreshAdapter = (reason: 'settings-binding' | 'settings-changed'): void => {
     const next = resolveConfig()
     if (runtime.update(next)) authorization.activateRegion(runtime.config.region)
-    catalog.observeTransport()
-    adapter.replaceModels(next.models)
-    registration.replace([providerQoder])
-    imageTools.refresh()
+    catalog.hostChanged(reason, () => {
+      adapter.replaceModels(next.models)
+      registration.replace([providerQoder])
+      imageTools.refresh()
+    })
   }
 
   ctx.inject(['settings'], (settingsCtx) => {
@@ -190,17 +194,16 @@ export function apply(ctx: Context, input: QoderConfig | LiveConfig = {}): void 
         modelsByRegion: { [region]: models },
       }, revision),
     })
-    refreshAdapter()
+    refreshAdapter('settings-binding')
     scope.watch(() => {
       if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
-      refreshAdapter()
-      catalog.retryPersistence()
+      refreshAdapter('settings-changed')
     })
     settingsCtx.effect(() => () => {
       catalog.bindSettings(undefined)
       if (ctx.fiber.state === fiberUnloading || ctx.fiber.state === fiberDisposed) return
       current = () => baseConfig
-      refreshAdapter()
+      refreshAdapter('settings-binding')
     })
   })
 

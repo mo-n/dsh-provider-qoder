@@ -450,3 +450,57 @@ test('mergeQoderDiscoveryMetadata detaches deeply frozen models with contextOpti
   const validatedAfterMerge = Config({ modelsByRegion: { global: merged } })
   assert.equal(validatedAfterMerge.modelsByRegion?.global?.[0].contextTier, '1M')
 })
+
+test('normalizeQoderModels and fetchQoderModels support optional outerProviders and includeEnterpriseByok with assistant precedence', async () => {
+  const catalogPayload = {
+    assistant: [
+      { key: 'shared-model', enable: true, display_name: 'Assistant Shared', source: 'system' },
+    ],
+    byok_enterprise: [
+      { key: 'shared-model', enable: true, display_name: 'Enterprise Duplicate', source: 'byok' },
+      { key: 'ent-disabled', enable: false, display_name: 'Enterprise Disabled', source: 'byok' },
+      { key: 'ent-custom', enable: true, display_name: 'Enterprise Custom', source: 'byok', is_vl: true },
+    ],
+  }
+
+  assert.deepEqual(
+    normalizeQoderModels(catalogPayload).map(model => ({ id: model.id, name: model.name })),
+    [{ id: 'shared-model', name: 'Assistant Shared' }],
+  )
+  assert.deepEqual(
+    normalizeQoderModels(catalogPayload, undefined, { includeEnterpriseByok: true }).map(model => ({
+      id: model.id,
+      name: model.name,
+      source: model.source,
+      supportsImages: model.supportsImages,
+    })),
+    [
+      { id: 'shared-model', name: 'Assistant Shared', source: 'system', supportsImages: false },
+      { id: 'ent-custom', name: 'Enterprise Custom', source: 'byok', supportsImages: true },
+    ],
+  )
+  assert.deepEqual(
+    normalizeQoderModels({ byok_enterprise: [{ key: 'ent-only', enable: true, display_name: 'Ent Only' }] }, undefined, {
+      includeEnterpriseByok: true,
+    }).map(model => model.id),
+    ['ent-only'],
+  )
+
+  let seenUrl = ''
+  const fetched = await fetchQoderModels({
+    userID: 'user-1',
+    authToken: 'job-token',
+    name: 'Subscriber',
+    email: 'subscriber@example.com',
+    machineID: 'machine-1',
+  }, {
+    outerProviders: ['openai', ' anthropic '],
+    includeEnterpriseByok: true,
+    fetch: (async (input: RequestInfo | URL) => {
+      seenUrl = String(input)
+      return new Response(JSON.stringify(catalogPayload))
+    }) as typeof fetch,
+  })
+  assert.equal(seenUrl, 'https://api3.qoder.sh/algo/api/v2/model/list?Encode=1&outerProviders=openai%2Canthropic')
+  assert.deepEqual(fetched.map(model => model.id), ['shared-model', 'ent-custom'])
+})

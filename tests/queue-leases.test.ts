@@ -13,14 +13,17 @@ test('a run retains each model lease once across steps and isolates stale ends a
   const lease = (key: string, sessionId = 'session'): QoderQueueLease => ({
     key, sessionId, release: async () => { releases.push(key) },
   })
-  assert.equal(runs.retain(lease('standalone')), false)
+  assert.equal(runs.capture('session'), undefined)
   runs.start('session', 1)
   runs.start('other', 1)
-  assert.equal(runs.retain(lease('model-a')), true)
+  const owner = runs.capture('session')!
+  const otherOwner = runs.capture('other')!
+  assert.equal(owner.retain(lease('model-a')), true)
   runs.start('session', 1)
-  runs.retain(lease('model-a'))
-  runs.retain(lease('model-b'))
-  runs.retain(lease('other-model', 'other'))
+  assert.equal(owner.retain(lease('model-a')), true)
+  assert.equal(owner.retain(lease('model-b')), true)
+  assert.equal(owner.retain(lease('wrong-session', 'other')), false)
+  assert.equal(otherOwner.retain(lease('other-model', 'other')), true)
   assert.deepEqual(releases, [])
   await runs.end('session', 0)
   assert.deepEqual(releases, [])
@@ -30,7 +33,8 @@ test('a run retains each model lease once across steps and isolates stale ends a
   assert.equal(releases.length, 2)
   await runs.dispose()
   assert.deepEqual(releases, ['model-a', 'model-b', 'other-model'])
-  assert.equal(runs.retain(lease('disposed')), false)
+  assert.equal(runs.capture('other'), undefined)
+  assert.equal(otherOwner.retain(lease('disposed', 'other')), false)
 })
 
 test('slow or rejected old cleanup cannot clear a new run', async () => {
@@ -38,11 +42,13 @@ test('slow or rejected old cleanup cannot clear a new run', async () => {
   let finish!: () => void
   const done = new Promise<void>(resolve => { finish = resolve })
   runs.start('session', 1)
-  runs.retain({ key: 'old', sessionId: 'session', release: () => done })
+  assert.equal(runs.capture('session')!.retain({ key: 'old', sessionId: 'session', release: () => done }), true)
   const closing = runs.end('session', 1)
   runs.start('session', 2)
   let released = 0
-  runs.retain({ key: 'new', sessionId: 'session', release: async () => { released++; throw new Error('offline') } })
+  assert.equal(runs.capture('session')!.retain({
+    key: 'new', sessionId: 'session', release: async () => { released++; throw new Error('offline') },
+  }), true)
   finish()
   await closing
   await runs.end('session', 1)
@@ -89,7 +95,9 @@ test('only committed turn/end releases leases, for success, failure and cancella
     // The real Session validates and creates the durable event; dispatch uses the public Host event.
     const start = session.append('turn/start', { turn })
     ctx.emit('session/event', session, start)
-    runs.retain({ key: String(turn), sessionId: session.id, release: async () => { released++ } })
+    assert.equal(runs.capture(session.id)!.retain({
+      key: String(turn), sessionId: session.id, release: async () => { released++ },
+    }), true)
     assert.equal(released, index)
     const end = session.append('turn/end', { turn, reason })
     ctx.emit('session/event', session, end)
@@ -99,6 +107,6 @@ test('only committed turn/end releases leases, for success, failure and cancella
   await fiber.dispose()
   const start = session.append('turn/start', { turn: 4 })
   ctx.emit('session/event', session, start)
-  assert.equal(runs.retain({ key: 'after-unload', sessionId: session.id, release: async () => {} }), false)
+  assert.equal(runs.capture(session.id), undefined)
   await runs.dispose()
 })

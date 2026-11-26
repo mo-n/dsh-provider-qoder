@@ -28,7 +28,7 @@ import { QoderBrowserAuthorization } from './browser-authorization.ts'
 import type { QoderCredentialLease } from '../authorization.ts'
 import type { CosyCredentials } from './wire/cosy.ts'
 import { streamModelServerChat } from './model-server.ts'
-import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
+import { defaultRequestCompression, defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
 import { retainQoderBusiness } from './business-finish.ts'
 import { getMachineId, qoderMachineIdPaths } from './machine-id.ts'
 import type { QoderHostRun } from '../turn.ts'
@@ -43,6 +43,8 @@ export class DefaultQoderTransport implements QoderTransport {
   readonly authorization: QoderBrowserAuthorization
   private readonly resolveCredential: QoderTransportOptions['resolveCredential']
   private readonly resolveMachineId: NonNullable<QoderTransportOptions['resolveMachineId']>
+  private readonly outerProviders?: readonly string[]
+  private readonly includeEnterpriseByok?: boolean
   private readonly region: QoderRegion
   private readonly requestCompression: boolean
   private readonly requestCompressionMinChars: number
@@ -73,13 +75,15 @@ export class DefaultQoderTransport implements QoderTransport {
     this.onModelRefusal = options.onModelRefusal
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
-    this.requestCompression = options.requestCompression ?? false
+    this.requestCompression = options.requestCompression ?? defaultRequestCompression
     this.requestCompressionMinChars = options.requestCompressionMinChars ?? defaultRequestCompressionMinChars
     this.requestCompressionLevel = options.requestCompressionLevel ?? defaultRequestCompressionLevel
     this.modelTransport = options.modelTransport ?? 'legacy'
     this.resolvePat = options.resolvePat
     this.resolveCredential = options.resolveCredential
     this.resolveMachineId = options.resolveMachineId ?? (() => getMachineId(qoderMachineIdPaths(this.region)))
+    this.outerProviders = options.outerProviders?.slice()
+    this.includeEnterpriseByok = options.includeEnterpriseByok
     this.authorization = new QoderBrowserAuthorization(options)
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.logger = options.logger
@@ -100,6 +104,8 @@ export class DefaultQoderTransport implements QoderTransport {
       logger: this.logger,
       region: this.region,
       resolveMachineId: this.resolveMachineId,
+      resolveMachineIdentity: options.resolveMachineIdentity,
+      resolveMachineToken: options.resolveMachineToken,
     })
     this.usage = new QoderUsageReader({
       authService: this.auth,
@@ -140,6 +146,8 @@ export class DefaultQoderTransport implements QoderTransport {
           logger: this.logger,
           region: this.region,
           timeoutMs: this.metadataTimeoutMs,
+          outerProviders: this.outerProviders,
+          includeEnterpriseByok: this.includeEnterpriseByok,
         }))
         try { return await read(credentials) } catch (error) {
           if (!(error instanceof QoderLlmError) || error.code !== 'AUTH') throw error

@@ -81,9 +81,13 @@ async function mountCard(describe = async (): Promise<QoderCredentialStatus> => 
   let snapshot: QoderModelSettingsSnapshot = { status: 'ready', value: { region, modelsByRegion: { global: [], china: [] } },
     base: {}, user: {}, revision: 0, writable: true, mode: 'host' }
   const requests: Array<{ region: QoderRegion; force?: boolean; result: ReturnType<typeof deferred<QoderAccountResult>> }> = []
+  let onCredentialChange: (() => void) | undefined
   const operations = {
     describe: async () => success(await describe()),
-    subscribe: () => () => {},
+    subscribe(listener: () => void) {
+      onCredentialChange = listener
+      return () => { onCredentialChange = undefined }
+    },
     subscribeModels: () => () => {},
     getModelSnapshot: () => snapshot,
     getAccount(force?: boolean) {
@@ -97,7 +101,11 @@ async function mountCard(describe = async (): Promise<QoderCredentialStatus> => 
     for (const cell of instance.cells) cell.cleanup?.()
   }
   const render = () => {
-    const child = exports.QoderAccountCard({ operations, t: (copy: string) => copy, activeLocale: () => 'en' })
+    const child = exports.QoderAccountCard({
+      operations,
+      t: (copy: string, values?: Record<string, string | number>) => [copy, ...Object.values(values ?? {})].join(' '),
+      activeLocale: () => 'en',
+    })
     if (key !== child.key) {
       unmount()
       instance = { cells: [], mounted: true }
@@ -125,6 +133,7 @@ async function mountCard(describe = async (): Promise<QoderCredentialStatus> => 
       render()
     },
     updateModels() { snapshot = { ...snapshot, revision: (snapshot.revision ?? 0) + 1 }; render() },
+    changeCredential() { onCredentialChange?.(); render() },
     refresh() {
       const button = nodes(output).find(node => node.type === 'button' && text(node.props.children) === 'refresh')
       assert.ok(button)
@@ -235,25 +244,83 @@ test('account failures show safe localized copy without upstream error text', as
 })
 
 
-for (const planTotal of [0, 100]) {
-  test(`add-on credits render without a subscription reset date when plan quota is ${planTotal}`, async () => {
-    const card = await mountCard()
-    card.requests[0].result.resolve({ ok: true, value: {
-      profile: { id: 'addon-user', name: 'Add-on subscriber', email: '' },
-      usage: {
-        expiresAt: '2027-01-01T00:00:00.000Z',
-        userQuota: { total: planTotal, used: 0, remaining: planTotal, percentage: 0, unit: 'credits' },
-        addOnQuota: { total: 2600, used: 688, remaining: 1912, percentage: 27, unit: 'credits' },
-      },
-      updatedAt: '2026-10-19T00:00:00.000Z',
-    } })
-    await card.settle()
-    assert.match(card.text(), /addOnQuotaTitle/)
-    assert.doesNotMatch(card.text(), /noQuota/)
-    const addOnProgress = card.nodes().find(node => node.type === 'progress' && node.props.max === 2600)
-    assert.equal(addOnProgress?.props.value, 688, 'the quota bar displays the used credits')
-    assert.equal((card.text().match(/resetsAt/g) ?? []).length, planTotal > 0 ? 1 : 0,
-      'only the subscription quota may display its reset date')
-    card.unmount()
-  })
-}
+test('quota displays partial and unavailable balances and keeps them only through a same-account refresh failure', async () => {
+  let browserSubscriberId = 'addon-user'
+  const card = await mountCard(async () => ({ configured: true, writable: true, browserSubscriberId }))
+  card.requests[0].result.resolve({ ok: true, value: {
+    profile: { id: 'addon-user', name: 'Add-on subscriber', email: '' },
+    usage: {
+      expiresAt: '2027-01-01T00:00:00.000Z',
+      userQuota: { remaining: 0, unit: 'credits' },
+      addOnQuota: { total: 2600, used: 688, remaining: 1912, unit: 'credits' },
+      orgResourcePackage: { remaining: 40, unit: 'credits' },
+      dedicatedResourcePackages: [{
+        remaining: 500,
+        unit: 'credits',
+        status: 'QUOTA_DETAIL_STATUS_EXPIRED',
+        expiresAt: '2026-09-19T00:00:00.000Z',
+        modelKeys: ['sonus-latest'],
+      }],
+    },
+    updatedAt: '2026-10-19T00:00:00.000Z',
+  } })
+  await card.settle()
+  assert.match(card.text(), /quotaRemaining 0 Credits/)
+  assert.match(card.text(), /addOnQuotaTitle.*quotaRemaining 1,912 Credits/)
+  assert.match(card.text(), /orgResourceTitle.*quotaRemaining 40 Credits/)
+  assert.match(card.text(), /quotaStatusExpired.*quotaRemaining 500 Credits/)
+  assert.match(card.text(), /quotaModelKeys sonus-latest/)
+  assert.doesNotMatch(card.text(), /resetsAt|noQuota/)
+  const progress = card.nodes().filter(node => node.type === 'progress')
+  assert.equal(progress.length, 1)
+  assert.equal(progress[0].props.value, 688)
+
+  card.refresh()
+  card.changeCredential()
+  await card.settle()
+  assert.equal(card.requests.length, 2, 'renewing browser authorization keeps the active refresh')
+  card.requests[1].result.reject(new Error('Refresh failed'))
+  await card.settle()
+  assert.match(card.text(), /accountRefreshFailed.*accountLastUpdated/)
+  assert.match(card.text(), /quotaRemaining 1,912 Credits/)
+  assert.ok(card.nodes().some(node => node.type === 'button' && text(node.props.children) === 'retry'))
+
+  browserSubscriberId = 'new-subscriber'
+  card.changeCredential()
+  assert.doesNotMatch(card.text(), /Add-on subscriber|1,912/)
+  await card.settle()
+  card.requests[2].result.resolve(account('New subscriber'))
+  await card.settle()
+  assert.match(card.text(), /New subscriber/)
+  card.unmount()
+})
+
+test('quota displays dedicated resource packages without reported balances', async () => {
+  const card = await mountCard()
+  card.requests[0].result.resolve({ ok: true, value: {
+    profile: { id: 'subscriber', name: 'Subscriber', email: '' },
+    updatedAt: '2026-11-26T00:00:00.000Z',
+    usage: {
+      userQuota: { unit: 'credits' },
+      dedicatedResourcePackages: [
+        {
+          unit: 'credits',
+          available: true,
+          title: { fallback: 'Sonus credits', values: {} },
+          expiresAt: '2026-12-01T00:00:00.000Z',
+          modelKeys: ['sonus-latest'],
+        },
+        {
+          unit: 'credits',
+          title: { fallback: 'Model access', values: {} },
+          modelFamilies: ['sonus'],
+        },
+      ],
+    },
+  } })
+  await card.settle()
+  assert.match(card.text(), /Sonus credits.*quotaStatusAvailable.*dedicatedResourceExpiresAt.*quotaModelKeys sonus-latest/)
+  assert.match(card.text(), /Model access.*quotaModelFamilies sonus/)
+  assert.doesNotMatch(card.text(), /noQuota|userQuotaTitle|quotaRemaining/)
+  card.unmount()
+})

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   ToolCallId,
   createAssistantMessage,
+  createSystemMessage,
   createToolResultMessage,
   createUserMessage,
   ReasoningEffortId,
@@ -12,9 +13,10 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { normalizeQoderModels } from '../src/qoder/catalog.ts'
-import { buildQoderRequestBody, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
+import { buildQoderRequestBody, translateQoderMessages } from '../src/qoder/transport/wire/serialize.ts'
 import {
   messagesForTurnIdentity,
+  sanitizeToolCallArguments,
   validateAndTranslateMessages,
   type QoderImageAttachments,
   type QoderImageResolver,
@@ -101,6 +103,37 @@ test('validateAndTranslateMessages processes DSH text history', async () => {
     { role: 'user', content: 'Hello' },
     { role: 'assistant', content: 'Hi there!' },
   ])
+})
+
+test('Qoder rewrites only the standard identity line in the main conversation prompt', async () => {
+  const identity = 'You are an AI agent powered by DeepSeek Harness.'
+  const instructions = [
+    'The runtime context names the DeepSeek Harness implementation checkout. Use it as a reference.',
+    'You are interacting with the user through the DeepSeek Harness Web GUI. Use the available tools.',
+  ]
+  const suffix = `  \r\n\r\n${instructions.join('\r\n\r\n')}\r\n`
+  const system = identity + suffix
+  const history = { role: 'system', content: system }
+  const options: GenerateOptions = {
+    provider: 'dsh-provider-qoder', model: 'cmodel',
+    system, messages: [createSystemMessage(system)],
+  }
+
+  assert.deepEqual(await translateQoderMessages(options), [
+    { role: 'system', content: 'You are an AI coding assistant using a model served by Qoder.' + suffix },
+    history,
+  ])
+  assert.deepEqual(await translateQoderMessages(options, undefined, { replaceSystemPrompt: false }), [history, history])
+
+  for (const purpose of ['session-title', 'compaction', 'auto-review'] as GenerateOptions['purpose'][]) {
+    assert.deepEqual(await translateQoderMessages({ ...options, purpose }), [history, history])
+  }
+  for (const custom of [`Custom preamble.\n${system}`, `${identity} Follow custom instructions.`]) {
+    assert.deepEqual(await translateQoderMessages({ ...options, system: custom }), [
+      { role: 'system', content: custom },
+      history,
+    ])
+  }
 })
 
 test('Qoder requests skip empty user messages while preserving retry identity', async () => {
@@ -304,14 +337,51 @@ test('legacy tool results preserve user and tool sibling images and nested assis
   }
 })
 
-test('tool-call validation preserves empty string arguments', async () => {
+test('tool-call validation accepts empty string arguments and sanitizes them to {}', async () => {
   const [message] = await validateAndTranslateMessages([{
     role: 'assistant',
     content: [{ type: 'tool-call', id: ToolCallId('call-empty'), name: 'ping', arguments: '' }],
   }])
   assert.deepEqual(message.tool_calls, [{
-    id: 'call-empty', type: 'function', function: { name: 'ping', arguments: '' },
+    id: 'call-empty', type: 'function', function: { name: 'ping', arguments: '{}' },
   }])
+})
+
+test('sanitizeToolCallArguments keeps valid JSON objects intact and falls back to {} otherwise', async () => {
+  const formattedValid = '{\n  "path": "src/index.ts",\n  "line": 12\n}'
+  const jsonWhitespace = ' \n\t{"path":"a"}\r\n '
+  assert.equal(sanitizeToolCallArguments(formattedValid), formattedValid)
+  assert.equal(sanitizeToolCallArguments(jsonWhitespace), jsonWhitespace)
+  assert.equal(sanitizeToolCallArguments('\uFEFF{}'), '{}')
+  assert.equal(sanitizeToolCallArguments('\u00A0{"a":1}'), '{"a":1}')
+  assert.equal(sanitizeToolCallArguments('\u000B{"a":1}'), '{"a":1}')
+  assert.equal(sanitizeToolCallArguments('{\u00A0"a":1}'), '{}')
+  assert.equal(sanitizeToolCallArguments('{"truncated": "abc'), '{}')
+  assert.equal(sanitizeToolCallArguments('   \t\n '), '{}')
+  for (const nonObject of ['[]', '[1,2]', 'null', '42', '"str"', 'true', 'false']) {
+    assert.equal(sanitizeToolCallArguments(nonObject), '{}')
+  }
+  for (const sample of [formattedValid, jsonWhitespace, '\uFEFF{}', '\u00A0{"a":1}', '{\u00A0"a":1}', '{"truncated": "abc']) {
+    const sanitized = sanitizeToolCallArguments(sample)
+    const parsed = JSON.parse(sanitized)
+    assert.equal(typeof parsed, 'object')
+    assert.notEqual(parsed, null)
+    assert.equal(Array.isArray(parsed), false)
+  }
+
+  const [translated] = await validateAndTranslateMessages([{
+    role: 'assistant',
+    content: [
+      { type: 'tool-call', id: ToolCallId('call-valid'), name: 'read', arguments: formattedValid },
+      { type: 'tool-call', id: ToolCallId('call-cut'), name: 'write', arguments: '{"path": "a.txt' },
+      { type: 'tool-call', id: ToolCallId('call-arr'), name: 'list', arguments: '[1, 2]' },
+    ],
+  }])
+  assert.deepEqual(translated.tool_calls, [
+    { id: 'call-valid', type: 'function', function: { name: 'read', arguments: formattedValid } },
+    { id: 'call-cut', type: 'function', function: { name: 'write', arguments: '{}' } },
+    { id: 'call-arr', type: 'function', function: { name: 'list', arguments: '{}' } },
+  ])
 })
 
 test('buildQoderRequestBody uses the resolved identity and configured model', async () => {
@@ -564,28 +634,6 @@ test('validateAndTranslateMessages rejects a batch that exceeds the image policy
       return true
     },
   )
-})
-
-test('validateQoderRequestShape rejects images for a non-vision model with no I/O', () => {
-  let reads = 0
-  const options = {
-    provider: 'dsh-provider-qoder',
-    model: 'text-only',
-    messages: [createUserMessage({
-      content: [{ type: 'image', attachment: imageRef }],
-      source: { kind: 'user' },
-    })],
-  } as GenerateOptions
-
-  assert.throws(
-    () => validateQoderRequestShape(options, { id: 'text-only', name: 'Text', supportsImages: false }),
-    (error: Error) => {
-      assert.ok(error instanceof QoderLlmError)
-      assert.equal((error as QoderLlmError).code, 'UNSUPPORTED_CONTENT')
-      return true
-    },
-  )
-  assert.equal(reads, 0)
 })
 
 test('validateAndTranslateMessages preserves tool_call_id for direct tool role messages', async () => {

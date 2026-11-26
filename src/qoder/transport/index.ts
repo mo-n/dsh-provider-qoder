@@ -10,13 +10,15 @@ import { DefaultQoderTransport, defaultStreamIdleTimeoutMs } from './default-tra
 import { defaultResponseHeaderTimeoutMs } from './request.ts'
 import type { QoderQueueOwner, QoderQueueUpdate } from '../queue.ts'
 import type { QoderHostRun } from '../turn.ts'
+import type { QoderMachineIdentityResolvers } from './wire/credentials.ts'
 import type { QoderLogger } from './logging.ts'
 import type { QoderAuthorizationTransport, QoderCredentialLease } from '../authorization.ts'
 
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 
 export { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs }
-export { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
+export { defaultRequestCompression, defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
+export { readQoderUmidCache, type QoderMachineIdentity } from './umid-cache.ts'
 export type QoderModelTransport = 'http' | 'legacy'
 
 export interface QoderTransport {
@@ -30,7 +32,7 @@ export interface QoderTransport {
   searchWeb(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>
 }
 
-export interface QoderTransportOptions {
+export interface QoderTransportOptions extends QoderMachineIdentityResolvers {
   region: QoderRegion
   modelQueueMaxWaitMs?: number
   onQueueUpdate?: (update: QoderQueueUpdate) => void
@@ -51,6 +53,8 @@ export interface QoderTransportOptions {
   responseHeaderTimeoutMs?: number
   metadataTimeoutMs?: number
   resolveMachineId?: () => string | Promise<string>
+  outerProviders?: readonly string[]
+  includeEnterpriseByok?: boolean
   attachments?: Pick<AttachmentStore, 'imageLimits' | 'readImageRequest'>
   /** Deadline for one center image publication attempt. */
   imageUploadTimeoutMs?: number

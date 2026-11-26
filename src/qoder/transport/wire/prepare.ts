@@ -82,9 +82,15 @@ export function validateQoderRequestShape(options: GenerateOptions, model?: Qode
 export function translateQoderMessages(
   options: GenerateOptions,
   attachments?: QoderImageAttachments,
-  pipeline?: QoderTranslationOptions,
+  pipeline?: QoderTranslationOptions & { replaceSystemPrompt?: boolean },
 ): Promise<QoderWireMessage[]> {
-  return validateAndTranslateMessages(options.messages, options.system, attachments, options.signal, pipeline)
+  const system = typeof options.system === 'string' && pipeline?.replaceSystemPrompt !== false && callKind(options) === 'conversation'
+    ? options.system.replace(
+      /^You are an AI agent powered by DeepSeek Harness\.?(?=[ \t]*(?:\r?\n|$))/,
+      'You are an AI coding assistant using a model served by Qoder.',
+    )
+    : options.system
+  return validateAndTranslateMessages(options.messages, system, attachments, options.signal, pipeline)
 }
 
 export async function prepareQoderRequest(

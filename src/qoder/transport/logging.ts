@@ -6,7 +6,8 @@ export interface QoderLogger {
   error?(message: string, ...details: unknown[]): void
 }
 
-const sensitiveKey = /(?:authorization|credential|password|secret|token)/iu
+const sensitiveKey = /(?:authorization|credential|password|secret|token|machine[_-]?code)/iu
+const sensitiveQueryKey = /(?:authorization|credential|password|secret|token|verifier|machine[_-]?code)/iu
 const identifierKey = /^(?:accountId|id|uid|userId|user_id)$/iu
 const tokenValue = /\b(?:jrt|jt|pt)-[\w.-]+\b/giu
 const bearerValue = /Bearer\s+[^\s,;]+/giu
@@ -77,6 +78,27 @@ export function redactLogPayload(text: string): unknown {
     return redactLogValue(JSON.parse(text))
   } catch {
     return redactLogValue(text)
+  }
+}
+
+/** Redact sensitive query parameter values from a logged request URL. */
+export function redactLogUrl(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl)
+    let changed = false
+    for (const key of parsed.searchParams.keys()) {
+      if (sensitiveQueryKey.test(key)) {
+        changed = true
+        break
+      }
+    }
+    if (!changed) return rawUrl
+    for (const key of new Set(parsed.searchParams.keys())) {
+      if (sensitiveQueryKey.test(key)) parsed.searchParams.set(key, 'REDACTED')
+    }
+    return parsed.toString()
+  } catch {
+    return redactString(rawUrl)
   }
 }
 

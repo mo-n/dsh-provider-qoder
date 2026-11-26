@@ -7,15 +7,23 @@ import { promisify } from 'node:util'
 import type { QoderRegion } from '../region.ts'
 
 /** Match the native CLI's region-specific config directory overrides. */
+export function qoderCliConfigDir(
+  region: QoderRegion = 'global',
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+): string {
+  const prefix = region === 'china' ? 'QODERCN_' : 'QODER_'
+  const cliHome = env[`${prefix}CLI_HOME`] ?? env.GEMINI_CLI_HOME ?? home
+  const configDir = env[`${prefix}CONFIG_DIR`]
+  return configDir ? resolve(configDir) : join(cliHome, region === 'china' ? '.qoder-cn' : '.qoder')
+}
+
 export function qoderMachineIdPaths(
   region: QoderRegion = 'global',
   env: NodeJS.ProcessEnv = process.env,
   home = homedir(),
 ): string[] {
-  const prefix = region === 'china' ? 'QODERCN_' : 'QODER_'
-  const cliHome = env[`${prefix}CLI_HOME`] ?? env.GEMINI_CLI_HOME ?? home
-  const configDir = env[`${prefix}CONFIG_DIR`]
-  const cliDir = configDir ? resolve(configDir) : join(cliHome, region === 'china' ? '.qoder-cn' : '.qoder')
+  const cliDir = qoderCliConfigDir(region, env, home)
   return [join(cliDir, '.auth', 'machine_id'), join(home, '.dsh', 'qoder', 'machine_id')]
 }
 
