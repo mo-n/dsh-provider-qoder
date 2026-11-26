@@ -88,7 +88,6 @@ export async function* streamQoderChat(
     logger: dependencies.logger, clock: dependencies.queueClock,
   })
   let dispatched = false
-  let sawOutput = false
   const clear = (): void => queue.clear()
   options.signal?.addEventListener('abort', clear, { once: true })
   try {
@@ -97,8 +96,7 @@ export async function* streamQoderChat(
       if (options.signal?.aborted) throw aborted('Request was aborted.')
       try {
         dispatched = true
-        for await (const chunk of streamAttempt(options, model, activeCredentials, request, dependencies, () => { sawOutput = true })) {
-          if (chunk.type !== 'usage' && chunk.type !== 'finish') sawOutput = true
+        for await (const chunk of streamAttempt(options, model, activeCredentials, request, dependencies)) {
           if (chunk.type === 'finish' && chunk.reason.kind !== 'error' && chunk.reason.kind !== 'aborted') {
             prepared.markStepCompleted()
           }
@@ -108,7 +106,7 @@ export async function* streamQoderChat(
       } catch (error) {
         if (!(error instanceof QoderModelQueuedError)) throw error
         queue.entered(error.queue)
-        if (sawOutput) throw queueFailure('Qoder queued a request after output began; replay was stopped.', 'QODER_QUEUE_AFTER_OUTPUT')
+        if (error.outputStarted) throw queueFailure('Qoder queued a request after output began; replay was stopped.', 'QODER_QUEUE_AFTER_OUTPUT')
         await queue.wait(error.queue, request.request_id)
         await resolveCredentials(false, options.signal ?? new AbortController().signal)
         request.request_id = randomUUID()
@@ -129,7 +127,6 @@ async function* streamAttempt(
   credentials: CosyCredentials,
   request: QoderWireRequest,
   dependencies: QoderChatDependencies,
-  onToolCall: () => void,
 ): AsyncGenerator<StreamChunk> {
   const encodedBytes = qoderEncodeBodyBytes(JSON.stringify(request))
   const chatUrl = getQoderChatUrl(dependencies.region)
@@ -138,6 +135,7 @@ async function* streamAttempt(
   let idleTimedOut = false
   let idleTimer: ReturnType<typeof setTimeout> | undefined
   let chunkCount = 0
+  let outputStarted = false
   let reqId: ReturnType<typeof qoderRequestId> | undefined
   const startedAt = performance.now()
   let lastActivityAt = startedAt
@@ -245,7 +243,6 @@ async function* streamAttempt(
     let firstChunkDurationMs: number | undefined
     let tokenUsage: TokenUsage | undefined
     let finishReason: string | undefined
-    let sawToolCall = false
     const streamStartedAt = performance.now()
 
     try {
@@ -255,8 +252,7 @@ async function* streamAttempt(
         onRefusal: dependencies.onRefusal,
         onToolCall: () => {
           // A buffered tool call still means upstream has started producing output.
-          sawToolCall = true
-          onToolCall()
+          outputStarted = true
         },
         headers: response.headers,
         httpStatus: response.status,
@@ -270,6 +266,7 @@ async function* streamAttempt(
       })) {
         compression.confirm()
         chunkCount++
+        if (chunk.type !== 'usage' && chunk.type !== 'finish') outputStarted = true
         if (firstChunkDurationMs === undefined) {
           firstChunkDurationMs = Math.round(performance.now() - startedAt)
           dependencies.logger?.debug?.('[Qoder Stream] First chunk received', {
@@ -286,7 +283,7 @@ async function* streamAttempt(
         yield chunk
       }
     } catch (error) {
-      if (chunkCount === 0 && !sawToolCall) compression.rejectLegacyError(error)
+      if (chunkCount === 0 && !outputStarted) compression.rejectLegacyError(error)
       throw error
     }
 
@@ -321,7 +318,10 @@ async function* streamAttempt(
       })
       throw failure
     }
-    if (error instanceof QoderModelQueuedError) throw error
+    if (error instanceof QoderModelQueuedError) {
+      error.outputStarted = outputStarted
+      throw error
+    }
     if (error instanceof QoderLlmError) {
       dependencies.logger?.error?.('[Qoder Stream] Request failed', redactLogValue(error), {
         chunkCount,

@@ -22,6 +22,8 @@ export class QoderLlmError extends LlmError {
 /** Internal protocol signal; the queue controller consumes it before DSH sees it. */
 export class QoderModelQueuedError extends QoderLlmError {
   readonly queue: import('./queue.ts').QoderQueueStatus
+  outputStarted = false
+
   constructor(queue: import('./queue.ts').QoderQueueStatus) {
     super('Qoder model is queued.', 'QODER_MODEL_QUEUED')
     this.queue = queue
