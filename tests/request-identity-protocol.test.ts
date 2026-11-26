@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { zstdDecompressSync } from 'node:zlib'
 import { mockTime } from './helpers/timing.ts'
 import { type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { qoderIdeVersion } from '../src/qoder/transport/wire/client-identity.ts'
@@ -98,10 +99,15 @@ test('tool result images can trim subscriber images without opening another Qode
           return Response.json({ result: { oss_url: `https://oss.example.com/${++uploads}.png` } })
         }
         assert.match(url, modelTransport === 'legacy' ? /agent_chat_generation/u : /chat\/completions/u)
+        let wireBody = init?.body
+        if (new Headers(init?.headers).get('content-encoding') === 'zstd') {
+          assert.ok(wireBody instanceof Uint8Array)
+          wireBody = zstdDecompressSync(wireBody).toString('utf8')
+        }
         if (modelTransport === 'legacy') {
-          bodies.push(decodeLegacy(init?.body as Uint8Array))
+          bodies.push(decodeLegacy(wireBody as string | Uint8Array))
         } else {
-          const body = JSON.parse(String(init?.body)) as HttpRequestBody
+          const body = JSON.parse(String(wireBody)) as HttpRequestBody
           bodies.push({ messages: body.messages, business: body.metadata.business, ...body.metadata.context })
         }
         const chunk = { choices: [{ delta: { content: 'Answer' }, finish_reason: 'stop' }] }

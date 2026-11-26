@@ -47,7 +47,6 @@ export interface QoderTranslateContext {
 
 export interface QoderTranslationOptions extends Pick<QoderTranslateContext, 'uploader' | 'credentials'> {
   preserveThinking?: boolean
-  replaceSystemPrompt?: boolean
   onImagesTrimmed?: (counts: { original: number; retained: number; removed: number }) => void
 }
 
@@ -261,25 +260,6 @@ export function validateMessageShapes(messages: readonly QoderMessage[], attachm
 
 const maxRequestImages = 50
 const omittedImage = { type: 'text', text: '[media removed: request limit]' } as const
-const hostIdentityLine = /^You are an AI agent powered by DeepSeek Harness(?=\.?[ \t]*(?:\r?\n|$))/i
-const checkoutParagraphStart = /^The runtime context names the DeepSeek Harness implementation checkout\b/i
-const webGuiParagraphStart = /^You are interacting with the user through the DeepSeek Harness Web GUI\b/i
-
-function maskSystemPrompt(text: string): string {
-  // Capture separators so retained paragraphs keep their original line endings and spacing.
-  const parts = text.split(/(\r?\n(?:[ \t]*\r?\n)+)/)
-  const firstParagraph = parts.findIndex(part => part.trim().length > 0)
-  const retained: string[] = []
-  for (const [index, paragraph] of parts.entries()) {
-    if (index % 2 !== 0) continue
-    if (checkoutParagraphStart.test(paragraph) || webGuiParagraphStart.test(paragraph)) continue
-    if (retained.length > 0) retained.push(parts[index - 1] ?? '')
-    retained.push(index === firstParagraph
-      ? paragraph.replace(hostIdentityLine, 'You are an AI coding agent powered by Qoder')
-      : paragraph)
-  }
-  return retained.join('')
-}
 
 // Keep identity metadata off the serialized messages. The projection lives
 // only as long as the translated batch used by request preparation.
@@ -388,14 +368,12 @@ export async function validateAndTranslateMessages(
     credentials: pipeline?.credentials,
   }
   const preserveThinking = pipeline?.preserveThinking ?? true
-  const replaceSystemPrompt = pipeline?.replaceSystemPrompt ?? true
   const output: QoderWireMessage[] = []
   turnMessages.set(output, projectUserMessages(messages))
   let lastAssistantToolCallIds: string[] = []
 
-  const systemText = typeof systemPrompt === 'string' && replaceSystemPrompt ? maskSystemPrompt(systemPrompt) : systemPrompt
-  if (typeof systemText === 'string' && systemText.trim().length > 0) {
-    output.push({ role: 'system', content: systemText })
+  if (typeof systemPrompt === 'string' && systemPrompt.trim().length > 0) {
+    output.push({ role: 'system', content: systemPrompt })
   }
 
   for (const message of requestMessages) {
@@ -492,11 +470,6 @@ export async function validateAndTranslateMessages(
     const wireRole = (toolResults.length > 0 ? 'user' : message.role) as 'system' | 'user'
     if (wireRole === 'user' && !hasImage && text.trim().length === 0) {
       continue
-    }
-    if (wireRole === 'system' && replaceSystemPrompt) {
-      const masked = maskSystemPrompt(text)
-      if (text !== masked && masked.trim().length === 0) continue
-      text = masked
     }
 
     output.push({

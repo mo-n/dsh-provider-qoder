@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   ToolCallId,
   createAssistantMessage,
+  createSystemMessage,
   createToolResultMessage,
   createUserMessage,
   ReasoningEffortId,
@@ -12,7 +13,7 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import { QoderLlmError } from '../src/qoder/errors.ts'
 import { normalizeQoderModels } from '../src/qoder/catalog.ts'
-import { buildQoderRequestBody, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
+import { buildQoderRequestBody, translateQoderMessages, validateQoderRequestShape } from '../src/qoder/transport/wire/serialize.ts'
 import {
   messagesForTurnIdentity,
   sanitizeToolCallArguments,
@@ -102,6 +103,37 @@ test('validateAndTranslateMessages processes DSH text history', async () => {
     { role: 'user', content: 'Hello' },
     { role: 'assistant', content: 'Hi there!' },
   ])
+})
+
+test('Qoder rewrites only the standard identity line in the main conversation prompt', async () => {
+  const identity = 'You are an AI agent powered by DeepSeek Harness.'
+  const instructions = [
+    'The runtime context names the DeepSeek Harness implementation checkout. Use it as a reference.',
+    'You are interacting with the user through the DeepSeek Harness Web GUI. Use the available tools.',
+  ]
+  const suffix = `  \r\n\r\n${instructions.join('\r\n\r\n')}\r\n`
+  const system = identity + suffix
+  const history = { role: 'system', content: system }
+  const options: GenerateOptions = {
+    provider: 'dsh-provider-qoder', model: 'cmodel',
+    system, messages: [createSystemMessage(system)],
+  }
+
+  assert.deepEqual(await translateQoderMessages(options), [
+    { role: 'system', content: 'You are an AI coding assistant using a model served by Qoder.' + suffix },
+    history,
+  ])
+  assert.deepEqual(await translateQoderMessages(options, undefined, { replaceSystemPrompt: false }), [history, history])
+
+  for (const purpose of ['session-title', 'compaction', 'auto-review'] as GenerateOptions['purpose'][]) {
+    assert.deepEqual(await translateQoderMessages({ ...options, purpose }), [history, history])
+  }
+  for (const custom of [`Custom preamble.\n${system}`, `${identity} Follow custom instructions.`]) {
+    assert.deepEqual(await translateQoderMessages({ ...options, system: custom }), [
+      { role: 'system', content: custom },
+      history,
+    ])
+  }
 })
 
 test('Qoder requests skip empty user messages while preserving retry identity', async () => {

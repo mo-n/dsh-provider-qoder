@@ -17,7 +17,7 @@ import type { QoderAuthorizationTransport, QoderCredentialLease } from '../autho
 import type { WebSearchRequest, WebSearchResult } from '@deepseek-ai/dsh-web'
 
 export { defaultResponseHeaderTimeoutMs, defaultStreamIdleTimeoutMs }
-export { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
+export { defaultRequestCompression, defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
 export { readQoderUmidCache, type QoderMachineIdentity } from './umid-cache.ts'
 export type QoderModelTransport = 'http' | 'legacy'
 

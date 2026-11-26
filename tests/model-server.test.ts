@@ -86,7 +86,7 @@ test('existing settings select legacy and Bearer HTTP remains explicit', () => {
   assert.throws(() => Config({ modelTransport: 'other' as 'http' }))
 })
 
-test('unspecified transport and compression use uncompressed legacy requests', async () => {
+test('unspecified transport and compression use legacy with Zstd for large requests', async () => {
   let modelCalls = 0
   const transport = createQoderTransport({
     region: 'global',
@@ -98,9 +98,9 @@ test('unspecified transport and compression use uncompressed legacy requests', a
       assert.match(url, /algo\/api\/v2\/service\/pro\/sse\/agent_chat_generation/u)
       modelCalls++
       const headers = new Headers(init?.headers)
-      assert.equal(headers.get('content-encoding'), null)
+      assert.equal(headers.get('content-encoding'), 'zstd')
       assert.ok(headers.get('cosy-key'))
-      assert.equal(typeof init?.body, 'string')
+      assert.ok(init?.body instanceof Uint8Array)
       const body = JSON.stringify({ choices: [{ delta: { content: 'legacy response' }, finish_reason: 'stop' }] })
       return new Response(`data: ${JSON.stringify({ statusCodeValue: 200, body })}\n\ndata: [DONE]\n\n`)
     }) as typeof fetch,

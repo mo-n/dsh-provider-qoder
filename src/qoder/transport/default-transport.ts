@@ -28,7 +28,7 @@ import { QoderBrowserAuthorization } from './browser-authorization.ts'
 import type { QoderCredentialLease } from '../authorization.ts'
 import type { CosyCredentials } from './wire/cosy.ts'
 import { streamModelServerChat } from './model-server.ts'
-import { defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
+import { defaultRequestCompression, defaultRequestCompressionMinChars, defaultRequestCompressionLevel } from './request-compression.ts'
 import { retainQoderBusiness } from './business-finish.ts'
 import { getMachineId, qoderMachineIdPaths } from './machine-id.ts'
 import type { QoderHostRun } from '../turn.ts'
@@ -75,7 +75,7 @@ export class DefaultQoderTransport implements QoderTransport {
     this.onModelRefusal = options.onModelRefusal
     this.captureQueueLeaseOwner = options.captureQueueLeaseOwner
     this.region = options.region
-    this.requestCompression = options.requestCompression ?? false
+    this.requestCompression = options.requestCompression ?? defaultRequestCompression
     this.requestCompressionMinChars = options.requestCompressionMinChars ?? defaultRequestCompressionMinChars
     this.requestCompressionLevel = options.requestCompressionLevel ?? defaultRequestCompressionLevel
     this.modelTransport = options.modelTransport ?? 'legacy'
