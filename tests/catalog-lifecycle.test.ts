@@ -25,8 +25,8 @@ function runtime(options: { defaultBackoff?: boolean } = {}) {
     onPersistenceError: error => { errors.push(error) },
     persistenceConflictBackoffMs: options.defaultBackoff ? undefined : [0, 0, 0],
   })
-  return { catalog, errors, setTransport(value: QoderTransport) { active = value; catalog.observeTransport() },
-    setRegion(value: QoderRegion) { region = value; catalog.observeTransport() },
+  return { catalog, errors, setTransport(value: QoderTransport) { active = value; catalog.hostChanged('settings-binding') },
+    setRegion(value: QoderRegion) { region = value; catalog.hostChanged('settings-binding') },
     setSelected(value: readonly QoderCatalogModel[]) { selected = value }, getSelected: () => selected }
 }
 
@@ -114,7 +114,7 @@ test('an authorization change rolls back an outdated commit before the new refre
 
   const stale = assert.rejects(catalog.refreshCatalog('global'), { code: 'ABORTED' })
   await saving.promise
-  catalog.clearDiscovered()
+  catalog.hostChanged('managed-pat')
   setTransport(transport(async () => [available]))
   const reading = catalog.refresh()
   release.resolve()
@@ -147,7 +147,7 @@ test('rolling back a stale refresh preserves a later context tier and its budget
       if (++revision === 1) {
         setSelected([{ ...models[0], contextTier: 'small' }])
         revision++
-        catalog.clearDiscovered()
+        catalog.hostChanged('managed-pat')
       }
     },
   })
@@ -168,7 +168,7 @@ test('a matching revision written elsewhere is never rolled back by an aborted r
     read: () => {
       if (revision === 1 && !cancellationScheduled) {
         cancellationScheduled = true
-        queueMicrotask(() => catalog.clearDiscovered())
+        queueMicrotask(() => catalog.hostChanged('managed-pat'))
       }
       return { models: getSelected(), revision }
     },
@@ -283,7 +283,7 @@ test('missing models retain their tier and manual enablement until they return a
   assert.equal(getSelected()[0].enabled, false)
   assert.equal(getSelected()[0].missingFromCatalog, true)
   await catalog.editCatalog('global', { action: 'toggle', id: missing.id, enabled: true })
-  catalog.clearDiscovered()
+  catalog.hostChanged('managed-pat')
   await automatic()
   assert.equal(getSelected()[0].enabled, true)
   assert.equal(getSelected()[0].missingFromCatalog, true)
@@ -352,7 +352,7 @@ test('revision conflicts stop after a bounded retry budget and await explicit re
   await started.promise
   // A watcher notification during a conflict must not restart another
   // unbounded conflict cycle after the retry budget is exhausted.
-  catalog.retryPersistence()
+  catalog.hostChanged('settings-changed')
   await drain()
   assert.equal(writes, 4, 'one initial write plus three bounded conflict retries')
   assert.equal(errors.length, 1)

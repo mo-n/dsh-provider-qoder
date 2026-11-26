@@ -28,6 +28,7 @@ import { QoderLlmError } from '../src/qoder/errors.ts'
 import { QoderAdapter } from '../src/dsh/adapter.ts'
 import { DefaultQoderTransport } from '../src/qoder/transport/default-transport.ts'
 import { browserAuthorizationKey } from '../src/dsh/browser-authorization.ts'
+import { managedQoderCredentialRef } from '../src/dsh/credential.ts'
 import { qoderRpcPath, type QoderJsonRpcEndpoint, type QoderRpcInput, type QoderRpcOutput, type QoderRpcResult } from '../src/dsh/rpc-channel.ts'
 
 interface MemorySection {
@@ -49,7 +50,7 @@ function mergeSettings(base: Record<string, unknown>, patch: Record<string, unkn
 
 /** In-memory settings seam for package integration tests. */
 class MemorySettings extends Service {
-  readonly writable = true
+  writable = true
   private readonly sections = new Map<SettingsNamespace, MemorySection>()
   private readonly queues = new Map<SettingsNamespace, Promise<void>>()
   private readonly hostContext: Context
@@ -474,6 +475,53 @@ test('browser credential updates rediscover models without waiting for a model-l
   await drain()
   assert.equal(discovery.mock.callCount(), calls + 1)
   assert.deepEqual((await ctx.llm.prepareCall({ provider: QODER_PROVIDER_ID, model: 'chosen' })).inputModalities, ['text', 'image'])
+})
+
+test('Managed Qoder PAT updates discard accepted discovery and wait for a model-list read', async t => {
+  let priceFactor = 2
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Chosen', priceFactor },
+  ])
+  const { ctx, settings, readRate } = await modelRuntime({
+    modelsByRegion: { global: [{ id: 'chosen', name: 'Chosen', priceFactor: 1 }] },
+  })
+  t.after(() => ctx.fiber.dispose())
+  settings.writable = false
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal((await readRate())?.priceFactor, 2)
+
+  priceFactor = 3
+  ctx.emit('credentials/reference-updated', managedQoderCredentialRef)
+  await drain()
+  assert.equal(discovery.mock.callCount(), 1)
+  assert.equal((await readRate())?.priceFactor, 1)
+  assert.equal(discovery.mock.callCount(), 1)
+
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal(discovery.mock.callCount(), 2)
+  assert.equal((await readRate())?.priceFactor, 3)
+})
+
+test('a settings update persists accepted catalog metadata without rediscovering models', async t => {
+  const discovery = t.mock.method(DefaultQoderTransport.prototype, 'discoverModels', async () => [
+    { id: 'chosen', name: 'Chosen', priceFactor: 2 },
+  ])
+  const { ctx, settings, ns, readRate } = await modelRuntime({
+    modelsByRegion: { global: [{ id: 'chosen', name: 'Chosen', priceFactor: 1 }] },
+  })
+  t.after(() => ctx.fiber.dispose())
+  settings.writable = false
+  await ctx.llm.listModels(QODER_PROVIDER_ID)
+  assert.equal((await readRate())?.priceFactor, 2)
+  assert.equal(settings.get(ns)?.modelsByRegion?.global?.[0].priceFactor, 1)
+  assert.equal(settings.writes.length, 0)
+
+  settings.writable = true
+  await settings.update(ns, { webSearchMode: 'disabled' })
+  await drain()
+  assert.equal(settings.get(ns)?.modelsByRegion?.global?.[0].priceFactor, 2)
+  assert.equal(settings.writes.length, 2)
+  assert.equal(discovery.mock.callCount(), 1)
 })
 
 test('automatic discovery persists rates without changing selection and refreshes after five minutes', async (t) => {
