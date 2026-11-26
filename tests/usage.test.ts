@@ -22,7 +22,7 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
         JSON.stringify({
           userId: 'user-123',
           userType: 'teams',
-          total_usage_percentage: quotaCalls === 1 ? 0.03 : 1,
+          total_usage_percentage: [0.03, 0.99999, 1][quotaCalls - 1],
           ...(quotaCalls === 1 ? { is_quota_exceeded: false } : {}),
           expires_at: 1790756471159,
           user_quota: {
@@ -88,7 +88,10 @@ test('QoderUsageReader reads subscriber profile and quota usage, and caches with
   const third = await reader.readAccount('pt-test', { force: true })
   assert.equal(quotaCalls, 2)
   assert.equal(third.profile.name, 'Qoder Dev')
-  assert.equal(third.usage?.isQuotaExceeded, true)
+  assert.equal(third.usage?.totalUsagePercentage, 100)
+  assert.equal(third.usage?.isQuotaExceeded, false)
+  const exhausted = await reader.readAccount('pt-test', { force: true })
+  assert.equal(exhausted.usage?.isQuotaExceeded, true)
 })
 
 test('QoderUsageReader surfaces quota failures and does not cache them', async t => {
@@ -412,6 +415,10 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
         // A malformed container must degrade to "no copy" instead of throwing.
         displayLabels: { dimension: 'title', value: 'not an array' },
       },
+      {
+        id: 'pkg-model-access',
+        displayLabels: [{ dimension: 'model_family', value: 'sonus' }],
+      },
       { name: 'empty' },
       null,
     ],
@@ -439,9 +446,9 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   assert.equal(account.usage?.isQuotaExceeded, false, 'an explicit flag overrides reported usage')
   const packages = account.usage?.dedicatedResourcePackages
   assert.ok(packages)
-  assert.equal(packages.length, 2)
+  assert.equal(packages.length, 3)
 
-  const [first, second] = packages
+  const [first, second, modelAccess] = packages
   assert.equal(first.id, 'pkg-0001')
   assert.equal(first.total, 2000)
   assert.equal(first.used, 1425)
@@ -470,6 +477,9 @@ test('QoderUsageReader normalizes dedicated resource packages and skips unusable
   assert.equal(second.title, undefined)
   assert.equal(second.description, undefined)
   assert.equal(second.expiresAt, undefined)
+  assert.equal(modelAccess.id, 'pkg-model-access')
+  assert.equal(modelAccess.total, undefined)
+  assert.deepEqual(modelAccess.modelFamilies, ['sonus'])
 })
 
 test('QoderUsageReader tolerates an out-of-range expiry instead of failing the account read', async () => {

@@ -138,11 +138,18 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
   const formatCredits = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format
   const renderQuota = (
     key: string,
-    label: string,
+    fallbackLabel: string,
     quota: QoderResourcePackage | undefined,
   ) => {
     if (!quota) return null
     const { total, used, remaining, unit, modelFamilies, modelKeys } = quota
+    const title = resolveLocalizedText(quota.title, locale)
+    const description = resolveLocalizedText(quota.description, locale)
+    const expiresAt = formatAccountDate(locale, quota.expiresAt)
+    const hasModelScope = Boolean(modelFamilies?.length || modelKeys?.length)
+    const hasBalance = total !== undefined || used !== undefined || remaining !== undefined
+    const showAvailable = quota.available === true && !hasBalance
+    const label = title ?? fallbackLabel
     let status: string | undefined
     switch (quota.status) {
       case 'QUOTA_DETAIL_STATUS_EXHAUSTED': status = t('quotaStatusExhausted'); break
@@ -150,7 +157,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
       case 'QUOTA_DETAIL_STATUS_SUSPENDED': status = t('quotaStatusSuspended'); break
       default: if (quota.available === false) status = t('quotaStatusUnavailable')
     }
-    if (total === undefined && used === undefined && remaining === undefined && !status) return null
+    if (!hasBalance && !status && !showAvailable && !title && !description && !expiresAt && !hasModelScope) return null
     const displayUnit = unit.toLowerCase() === 'credits' ? 'Credits' : unit
     const balance = remaining === undefined ? undefined
       : t('quotaRemaining', { value: formatCredits(remaining), unit: displayUnit })
@@ -159,13 +166,12 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
       : (total === undefined
         ? t('quotaUsedOnly', { used: formatCredits(used), unit: displayUnit })
         : t('quotaUsed', { used: formatCredits(used), total: formatCredits(total), unit: displayUnit }))
-    const description = resolveLocalizedText(quota.description, locale)
-    const expiresAt = formatAccountDate(locale, quota.expiresAt)
     return (
       <div className={css.quotaBlock} key={key}>
         <div className={css.quotaHeader}>
           <span className={css.quotaLabel}>{label}</span>
           {status ? <strong className={css.quotaStatus}>{status}</strong> : null}
+          {!status && showAvailable ? <span className={css.quotaMeta}>{t('quotaStatusAvailable')}</span> : null}
           {balance ? status ? <span className={css.quotaMeta}>{balance}</span> : <strong>{balance}</strong> : null}
         </div>
         {usage ? <div className={css.quotaTop}>{usage}</div> : null}
@@ -179,7 +185,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
         ) : null}
         {description ? <p className={css.quotaDescription}>{description}</p> : null}
         {expiresAt ? <div className={css.quotaMeta}>{t('dedicatedResourceExpiresAt', { value: expiresAt })}</div> : null}
-        {modelFamilies?.length || modelKeys?.length ? (
+        {hasModelScope ? (
           <details className={css.quotaModelScope}>
             <summary>{t('quotaModelScope')}</summary>
             {modelFamilies?.length ? <div>{t('quotaModelFamilies', { value: modelFamilies.join(', ') })}</div> : null}
@@ -226,7 +232,7 @@ function RegionAccountCard({ operations, t, activeLocale, modelSnapshot }: Qoder
       renderQuota('orgResource', t('orgResourceTitle'), usage?.orgResourcePackage),
       ...(usage?.dedicatedResourcePackages ?? []).map((pkg, index) => renderQuota(
         `dedicatedResource-${pkg.id ?? index}`,
-        resolveLocalizedText(pkg.title, locale) ?? t('dedicatedResourceTitle'),
+        t('dedicatedResourceTitle'),
         pkg,
       )),
     ].filter(Boolean)

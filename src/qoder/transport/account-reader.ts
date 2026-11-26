@@ -50,7 +50,7 @@ function finiteNumber(value: unknown): number | undefined {
 function normalizePercentage(value: unknown): number | undefined {
   const percentage = finiteNumber(value)
   if (percentage === undefined) return undefined
-  return Number((percentage >= 0 && percentage <= 1 ? percentage * 100 : percentage).toFixed(2))
+  return percentage >= 0 && percentage <= 1 ? percentage * 100 : percentage
 }
 
 function normalizeQuota(raw: unknown, preferCap = false): QoderQuota | undefined {
@@ -64,8 +64,10 @@ function normalizeQuota(raw: unknown, preferCap = false): QoderQuota | undefined
     ?? (used !== undefined && reportedRemaining !== undefined ? finiteNumber(used + reportedRemaining) : undefined)
   const remaining = reportedRemaining
     ?? (total !== undefined && used !== undefined ? finiteNumber(Math.max(0, total - used)) : undefined)
-  const percentage = normalizePercentage(obj.percentage)
-    ?? (total !== undefined && total > 0 && used !== undefined ? finiteNumber(used / total * 100) : undefined)
+  const reportedPercentage = normalizePercentage(obj.percentage)
+  const percentage = reportedPercentage === undefined
+    ? (total !== undefined && total > 0 && used !== undefined ? finiteNumber(used / total * 100) : undefined)
+    : Number(reportedPercentage.toFixed(2))
   const available = asBoolean(obj.available)
   return { total, used, remaining, percentage, unit: asString(obj.unit) ?? 'credits', available }
 }
@@ -175,13 +177,16 @@ function normalizeResourcePackages(raw: unknown): QoderResourcePackage[] | undef
     const quota = normalizeQuota(obj)
     const status = asString(obj.status)
     if (quota === undefined) continue
-    if (quota.total === undefined && quota.used === undefined && quota.remaining === undefined
-      && quota.available === undefined && status === undefined) continue
     const id = asString(obj.id)
     const labels = obj.display_labels ?? obj.displayLabels
     const title = normalizeLocalizedText(findDisplayLabel(labels, 'title'))
     const description = normalizeLocalizedText(findDisplayLabel(labels, 'description'))
     const expiresAt = normalizeExpiresAt(obj.expires_at) ?? normalizeExpiresAt(obj.expiresAt)
+    const modelScope = resourceModelScope(labels)
+    if (quota.total === undefined && quota.used === undefined && quota.remaining === undefined
+      && quota.available === undefined && status === undefined && title === undefined
+      && description === undefined && expiresAt === undefined
+      && modelScope.modelFamilies === undefined && modelScope.modelKeys === undefined) continue
     packages.push({
       ...id !== undefined ? { id } : {},
       ...title !== undefined ? { title } : {},
@@ -189,7 +194,7 @@ function normalizeResourcePackages(raw: unknown): QoderResourcePackage[] | undef
       ...quota,
       ...expiresAt !== undefined ? { expiresAt } : {},
       ...status !== undefined ? { status } : {},
-      ...resourceModelScope(labels),
+      ...modelScope,
     })
   }
   return packages.length > 0 ? packages : undefined
@@ -407,7 +412,7 @@ export class QoderUsageReader {
       ),
       addOnQuota: normalizeQuota(data.add_on_quota ?? data.addOnQuota),
       ...dedicatedResourcePackages !== undefined ? { dedicatedResourcePackages } : {},
-      totalUsagePercentage,
+      totalUsagePercentage: totalUsagePercentage === undefined ? undefined : Number(totalUsagePercentage.toFixed(2)),
       isQuotaExceeded: isQuotaExceeded ?? (totalUsagePercentage === undefined ? undefined : totalUsagePercentage >= 100),
       expiresAt: normalizeExpiresAt(data.expires_at) ?? normalizeExpiresAt(data.expiresAt),
       raw,

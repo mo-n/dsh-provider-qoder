@@ -294,3 +294,33 @@ test('quota displays partial and unavailable balances and keeps them only throug
   assert.match(card.text(), /New subscriber/)
   card.unmount()
 })
+
+test('quota displays dedicated resource packages without reported balances', async () => {
+  const card = await mountCard()
+  card.requests[0].result.resolve({ ok: true, value: {
+    profile: { id: 'subscriber', name: 'Subscriber', email: '' },
+    updatedAt: '2026-11-26T00:00:00.000Z',
+    usage: {
+      userQuota: { unit: 'credits' },
+      dedicatedResourcePackages: [
+        {
+          unit: 'credits',
+          available: true,
+          title: { fallback: 'Sonus credits', values: {} },
+          expiresAt: '2026-12-01T00:00:00.000Z',
+          modelKeys: ['sonus-latest'],
+        },
+        {
+          unit: 'credits',
+          title: { fallback: 'Model access', values: {} },
+          modelFamilies: ['sonus'],
+        },
+      ],
+    },
+  } })
+  await card.settle()
+  assert.match(card.text(), /Sonus credits.*quotaStatusAvailable.*dedicatedResourceExpiresAt.*quotaModelKeys sonus-latest/)
+  assert.match(card.text(), /Model access.*quotaModelFamilies sonus/)
+  assert.doesNotMatch(card.text(), /noQuota|userQuotaTitle|quotaRemaining/)
+  card.unmount()
+})
